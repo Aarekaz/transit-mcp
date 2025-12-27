@@ -244,14 +244,28 @@ export class MTAClient extends TransitAPIClient {
 
   /**
    * Search for stations by name or code
+   * Handles common abbreviations (Square→Sq, Street→St, etc.)
    */
   async searchStation(query: string): Promise<TransitStation[]> {
     const normalizedQuery = query.toLowerCase().trim();
 
+    // Common abbreviation mappings for fuzzy matching
+    const fuzzyQuery = normalizedQuery
+      .replace(/\bsquare\b/g, 'sq')
+      .replace(/\bstreet\b/g, 'st')
+      .replace(/\bavenue\b/g, 'av')
+      .replace(/\bboulevard\b/g, 'blvd')
+      .replace(/\broad\b/g, 'rd');
+
     return NYC_STATIONS.filter(
-      (station) =>
-        station.name.toLowerCase().includes(normalizedQuery) ||
-        station.id.toLowerCase() === normalizedQuery
+      (station) => {
+        const stationName = station.name.toLowerCase();
+        return (
+          stationName.includes(normalizedQuery) ||
+          stationName.includes(fuzzyQuery) ||
+          station.id.toLowerCase() === normalizedQuery
+        );
+      }
     );
   }
 
