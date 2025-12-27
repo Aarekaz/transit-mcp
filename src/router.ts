@@ -8,6 +8,86 @@ export class Router {
   private mcpHandler = new MCPHandler();
   private oauthHandler = new OAuthHandler();
 
+
+  private getServerInfoResponse(): Response {
+    return new Response(JSON.stringify({
+      name: 'Metro MCP',
+      version: '2.5.1',
+      description: 'MCP server for US transit systems (DC Metro, NYC Subway)',
+      protocolVersion: '2025-03-26',
+      status: 'operational',
+      timestamp: new Date().toISOString(),
+      lastUpdated: '2025-12-27',
+      author: 'Anurag Dhungana',
+      links: {
+        website: 'https://anuragd.me',
+        github: 'https://github.com/Aarekaz/metro-mcp',
+        mcp: 'https://metro-mcp.aarekaz.workers.dev/'
+      },
+      capabilities: {
+        tools: {
+          listChanged: true
+        }
+      },
+      cities: [
+        {
+          code: 'dc',
+          name: 'Washington DC Metro',
+          system: 'WMATA',
+          stations: 98,
+          lines: 6,
+          features: ['real-time', 'alerts', 'elevators', 'search', 'line-info', 'bus-routes', 'bus-stops', 'bus-positions', 'train-positions']
+        },
+        {
+          code: 'nyc',
+          name: 'New York City Subway',
+          system: 'MTA',
+          stations: 491,
+          lines: 26,
+          features: ['real-time', 'alerts', 'search', 'line-info']
+        }
+      ],
+      stats: {
+        totalStations: 589,
+        totalLines: 32,
+        citiesSupported: 2,
+        toolsAvailable: 11
+      },
+      endpoints: {
+        mcp: '/sse',
+        oauth: {
+          authorize: '/authorize',
+          token: '/token',
+          register: '/register'
+        },
+        discovery: '/.well-known/oauth-authorization-server'
+      },
+      authentication: {
+        type: 'OAuth 2.1',
+        pkce: true,
+        provider: 'GitHub'
+      },
+      tools: [
+        'get_station_predictions',
+        'search_stations',
+        'get_stations_by_line',
+        'get_incidents',
+        'get_elevator_incidents',
+        'get_all_stations',
+        'get_bus_predictions',
+        'get_bus_routes',
+        'get_bus_stops',
+        'get_bus_positions',
+        'get_train_positions'
+      ]
+    }, null, 2), {
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
+  }
+
   async handleRequest(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     
@@ -78,89 +158,24 @@ export class Router {
       return this.oauthHandler.handleCallback(request, env);
     }
 
+    // Root path - return server info for GET, handle MCP for POST
+    if (url.pathname === '/') {
+      if (request.method === 'GET') {
+        // Return unauthenticated server info for validation and discovery
+        return this.getServerInfoResponse();
+      }
+      // POST requests to / are MCP protocol requests (require auth)
+      return this.handleMCPRequest(request, env);
+    }
+
     // SSE endpoint for MCP protocol (protected)
-    if (url.pathname === '/sse' || url.pathname === '/') {
+    if (url.pathname === '/sse') {
       return this.handleMCPRequest(request, env);
     }
 
     // Legacy compatibility - return server info for GET requests to other paths
     if (request.method === 'GET') {
-      return new Response(JSON.stringify({
-        name: 'Metro MCP',
-        version: '2.0.0',
-        description: 'MCP server for US transit systems (DC Metro, NYC Subway)',
-        protocolVersion: '2025-03-26',
-        status: 'operational',
-        timestamp: new Date().toISOString(),
-        lastUpdated: '2025-12-26',
-        author: 'Anurag Dhungana',
-        links: {
-          website: 'https://anuragd.me',
-          github: 'https://github.com/Aarekaz/metro-mcp',
-          mcp: 'https://metro-mcp.aarekaz.workers.dev/'
-        },
-        capabilities: {
-          tools: {
-            listChanged: true
-          }
-        },
-        cities: [
-          {
-            code: 'dc',
-            name: 'Washington DC Metro',
-            system: 'WMATA',
-            stations: 98,
-            lines: 6,
-            features: ['real-time', 'alerts', 'elevators', 'search', 'line-info', 'bus-routes', 'bus-stops', 'bus-positions', 'train-positions']
-          },
-          {
-            code: 'nyc',
-            name: 'New York City Subway',
-            system: 'MTA',
-            stations: 491,
-            lines: 26,
-            features: ['real-time', 'alerts', 'search', 'line-info']
-          }
-        ],
-        stats: {
-          totalStations: 589,
-          totalLines: 32,
-          citiesSupported: 2,
-          toolsAvailable: 11
-        },
-        endpoints: {
-          mcp: '/sse',
-          oauth: {
-            authorize: '/authorize',
-            token: '/token',
-            register: '/register'
-          },
-          discovery: '/.well-known/oauth-authorization-server'
-        },
-        authentication: {
-          type: 'OAuth 2.1',
-          pkce: true,
-          provider: 'GitHub'
-        },
-        tools: [
-          'get_station_predictions',
-          'search_stations',
-          'get_stations_by_line',
-          'get_incidents',
-          'get_elevator_incidents',
-          'get_all_stations',
-          'get_bus_predictions',
-          'get_bus_routes',
-          'get_bus_stops',
-          'get_bus_positions',
-          'get_train_positions'
-        ]
-      }, null, 2), {
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-        },
-      });
+      return this.getServerInfoResponse();
     }
 
     return new Response('Not Found', { status: 404 });
