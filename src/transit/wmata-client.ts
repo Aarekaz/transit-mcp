@@ -11,7 +11,16 @@ import {
   TransitPrediction,
   TransitIncident,
 } from './base';
-import { WMATAStation, WMATAPrediction, WMATAIncident } from '../types';
+import {
+  WMATAStation,
+  WMATAPrediction,
+  WMATAIncident,
+  WMATABusPrediction,
+  WMATATrainPosition,
+  WMATABusRoute,
+  WMATABusStop,
+  WMATABusPosition,
+} from '../types';
 import { WMATAError } from '../error-handler';
 
 export class WMATAClient extends TransitAPIClient {
@@ -184,5 +193,133 @@ export class WMATAClient extends TransitAPIClient {
     const lineUpper = lineCode.toUpperCase();
 
     return stations.filter((station) => station.lines.includes(lineUpper));
+  }
+
+  /**
+   * Get next bus arrival predictions for a stop
+   * Note: This is DC Metro specific, not part of base Transit interface
+   *
+   * @param stopId - 7-digit regional stop ID
+   * @returns Bus predictions with arrival times and route information
+   */
+  async getBusPredictions(stopId: string): Promise<WMATABusPrediction[]> {
+    // Bus predictions change frequently, cache for 30 seconds
+    const data = await this.makeRequest<{
+      Predictions: WMATABusPrediction[];
+      StopName: string;
+    }>(
+      `/NextBusService.svc/json/jPredictions?StopID=${stopId}`,
+      30
+    );
+    return data.Predictions;
+  }
+
+  /**
+   * Get real-time train positions and track circuit occupancy
+   * Note: This is DC Metro specific, not part of base Transit interface
+   *
+   * Data is refreshed every 7-10 seconds.
+   * Returns empty array when no positions are available.
+   *
+   * @returns Array of train positions with location and service information
+   */
+  async getTrainPositions(): Promise<WMATATrainPosition[]> {
+    // Train positions refresh every 7-10 seconds, cache briefly
+    const data = await this.makeRequest<{ TrainPositions: WMATATrainPosition[] }>(
+      '/TrainPositions/TrainPositions?contentType=json',
+      10
+    );
+    return data.TrainPositions;
+  }
+
+  /**
+   * Get all bus routes and variants
+   * Note: This is DC Metro specific, not part of base Transit interface
+   *
+   * Returns list of all bus route variants (e.g., 10A, 10Av1).
+   * Routes rarely change, cached for 1 hour.
+   *
+   * @returns Bus routes with IDs and descriptions
+   */
+  async getBusRoutes(): Promise<WMATABusRoute[]> {
+    const data = await this.makeRequest<{
+      Routes: WMATABusRoute[];
+    }>(
+      '/Bus.svc/json/jRoutes',
+      3600
+    );
+    return data.Routes;
+  }
+
+  /**
+   * Get bus stops, optionally filtered by location
+   * Note: This is DC Metro specific, not part of base Transit interface
+   *
+   * Can return all stops or filter by geographic area using lat/lon/radius.
+   * If latitude and longitude are provided, radius is optional.
+   *
+   * @param latitude - Optional center point latitude
+   * @param longitude - Optional center point longitude
+   * @param radius - Optional search radius in meters
+   * @returns Bus stops with locations and route information
+   */
+  async getBusStops(
+    latitude?: number,
+    longitude?: number,
+    radius?: number
+  ): Promise<WMATABusStop[]> {
+    // Build query string based on parameters
+    let endpoint = '/Bus.svc/json/jStops';
+    const params: string[] = [];
+
+    if (latitude !== undefined && longitude !== undefined) {
+      params.push(`Lat=${latitude}`);
+      params.push(`Lon=${longitude}`);
+      if (radius !== undefined) {
+        params.push(`Radius=${radius}`);
+      }
+    }
+
+    if (params.length > 0) {
+      endpoint += '?' + params.join('&');
+    }
+
+    // Stops change infrequently, cache for 30 minutes
+    const data = await this.makeRequest<{
+      Stops: WMATABusStop[];
+    }>(
+      endpoint,
+      1800
+    );
+
+    return data.Stops;
+  }
+
+  /**
+   * Get real-time bus positions
+   * Note: This is DC Metro specific, not part of base Transit interface
+   *
+   * Returns current positions of all buses or filtered by route.
+   * Data refreshes every 7-10 seconds.
+   *
+   * @param routeId - Optional route ID (e.g., "30N", "B30")
+   * @returns Bus positions with locations and trip information
+   */
+  async getBusPositions(routeId?: string): Promise<WMATABusPosition[]> {
+    let endpoint = '/Bus.svc/json/jBusPositions';
+
+    if (routeId) {
+      endpoint += `?RouteID=${encodeURIComponent(routeId)}`;
+    }
+
+    // Bus positions refresh every 7-10 seconds, cache briefly
+    const data = await this.makeRequest<{
+      BusPositions: WMATABusPosition[];
+    }>(
+      endpoint,
+      10
+    );
+
+    return data.BusPositions;
   }
 }

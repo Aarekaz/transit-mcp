@@ -86,18 +86,23 @@ export class MCPHandler {
       };
     }
 
-    // Validate city parameter
-    const city = args.city as string;
-    if (!city || !isSupportedCity(city)) {
-      return {
-        jsonrpc: '2.0',
-        id,
-        error: {
-          code: -32602,
-          message: 'Invalid params',
-          data: `Unsupported city: ${city}. Supported cities: dc, nyc`
-        }
-      };
+    // Special handling for DC-only tools (no city parameter)
+    const dcOnlyTools = ['get_bus_predictions', 'get_train_positions', 'get_bus_routes', 'get_bus_stops', 'get_bus_positions'];
+    const city = dcOnlyTools.includes(toolName) ? 'dc' : (args.city as string);
+
+    // Validate city parameter for tools that require it
+    if (!dcOnlyTools.includes(toolName)) {
+      if (!city || !isSupportedCity(city)) {
+        return {
+          jsonrpc: '2.0',
+          id,
+          error: {
+            code: -32602,
+            message: 'Invalid params',
+            data: `Unsupported city: ${city}. Supported cities: dc, nyc`
+          }
+        };
+      }
     }
 
     // Get transit client for the specified city
@@ -277,6 +282,145 @@ export class MCPHandler {
                     lines: s.lines,
                     coordinates: { lat: s.latitude, lon: s.longitude },
                     address: s.address
+                  }))
+                }, null, 2)
+              }
+            ]
+          };
+          break;
+        }
+
+        case 'get_bus_predictions': {
+          // Bus predictions only supported for DC
+          const wmataClient = client as WMATAClient;
+          const stopId = args.stopId as string;
+          const busPredictions = await wmataClient.getBusPredictions(stopId);
+          result = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  city: 'dc',
+                  stopId,
+                  predictions: busPredictions.map(p => ({
+                    route: p.RouteID,
+                    direction: p.DirectionText,
+                    minutes: p.Minutes,
+                    vehicleId: p.VehicleID,
+                    tripId: p.TripID
+                  }))
+                }, null, 2)
+              }
+            ]
+          };
+          break;
+        }
+
+        case 'get_train_positions': {
+          // Train positions only supported for DC
+          const wmataClient = client as WMATAClient;
+          const trainPositions = await wmataClient.getTrainPositions();
+          result = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  city: 'dc',
+                  totalTrains: trainPositions.length,
+                  trains: trainPositions.map(t => ({
+                    trainId: t.TrainId,
+                    trainNumber: t.TrainNumber,
+                    line: t.LineCode,
+                    destination: t.DestinationStationCode,
+                    carCount: t.CarCount,
+                    direction: t.DirectionNum === 1 ? 'Northbound/Eastbound' : 'Southbound/Westbound',
+                    circuitId: t.CircuitId,
+                    secondsAtLocation: t.SecondsAtLocation,
+                    serviceType: t.ServiceType
+                  }))
+                }, null, 2)
+              }
+            ]
+          };
+          break;
+        }
+
+        case 'get_bus_routes': {
+          // List all bus routes
+          const wmataClient = client as WMATAClient;
+          const busRoutes = await wmataClient.getBusRoutes();
+          result = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  city: 'dc',
+                  totalRoutes: busRoutes.length,
+                  routes: busRoutes.map(r => ({
+                    id: r.RouteID,
+                    name: r.Name,
+                    description: r.LineDescription
+                  }))
+                }, null, 2)
+              }
+            ]
+          };
+          break;
+        }
+
+        case 'get_bus_stops': {
+          // Get bus stops (all or filtered by location)
+          const wmataClient = client as WMATAClient;
+          const { latitude, longitude, radius } = args;
+          const busStops = await wmataClient.getBusStops(
+            latitude as number | undefined,
+            longitude as number | undefined,
+            radius as number | undefined
+          );
+          result = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  city: 'dc',
+                  totalStops: busStops.length,
+                  searchLocation: latitude !== undefined && longitude !== undefined
+                    ? { lat: latitude, lon: longitude, radiusMeters: radius }
+                    : 'all stops',
+                  stops: busStops.map(s => ({
+                    id: s.StopID,
+                    name: s.Name,
+                    coordinates: { lat: s.Lat, lon: s.Lon },
+                    routes: s.Routes
+                  }))
+                }, null, 2)
+              }
+            ]
+          };
+          break;
+        }
+
+        case 'get_bus_positions': {
+          // Get real-time bus positions
+          const wmataClient = client as WMATAClient;
+          const { routeId } = args;
+          const busPositions = await wmataClient.getBusPositions(routeId as string | undefined);
+          result = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  city: 'dc',
+                  routeFilter: routeId || 'all routes',
+                  totalBuses: busPositions.length,
+                  buses: busPositions.map(b => ({
+                    vehicleId: b.VehicleID,
+                    route: b.RouteID,
+                    direction: b.DirectionText,
+                    coordinates: { lat: b.Lat, lon: b.Lon },
+                    headsign: b.TripHeadsign,
+                    deviation: b.Deviation,
+                    lastUpdated: b.DateTime
                   }))
                 }, null, 2)
               }

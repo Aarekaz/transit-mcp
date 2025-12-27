@@ -7,7 +7,12 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "build": "tsc",
-    "test": "vitest"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:ui": "vitest --ui",
+    "lint": "tsc --noEmit",
+    "type-check": "tsc --noEmit"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^0.0.6",
@@ -15,6 +20,8 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241218.0",
+    "@vitest/coverage-v8": "^2.1.8",
+    "@vitest/ui": "^2.1.8",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8",
     "wrangler": "^4.28.1"
@@ -34,6 +41,7 @@
     "gtfs",
     "real-time"
   ],
-  "author": "Nathaniel Noyd",
+  "author": "Anurag Dhungana",
+  "homepage": "https://anuragd.me",
   "license": "MIT"
 }

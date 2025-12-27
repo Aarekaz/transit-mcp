@@ -102,5 +102,73 @@ export const MCP_TOOLS: MCPTool[] = [
       },
       required: ['city']
     }
+  },
+  {
+    name: 'get_bus_predictions',
+    description: 'Get real-time bus arrival predictions for a DC Metro bus stop. Returns next bus arrivals with route information, direction, and estimated arrival times.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        stopId: {
+          type: 'string',
+          description: 'DC Metro 7-digit regional bus stop ID (e.g., "1001195" for Greenbelt Station, "1001582" for Metro Center)'
+        }
+      },
+      required: ['stopId']
+    }
+  },
+  {
+    name: 'get_train_positions',
+    description: 'Get real-time positions of all trains currently in service on the DC Metro system. Shows which track circuits trains occupy, car counts, destinations, and service types. Data refreshes every 7-10 seconds.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: 'get_bus_routes',
+    description: 'Get all DC Metro bus routes with route IDs and descriptions. Returns complete list of bus routes available in the system.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: 'get_bus_stops',
+    description: 'Get DC Metro bus stops. Can retrieve all stops or filter by geographic location using latitude, longitude, and optional radius in meters.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        latitude: {
+          type: 'number',
+          description: 'Center point latitude for location-based search (e.g., 38.8951 for Dupont Circle)'
+        },
+        longitude: {
+          type: 'number',
+          description: 'Center point longitude for location-based search (e.g., -77.0369 for Dupont Circle)'
+        },
+        radius: {
+          type: 'number',
+          description: 'Search radius in meters when using lat/lon (e.g., 500 for half-kilometer). Optional.'
+        }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'get_bus_positions',
+    description: 'Get real-time positions of buses currently in service on DC Metro. Optionally filter by route ID. Data refreshes every 7-10 seconds.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        routeId: {
+          type: 'string',
+          description: 'Optional route ID to filter buses (e.g., "30N", "B30"). If omitted, returns all buses in service.'
+        }
+      },
+      required: []
+    }
   }
 ];

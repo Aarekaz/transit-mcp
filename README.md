@@ -22,6 +22,11 @@ Ask natural language questions about DC Metro or NYC Subway in Claude Desktop or
 **Washington DC:**
 
 - *"When is the next Red Line train at Dupont Circle?"*
+- *"What bus routes are available?"*
+- *"Find bus stops near Dupont Circle"*
+- *"Where are all the 30N buses right now?"*
+- *"When is the next bus at stop 1001195?"*
+- *"Show me all trains currently running on the Metro system"*
 - *"Are there any delays on the Blue Line right now?"*
 - *"Are all the elevators working at Union Station?"*
 
@@ -129,11 +134,13 @@ openssl rand -hex 32
 **4. Create KV Namespaces:**
 
 ```bash
-# Create production KV namespace
+# Create OAuth storage namespace
 bunx wrangler kv namespace create "OAUTH_CLIENTS"
-
-# Create preview KV namespace
 bunx wrangler kv namespace create "OAUTH_CLIENTS" --preview
+
+# Create rate limiting namespace
+bunx wrangler kv namespace create "RATE_LIMIT_KV"
+bunx wrangler kv namespace create "RATE_LIMIT_KV" --preview
 ```
 
 Copy the IDs from the output and update `wrangler.toml`.
@@ -241,7 +248,7 @@ The server currently supports these transit systems:
 
 ## Available MCP Tools
 
-The server exposes the following tools through the MCP protocol. All tools require a `city` parameter (`dc` or `nyc`):
+The server exposes the following tools through the MCP protocol:
 
 | Tool | Description | Supported Cities |
 | ---- | ----------- | ---------------- |
@@ -251,6 +258,13 @@ The server exposes the following tools through the MCP protocol. All tools requi
 | `get_incidents` | Check current service disruptions and advisories | DC, NYC |
 | `get_elevator_incidents` | Find elevator and escalator outages | DC only |
 | `get_all_stations` | Get a complete list of all stations with coordinates | DC, NYC |
+| `get_bus_predictions` | Get real-time bus arrival predictions (7-digit stop ID) | DC only |
+| `get_bus_routes` | Get list of all available bus routes | DC only |
+| `get_bus_stops` | Search bus stops by location or get all stops | DC only |
+| `get_bus_positions` | Get live positions of all buses (optionally filter by route) | DC only |
+| `get_train_positions` | Get live positions of all trains on the system | DC only |
+
+**Note:** Most tools require a `city` parameter (`dc` or `nyc`). DC-only tools (`get_bus_predictions`, `get_bus_routes`, `get_bus_stops`, `get_bus_positions`, `get_train_positions`, `get_elevator_incidents`) do not require the city parameter.
 
 ## Technical Details
 
@@ -302,7 +316,7 @@ src/
 │
 ├── MCP Protocol
 │   ├── mcp-handler.ts    # MCP request processing and tool routing
-│   ├── mcp-tools.ts      # MCP tool definitions (6 tools)
+│   ├── mcp-tools.ts      # MCP tool definitions (11 tools)
 │   └── mcp-types.ts      # MCP protocol type definitions
 │
 ├── Error Handling

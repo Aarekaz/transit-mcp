@@ -168,6 +168,79 @@ export function validateToolParameters(toolName: string, args: any): void {
         throw new TransitError('lineCode parameter is required');
       }
       break;
+    case 'get_bus_predictions':
+      if (!args.stopId) {
+        throw new TransitError('stopId parameter is required');
+      }
+      // Validate stop ID format (7 digits)
+      if (!/^\d{7}$/.test(args.stopId)) {
+        throw new TransitError('stopId must be a 7-digit number');
+      }
+      break;
+    case 'get_train_positions':
+      // No parameters required for this tool
+      break;
+
+    case 'get_bus_routes':
+      // No parameters required for this tool
+      break;
+
+    case 'get_bus_stops': {
+      const { latitude, longitude, radius } = args;
+
+      // If any coordinate is provided, both must be provided
+      if ((latitude !== undefined || longitude !== undefined) &&
+          !(latitude !== undefined && longitude !== undefined)) {
+        throw new TransitError('Both latitude and longitude must be provided together for location search');
+      }
+
+      // Validate coordinate ranges
+      if (latitude !== undefined) {
+        if (typeof latitude !== 'number') {
+          throw new TransitError('latitude must be a number');
+        }
+        if (latitude < -90 || latitude > 90) {
+          throw new TransitError('latitude must be between -90 and 90');
+        }
+      }
+
+      if (longitude !== undefined) {
+        if (typeof longitude !== 'number') {
+          throw new TransitError('longitude must be a number');
+        }
+        if (longitude < -180 || longitude > 180) {
+          throw new TransitError('longitude must be between -180 and 180');
+        }
+      }
+
+      // Validate radius
+      if (radius !== undefined) {
+        if (typeof radius !== 'number') {
+          throw new TransitError('radius must be a number');
+        }
+        if (radius <= 0) {
+          throw new TransitError('radius must be a positive number (in meters)');
+        }
+      }
+
+      break;
+    }
+
+    case 'get_bus_positions': {
+      const { routeId } = args;
+
+      // routeId is optional, but if provided should be validated
+      if (routeId !== undefined) {
+        if (typeof routeId !== 'string') {
+          throw new TransitError('routeId must be a string');
+        }
+        if (routeId.trim().length === 0) {
+          throw new TransitError('routeId cannot be empty');
+        }
+      }
+
+      break;
+    }
   }
 }
 

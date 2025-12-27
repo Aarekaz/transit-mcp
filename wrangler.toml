@@ -18,6 +18,17 @@ binding = "OAUTH_CLIENTS"
 id = "44f6224b68354c24bf071e2b53b13dbb"
 preview_id = "7d10b069531a459cb56ed59220ede55b"
 
+# KV Namespace for rate limiting
+# WHY SEPARATE KV:
+# - High write volume (every request)
+# - Automatic expiration via TTL
+# - Different access patterns than OAuth data
+# - Better performance and cost optimization
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "93885a8c949b4298a7d866e2cef408b3"
+preview_id = "7cbeddccb3a94346b4452f40bc692b39"
+
 # Non-secret environment variables
 [vars]
 GITHUB_CLIENT_ID = "Ov23liGFwmOZeECJ6yeN"  # OAuth client ID (public, not a secret)
