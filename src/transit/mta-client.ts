@@ -11,8 +11,11 @@ import {
   TransitStation,
   TransitPrediction,
   TransitIncident,
+  TransitRoute,
+  StationTransfer,
 } from './base';
 import { NYC_STATIONS } from './nyc-stations';
+import { NYC_ROUTES } from './nyc-routes';
 
 /**
  * MTA GTFS-Realtime feed URLs
@@ -257,5 +260,21 @@ export class MTAClient extends TransitAPIClient {
    */
   async getStationsByLine(lineCode: string): Promise<TransitStation[]> {
     return NYC_STATIONS.filter((station) => station.lines.includes(lineCode.toUpperCase()));
+  }
+
+  /**
+   * Get detailed route information
+   */
+  async getRouteInfo(routeId: string): Promise<TransitRoute | null> {
+    const route = NYC_ROUTES.find((r) => r.routeId === routeId.toUpperCase());
+    return route || null;
+  }
+
+  /**
+   * Get transfer connections from a station
+   */
+  async getStationTransfers(stationId: string): Promise<StationTransfer[]> {
+    const station = NYC_STATIONS.find((s) => s.id === stationId);
+    return station?.transfers || [];
   }
 }

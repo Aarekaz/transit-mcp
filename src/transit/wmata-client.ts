@@ -322,4 +322,13 @@ export class WMATAClient extends TransitAPIClient {
 
     return data.BusPositions;
   }
+
+  /**
+   * Get detailed route information
+   * Note: Not yet implemented for DC Metro
+   */
+  async getRouteInfo(_routeId: string): Promise<import('./base').TransitRoute | null> {
+    // DC Metro routes are lines (RD, BL, etc.) - not implemented yet
+    return null;
+  }
 }
