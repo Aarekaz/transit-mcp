@@ -8,6 +8,23 @@
 export type SupportedCity = 'dc' | 'nyc';
 
 /**
+ * Transfer connection to another station
+ */
+export interface StationTransfer {
+  /** Target station ID */
+  toStationId: string;
+
+  /** Target station name */
+  toStationName: string;
+
+  /** Walk time in seconds (0 = same station platform switch) */
+  transferTime: number;
+
+  /** Transfer type: 'platform' (same station) or 'nearby' (different station) */
+  transferType: 'platform' | 'nearby';
+}
+
+/**
  * Normalized station representation across all transit systems
  */
 export interface TransitStation {
@@ -36,6 +53,15 @@ export interface TransitStation {
     state?: string;
     zip?: string;
   };
+
+  /** Optional: Parent station ID (for child platforms like "127N" -> "127") */
+  parentStation?: string;
+
+  /** Optional: Child platform IDs (for parent stations: "127" -> ["127N", "127S"]) */
+  childPlatforms?: string[];
+
+  /** Optional: Transfer connections to other stations */
+  transfers?: StationTransfer[];
 }
 
 /**
@@ -106,6 +132,26 @@ export interface TransitIncident {
 }
 
 /**
+ * Transit route information (e.g., A train, Red Line)
+ */
+export interface TransitRoute {
+  /** Route ID (e.g., "A", "1", "RD") */
+  routeId: string;
+
+  /** Short name displayed on trains (e.g., "A", "1", "Red") */
+  shortName: string;
+
+  /** Long descriptive name (e.g., "8 Avenue Express", "Red Line") */
+  longName: string;
+
+  /** Detailed service description (schedule patterns, service areas) */
+  description: string;
+
+  /** City this route serves */
+  city: SupportedCity;
+}
+
+/**
  * Abstract base class for all transit API clients
  *
  * Each transit system (WMATA, MTA, etc.) extends this class and implements
@@ -147,6 +193,12 @@ export abstract class TransitAPIClient {
    * @param lineCode - Line identifier (e.g., "RD", "1", "A")
    */
   abstract getStationsByLine(lineCode: string): Promise<TransitStation[]>;
+
+  /**
+   * Get detailed route information
+   * @param routeId - Route identifier (e.g., "A", "1", "RD")
+   */
+  abstract getRouteInfo(routeId: string): Promise<TransitRoute | null>;
 
   /**
    * Get the city this client serves

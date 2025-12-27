@@ -170,5 +170,43 @@ export const MCP_TOOLS: MCPTool[] = [
       },
       required: []
     }
+  },
+  {
+    name: 'get_station_transfers',
+    description: 'Get transfer connections and nearby stations from a transit station. Shows walk times between connected stations in the same complex (e.g., Times Square has multiple station IDs connected by walkways). NYC Subway only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        city: {
+          type: 'string',
+          enum: ['nyc'],
+          description: 'Transit system: only "nyc" is currently supported for transfer information'
+        },
+        stationId: {
+          type: 'string',
+          description: 'Station ID (e.g., "127" for Times Square). Use search_stations to find station IDs.'
+        }
+      },
+      required: ['city', 'stationId']
+    }
+  },
+  {
+    name: 'get_route_info',
+    description: 'Get detailed information about a transit route including service patterns and descriptions. Helps explain what a route like "A train" or "1 train" actually is. NYC Subway only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        city: {
+          type: 'string',
+          enum: ['nyc'],
+          description: 'Transit system: only "nyc" is currently supported for route information'
+        },
+        routeId: {
+          type: 'string',
+          description: 'Route identifier - NYC: A, B, C, D, E, F, M, G, J, Z, L, N, Q, R, W, 1, 2, 3, 4, 5, 6, 7, SI'
+        }
+      },
+      required: ['city', 'routeId']
+    }
   }
 ];

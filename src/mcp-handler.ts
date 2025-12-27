@@ -25,7 +25,7 @@ export class MCPHandler {
               } as MCPCapabilities,
               serverInfo: {
                 name: 'Metro MCP',
-                version: '1.0.0'
+                version: '2.9.0'
               }
             }
           };
@@ -86,9 +86,18 @@ export class MCPHandler {
       };
     }
 
-    // Special handling for DC-only tools (no city parameter)
+    // Special handling for DC-only and NYC-only tools (city parameter handling)
     const dcOnlyTools = ['get_bus_predictions', 'get_train_positions', 'get_bus_routes', 'get_bus_stops', 'get_bus_positions'];
-    const city = dcOnlyTools.includes(toolName) ? 'dc' : (args.city as string);
+    const nycOnlyTools = ['get_station_transfers', 'get_route_info'];
+
+    let city: string;
+    if (dcOnlyTools.includes(toolName)) {
+      city = 'dc';
+    } else if (nycOnlyTools.includes(toolName)) {
+      city = args.city || 'nyc'; // Default to nyc for these tools
+    } else {
+      city = args.city as string;
+    }
 
     // Validate city parameter for tools that require it
     if (!dcOnlyTools.includes(toolName)) {
@@ -422,6 +431,64 @@ export class MCPHandler {
                     deviation: b.Deviation,
                     lastUpdated: b.DateTime
                   }))
+                }, null, 2)
+              }
+            ]
+          };
+          break;
+        }
+
+        case 'get_station_transfers': {
+          const stationId = args.stationId as string;
+
+          // Get station transfers (NYC only for now)
+          const station = (await client.getStations()).find(s => s.id === stationId);
+          if (!station) {
+            throw new Error(`Station not found: ${stationId}`);
+          }
+
+          const transfers = station.transfers || [];
+          result = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  city,
+                  stationId,
+                  stationName: station.name,
+                  totalTransfers: transfers.length,
+                  transfers: transfers.map(t => ({
+                    toStationId: t.toStationId,
+                    toStationName: t.toStationName,
+                    walkTimeSeconds: t.transferTime,
+                    walkTimeMinutes: Math.ceil(t.transferTime / 60),
+                    transferType: t.transferType
+                  }))
+                }, null, 2)
+              }
+            ]
+          };
+          break;
+        }
+
+        case 'get_route_info': {
+          const routeId = args.routeId as string;
+          const route = await client.getRouteInfo(routeId);
+
+          if (!route) {
+            throw new Error(`Route not found: ${routeId}. Make sure you're using the correct route ID for ${city}.`);
+          }
+
+          result = {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  city,
+                  routeId: route.routeId,
+                  shortName: route.shortName,
+                  longName: route.longName,
+                  description: route.description
                 }, null, 2)
               }
             ]

@@ -12,7 +12,7 @@ export class Router {
   private getServerInfoResponse(): Response {
     return new Response(JSON.stringify({
       name: 'Metro MCP',
-      version: '2.5.1',
+      version: '2.9.0',
       description: 'MCP server for US transit systems (DC Metro, NYC Subway)',
       protocolVersion: '2025-03-26',
       status: 'operational',
@@ -42,16 +42,16 @@ export class Router {
           code: 'nyc',
           name: 'New York City Subway',
           system: 'MTA',
-          stations: 491,
-          lines: 26,
-          features: ['real-time', 'alerts', 'search', 'line-info']
+          stations: 496,
+          lines: 29,
+          features: ['real-time', 'alerts', 'search', 'line-info', 'transfers', 'route-info']
         }
       ],
       stats: {
-        totalStations: 589,
-        totalLines: 32,
+        totalStations: 594,
+        totalLines: 35,
         citiesSupported: 2,
-        toolsAvailable: 11
+        toolsAvailable: 13
       },
       endpoints: {
         mcp: '/sse',
@@ -78,7 +78,9 @@ export class Router {
         'get_bus_routes',
         'get_bus_stops',
         'get_bus_positions',
-        'get_train_positions'
+        'get_train_positions',
+        'get_station_transfers',
+        'get_route_info'
       ]
     }, null, 2), {
       headers: {

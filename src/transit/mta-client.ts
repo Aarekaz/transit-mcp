@@ -11,8 +11,11 @@ import {
   TransitStation,
   TransitPrediction,
   TransitIncident,
+  TransitRoute,
+  StationTransfer,
 } from './base';
 import { NYC_STATIONS } from './nyc-stations';
+import { NYC_ROUTES } from './nyc-routes';
 
 /**
  * MTA GTFS-Realtime feed URLs
@@ -241,14 +244,28 @@ export class MTAClient extends TransitAPIClient {
 
   /**
    * Search for stations by name or code
+   * Handles common abbreviations (Square→Sq, Street→St, etc.)
    */
   async searchStation(query: string): Promise<TransitStation[]> {
     const normalizedQuery = query.toLowerCase().trim();
 
+    // Common abbreviation mappings for fuzzy matching
+    const fuzzyQuery = normalizedQuery
+      .replace(/\bsquare\b/g, 'sq')
+      .replace(/\bstreet\b/g, 'st')
+      .replace(/\bavenue\b/g, 'av')
+      .replace(/\bboulevard\b/g, 'blvd')
+      .replace(/\broad\b/g, 'rd');
+
     return NYC_STATIONS.filter(
-      (station) =>
-        station.name.toLowerCase().includes(normalizedQuery) ||
-        station.id.toLowerCase() === normalizedQuery
+      (station) => {
+        const stationName = station.name.toLowerCase();
+        return (
+          stationName.includes(normalizedQuery) ||
+          stationName.includes(fuzzyQuery) ||
+          station.id.toLowerCase() === normalizedQuery
+        );
+      }
     );
   }
 
@@ -257,5 +274,21 @@ export class MTAClient extends TransitAPIClient {
    */
   async getStationsByLine(lineCode: string): Promise<TransitStation[]> {
     return NYC_STATIONS.filter((station) => station.lines.includes(lineCode.toUpperCase()));
+  }
+
+  /**
+   * Get detailed route information
+   */
+  async getRouteInfo(routeId: string): Promise<TransitRoute | null> {
+    const route = NYC_ROUTES.find((r) => r.routeId === routeId.toUpperCase());
+    return route || null;
+  }
+
+  /**
+   * Get transfer connections from a station
+   */
+  async getStationTransfers(stationId: string): Promise<StationTransfer[]> {
+    const station = NYC_STATIONS.find((s) => s.id === stationId);
+    return station?.transfers || [];
   }
 }
