@@ -35,6 +35,9 @@ Ask natural language questions about DC Metro or NYC Subway in Claude Desktop or
 - *"When is the next 1 train at Times Square?"*
 - *"Are there delays on the A/C line?"*
 - *"What trains are arriving at Grand Central?"*
+- *"What is the A train and where does it go?"*
+- *"What nearby stations can I walk to from Times Square?"*
+- *"How long does it take to walk between Times Square platforms?"*
 
 ### 🗺️ Station Information & Navigation
 
@@ -42,13 +45,13 @@ Ask natural language questions about DC Metro or NYC Subway in Claude Desktop or
 
 - *"Where is the Smithsonian Metro station?"*
 - *"Show me all the stations on the Green Line"*
-- *"How do I get from Capitol South to Bethesda?"*
 
 **New York City:**
 
 - *"Where is the Union Square station?"*
-- *"Show me all stations on the 4/5/6 lines"*
-- *"How do I get from Penn Station to Brooklyn?"*
+- *"Show me all 496 stations on the NYC Subway"*
+- *"Which stations connect to Times Square?"*
+- *"Explain the difference between express and local trains"*
 
 ### ♿ Accessibility
 
@@ -74,8 +77,10 @@ Ask natural language questions about DC Metro or NYC Subway in Claude Desktop or
 
 **New York City:**
 
-- Key NYC Subway stations with coordinates
-- Information about all subway lines (numbered and lettered)
+- **Complete coverage:** All 496 NYC Subway stations with coordinates
+- **Transfer information:** Walk times between connected stations (87 stations with transfers)
+- **Route descriptions:** Detailed service patterns for all 29 routes (express vs local, operating hours)
+- **Platform clarity:** Explains directional platforms (e.g., "127N" = northbound at Times Square)
 
 ---
 
@@ -256,15 +261,17 @@ The server exposes the following tools through the MCP protocol:
 | `search_stations` | Search for stations by name or code | DC, NYC |
 | `get_stations_by_line` | Get all stations on a specific line | DC, NYC |
 | `get_incidents` | Check current service disruptions and advisories | DC, NYC |
-| `get_elevator_incidents` | Find elevator and escalator outages | DC only |
 | `get_all_stations` | Get a complete list of all stations with coordinates | DC, NYC |
+| **`get_station_transfers`** 🆕 | **Get transfer connections and walk times between nearby stations** | **NYC only** |
+| **`get_route_info`** 🆕 | **Get detailed route information (express/local, service patterns, hours)** | **NYC only** |
+| `get_elevator_incidents` | Find elevator and escalator outages | DC only |
 | `get_bus_predictions` | Get real-time bus arrival predictions (7-digit stop ID) | DC only |
 | `get_bus_routes` | Get list of all available bus routes | DC only |
 | `get_bus_stops` | Search bus stops by location or get all stops | DC only |
 | `get_bus_positions` | Get live positions of all buses (optionally filter by route) | DC only |
 | `get_train_positions` | Get live positions of all trains on the system | DC only |
 
-**Note:** Most tools require a `city` parameter (`dc` or `nyc`). DC-only tools (`get_bus_predictions`, `get_bus_routes`, `get_bus_stops`, `get_bus_positions`, `get_train_positions`, `get_elevator_incidents`) do not require the city parameter.
+**Total: 13 MCP tools** (11 core + 2 new NYC-specific tools)
 
 ## Technical Details
 
