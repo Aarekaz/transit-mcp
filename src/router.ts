@@ -12,7 +12,7 @@ export class Router {
   private getServerInfoResponse(): Response {
     return new Response(JSON.stringify({
       name: 'Metro MCP',
-      version: '2.8.1',
+      version: '2.9.0',
       description: 'MCP server for US transit systems (DC Metro, NYC Subway)',
       protocolVersion: '2025-03-26',
       status: 'operational',
