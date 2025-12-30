@@ -25,7 +25,7 @@ export class MCPHandler {
               } as MCPCapabilities,
               serverInfo: {
                 name: 'Metro MCP',
-                version: '2.9.0'
+                version: '3.0.0'
               }
             }
           };
