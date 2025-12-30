@@ -90,8 +90,8 @@ Ask natural language questions about DC Metro or NYC Subway in Claude Desktop or
 
 The fastest way to get started is to use the hosted instance:
 
-1. Open Claude Desktop
-2. Add this URL: `https://metro-mcp.aarekaz.workers.dev`
+1. Open your MCP Client
+2. Add this URL: `https://metro-mcp.anuragd.me/sse`
 3. Click "Connect" and authorize via GitHub
 4. Start asking questions about DC Metro!
 
@@ -189,7 +189,7 @@ bunx wrangler deploy
 Just add the server URL to Claude Desktop:
 
 ```text
-https://metro-mcp.aarekaz.workers.dev
+https://metro-mcp.anuragd.me/sse
 ```
 
 Claude Desktop will automatically:
@@ -209,7 +209,7 @@ For MCP clients that support OAuth 2.1 with automatic discovery:
 **Server URL:**
 
 ```text
-https://metro-mcp.aarekaz.workers.dev
+https://metro-mcp.anuragd.me/sse
 ```
 
 The client will handle authentication automatically via the OAuth flow.
@@ -218,11 +218,11 @@ The client will handle authentication automatically via the OAuth flow.
 
 If your MCP client doesn't support OAuth, you can still authenticate manually:
 
-1. Visit `https://metro-mcp.aarekaz.workers.dev/authorize` in your browser
+1. Visit `https://metro-mcp.anuragd.me/authorize` in your browser
 2. Authorize via GitHub
 3. Copy the JWT token displayed
 4. Configure your client with:
-   - Server URL: `https://metro-mcp.aarekaz.workers.dev/sse`
+   - Server URL: `https://metro-mcp.anuragd.me/sse`
    - Authorization Header: `Bearer your-jwt-token-here`
 
 ## OAuth Endpoints

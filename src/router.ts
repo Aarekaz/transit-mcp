@@ -12,7 +12,7 @@ export class Router {
   private getServerInfoResponse(): Response {
     return new Response(JSON.stringify({
       name: 'Metro MCP',
-      version: '2.9.0',
+      version: '3.0.0',
       description: 'MCP server for US transit systems (DC Metro, NYC Subway)',
       protocolVersion: '2025-03-26',
       status: 'operational',
@@ -20,9 +20,11 @@ export class Router {
       lastUpdated: '2025-12-27',
       author: 'Anurag Dhungana',
       links: {
-        website: 'https://anuragd.me',
-        github: 'https://github.com/Aarekaz/metro-mcp',
-        mcp: 'https://metro-mcp.aarekaz.workers.dev/'
+        author: 'https://anuragd.me',
+        github: 'https://github.com/anuragdhungana/metro-mcp',
+        mcpServer: 'https://metro-mcp.anuragd.me/sse',
+        website: 'https://metro-mcp.anuragd.me',
+        documentation: 'https://github.com/anuragdhungana/metro-mcp/blob/main/README.md',
       },
       capabilities: {
         tools: {

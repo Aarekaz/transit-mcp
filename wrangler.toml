@@ -31,8 +31,12 @@ preview_id = "7cbeddccb3a94346b4452f40bc692b39"
 
 # Non-secret environment variables
 [vars]
-GITHUB_CLIENT_ID = "Ov23liGFwmOZeECJ6yeN"  # OAuth client ID (public, not a secret)
-OAUTH_REDIRECT_URI = "https://metro-mcp.aarekaz.workers.dev/callback"
+GITHUB_CLIENT_ID = "Ov23liGFwmOZeECJ6yeN"  # OAuth client ID (public)
+OAUTH_REDIRECT_URI = "https://metro-mcp.anuragd.me/callback"
+
+# Static assets (landing page)
+[assets]
+directory = "./public"
 
 # Observability and logging configuration
 [observability]
@@ -40,5 +44,9 @@ enabled = true  # Enable for production monitoring
 
 [observability.logs]
 enabled = true  # Enable logging
-head_sampling_rate = 0.1  # Sample 10% of requests (adjust as needed)
+head_sampling_rate = 0.25  # Sample 25% of requests 
 invocation_logs = true
+
+[[routes]]
+pattern = "metro-mcp.anuragd.me"
+custom_domain = true

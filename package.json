@@ -1,6 +1,6 @@
 {
   "name": "metro-mcp",
-  "version": "1.0.0",
+  "version": "3.0.0",
   "description": "MCP server for US transit systems (DC Metro, NYC Subway) on Cloudflare Workers",
   "main": "src/index.ts",
   "scripts": {
