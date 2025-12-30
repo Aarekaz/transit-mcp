@@ -46,3 +46,7 @@ enabled = true  # Enable for production monitoring
 enabled = true  # Enable logging
 head_sampling_rate = 0.1  # Sample 10% of requests (adjust as needed)
 invocation_logs = true
+
+[[routes]]
+pattern = "metro-mcp.anuragd.me"
+custom_domain = true
