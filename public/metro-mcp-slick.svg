@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <!-- Metro MCP (slick true-vector icon) -->
+  <defs>
+    <!-- Soft shadow for depth without clutter -->
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#06121d" flood-opacity="0.25"/>
+    </filter>
+
+    <!-- Subtle ring gradient (keeps it premium in dark mode) -->
+    <linearGradient id="ringGrad" x1="140" y1="120" x2="880" y2="920" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1b3550"/>
+      <stop offset="1" stop-color="#0b1d2b"/>
+    </linearGradient>
+
+    <!-- Line gradients (unique but still readable at favicon sizes) -->
+    <linearGradient id="blueGrad" x1="240" y1="220" x2="560" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#35c6ff"/>
+      <stop offset="1" stop-color="#0b7bff"/>
+    </linearGradient>
+    <linearGradient id="greenGrad" x1="240" y1="800" x2="560" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2cffb3"/>
+      <stop offset="1" stop-color="#22c55e"/>
+    </linearGradient>
+    <linearGradient id="redGrad" x1="780" y1="220" x2="560" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff4d6d"/>
+      <stop offset="1" stop-color="#ff3b30"/>
+    </linearGradient>
+    <linearGradient id="amberGrad" x1="820" y1="360" x2="560" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffd166"/>
+      <stop offset="1" stop-color="#f59e0b"/>
+    </linearGradient>
+
+    <!-- Node stroke helper -->
+    <style>
+      .ring { stroke:url(#ringGrad); stroke-width:56; }
+      .track { fill:none; stroke-width:80; stroke-linecap:round; stroke-linejoin:round; }
+      .trackBack { fill:none; stroke:#ffffff; stroke-opacity:0.10; stroke-width:110; stroke-linecap:round; stroke-linejoin:round; }
+      .node { fill:#ffffff; stroke-width:34; }
+      .mini { r:46; }
+    </style>
+  </defs>
+
+  <!-- Outer ring -->
+  <g filter="url(#softShadow)">
+    <circle class="ring" cx="512" cy="512" r="420"/>
+  </g>
+
+  <!-- Tracks: create an abstract 'M' routing into the hub -->
+  <!-- White underlay to keep lines crisp against any background -->
+  <path class="trackBack" d="M300 320 L300 468 L410 468 L512 560"/>
+  <path class="trackBack" d="M300 760 L300 610 L410 610 L512 560"/>
+  <path class="trackBack" d="M724 320 L724 468 L614 468 L512 560"/>
+  <path class="trackBack" d="M724 760 L724 610 L614 610 L512 560"/>
+
+  <!-- Colored tracks -->
+  <path class="track" stroke="url(#blueGrad)"  d="M300 320 L300 468 L410 468 L512 560"/>
+  <path class="track" stroke="url(#greenGrad)" d="M300 760 L300 610 L410 610 L512 560"/>
+  <path class="track" stroke="url(#redGrad)"   d="M724 320 L724 468 L614 468 L512 560"/>
+  <path class="track" stroke="url(#amberGrad)" d="M724 760 L724 610 L614 610 L512 560"/>
+
+  <!-- Hub + stations -->
+  <g filter="url(#softShadow)">
+    <!-- Hub -->
+    <circle class="node" cx="512" cy="560" r="80" stroke="#0b1d2b"/>
+    <!-- Small inner hub dot (protocol core) -->
+    <circle cx="512" cy="560" r="20" fill="#0b1d2b" opacity="0.9"/>
+
+    <!-- Stations (subtle, fewer = better at icon size) -->
+    <circle class="node" cx="300" cy="320" r="52" stroke="#0b7bff"/>
+    <circle class="node" cx="300" cy="760" r="52" stroke="#22c55e"/>
+    <circle class="node" cx="724" cy="320" r="52" stroke="#ff3b30"/>
+    <circle class="node" cx="724" cy="760" r="52" stroke="#f59e0b"/>
+  </g>
+
+  <!-- Tiny "server notch" hint under the hub (unique MCP-server cue, still abstract) -->
+  <g opacity="0.9">
+    <rect x="452" y="700" width="120" height="34" rx="17" fill="#0b1d2b"/>
+    <circle cx="478" cy="717" r="8" fill="#35c6ff"/>
+    <circle cx="512" cy="717" r="8" fill="#2cffb3"/>
+    <circle cx="546" cy="717" r="8" fill="#ffd166"/>
+  </g>
+</svg>

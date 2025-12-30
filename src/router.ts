@@ -20,9 +20,9 @@ export class Router {
       lastUpdated: '2025-12-27',
       author: 'Anurag Dhungana',
       links: {
-        website: 'https://anuragd.me',
+        author: 'https://anuragd.me',
         github: 'https://github.com/Aarekaz/metro-mcp',
-        mcp: 'https://metro-mcp.aarekaz.workers.dev/'
+        mcp: 'https://metro-mcp.anuragd.me/'
       },
       capabilities: {
         tools: {

@@ -4,22 +4,22 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Metro-MCP — Real-time transit data for AI agents</title>
-    <meta name="description" content="Connect Claude and AI agents to live NYC Subway and DC Metro data. Real-time arrivals, train positions, and service alerts through the Model Context Protocol.">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚇</text></svg>">
+    <meta name="description" content="Connect LLMs and AI agents to live NYC Subway and DC Metro data. Real-time arrivals, train positions, and service alerts through the Model Context Protocol.">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
     
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://metro-mcp.dev/">
+    <meta property="og:url" content="https://metro-mcp.anuragd.me/">
     <meta property="og:title" content="Metro-MCP — Real-time transit data for AI agents">
-    <meta property="og:description" content="Connect Claude and AI agents to live NYC Subway and DC Metro data. Real-time arrivals, train positions, and service alerts through MCP.">
-    <meta property="og:image" content="https://metro-mcp.dev/og-image.png">
+    <meta property="og:description" content="Connect LLMs and AI agents to live NYC Subway and DC Metro data. Real-time arrivals, train positions, and service alerts through MCP.">
+    <meta property="og:image" content="https://metro-mcp.anuragd.me/og-image.png">
 
     <!-- Twitter -->
     <meta property="twitter:card" content="summary_large_image">
-    <meta property="twitter:url" content="https://metro-mcp.dev/">
+    <meta property="twitter:url" content="https://metro-mcp.anuragd.me/">
     <meta property="twitter:title" content="Metro-MCP — Real-time transit data for AI agents">
-    <meta property="twitter:description" content="Connect Claude and AI agents to live NYC Subway and DC Metro data through MCP.">
-    <meta property="twitter:image" content="https://metro-mcp.dev/og-image.png">
+    <meta property="twitter:description" content="Connect LLMs and AI agents to live NYC Subway and DC Metro data through MCP.">
+    <meta property="twitter:image" content="https://metro-mcp.anuragd.me/og-image.png">
     
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -28,6 +28,12 @@
         :root {
             --font-display: 'JetBrains Mono', monospace;
             --font-body: 'Space Grotesk', sans-serif;
+            --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
+            --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+        }
+
+        /* Dark mode (default) */
+        :root, [data-theme="dark"] {
             --color-bg: #0d0f14;
             --color-bg-alt: #151820;
             --color-text: #e8f4f8;
@@ -36,8 +42,26 @@
             --color-accent-alt: #00d4ff;
             --color-glow: rgba(0, 255, 159, 0.3);
             --color-glow-alt: rgba(0, 212, 255, 0.3);
-            --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
-            --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+            --color-border: rgba(0, 255, 159, 0.2);
+            --color-shadow: rgba(0, 255, 159, 0.1);
+            --scanline-opacity: 0.15;
+            --grid-opacity: 0.03;
+        }
+
+        /* Light mode */
+        [data-theme="light"] {
+            --color-bg: #f8fafb;
+            --color-bg-alt: #ffffff;
+            --color-text: #1a2332;
+            --color-muted: #5f6c7b;
+            --color-accent: #00a86b;
+            --color-accent-alt: #0088bb;
+            --color-glow: rgba(0, 168, 107, 0.2);
+            --color-glow-alt: rgba(0, 136, 187, 0.2);
+            --color-border: rgba(0, 0, 0, 0.1);
+            --color-shadow: rgba(0, 0, 0, 0.08);
+            --scanline-opacity: 0;
+            --grid-opacity: 0.015;
         }
 
         * {
@@ -53,6 +77,7 @@
             line-height: 1.6;
             overflow-x: hidden;
             position: relative;
+            transition: background 0.3s ease, color 0.3s ease;
         }
 
         /* CRT Scanline Effect */
@@ -65,14 +90,15 @@
             height: 100%;
             background: repeating-linear-gradient(
                 0deg,
-                rgba(0, 0, 0, 0.15),
-                rgba(0, 0, 0, 0.15) 1px,
+                rgba(0, 0, 0, var(--scanline-opacity)),
+                rgba(0, 0, 0, var(--scanline-opacity)) 1px,
                 transparent 1px,
                 transparent 2px
             );
             pointer-events: none;
             z-index: 9999;
             animation: scanline 8s linear infinite;
+            transition: background 0.3s ease;
         }
 
         @keyframes scanline {
@@ -88,12 +114,13 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background-image: 
-                linear-gradient(rgba(0, 255, 159, 0.03) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(0, 255, 159, 0.03) 1px, transparent 1px);
+            background-image:
+                linear-gradient(rgba(0, 0, 0, var(--grid-opacity)) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 0, 0, var(--grid-opacity)) 1px, transparent 1px);
             background-size: 50px 50px;
             pointer-events: none;
             z-index: 0;
+            transition: background-image 0.3s ease;
         }
 
         .container {
@@ -104,10 +131,38 @@
             z-index: 1;
         }
 
+        /* Theme Toggle */
+        .theme-toggle {
+            background: transparent;
+            border: 2px solid var(--color-border);
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s var(--ease-out-expo);
+            color: var(--color-accent);
+            margin-left: 1rem;
+            box-shadow: none;
+        }
+
+        .theme-toggle:hover {
+            border-color: var(--color-accent);
+            box-shadow: 0 0 20px var(--color-glow);
+            transform: scale(1.1);
+        }
+
+        .theme-toggle svg {
+            width: 20px;
+            height: 20px;
+        }
+
         /* Header */
         header {
             padding: 2rem 0;
-            border-bottom: 1px solid rgba(0, 255, 159, 0.2);
+            border-bottom: 1px solid var(--color-border);
             animation: slideDown 0.8s var(--ease-out-expo);
         }
 
@@ -210,11 +265,15 @@
             color: var(--color-accent);
             text-shadow: 0 0 20px var(--color-glow);
             letter-spacing: -0.02em;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
         }
 
-        .logo::before {
-            content: '> ';
-            color: var(--color-accent-alt);
+        .logo-img {
+            width: 40px;
+            height: 40px;
+            filter: drop-shadow(0 0 10px var(--color-glow));
         }
 
         .nav-links {
@@ -278,9 +337,9 @@
             text-transform: uppercase;
             letter-spacing: 0.1em;
             color: var(--color-accent);
-            background: rgba(0, 255, 159, 0.1);
+            background: var(--color-shadow);
             padding: 0.5rem 1rem;
-            border: 1px solid rgba(0, 255, 159, 0.3);
+            border: 1px solid var(--color-glow);
             margin-bottom: 2rem;
             box-shadow: 0 0 20px var(--color-glow);
             animation: pulse 2s ease-in-out infinite;
@@ -322,20 +381,20 @@
         .terminal-display {
             max-width: 900px;
             margin: 3rem auto;
-            background: rgba(21, 24, 32, 0.8);
-            border: 1px solid rgba(0, 255, 159, 0.3);
+            background: var(--color-bg-alt);
+            border: 1px solid var(--color-glow);
             border-radius: 8px;
             overflow: hidden;
             box-shadow: 
-                0 0 40px rgba(0, 255, 159, 0.2),
-                inset 0 0 60px rgba(0, 255, 159, 0.05);
+                0 0 40px var(--color-border),
+                inset 0 0 60px var(--color-shadow);
             animation: slideUp 1s var(--ease-out-expo) 0.4s both;
         }
 
         .terminal-tabs {
             display: flex;
-            background: rgba(0, 255, 159, 0.05);
-            border-bottom: 1px solid rgba(0, 255, 159, 0.2);
+            background: var(--color-shadow);
+            border-bottom: 1px solid var(--color-border);
         }
 
         .terminal-tab {
@@ -348,7 +407,7 @@
             color: var(--color-muted);
             cursor: pointer;
             transition: all 0.3s var(--ease-out-expo);
-            border-right: 1px solid rgba(0, 255, 159, 0.2);
+            border-right: 1px solid var(--color-border);
         }
 
         .terminal-tab:last-child {
@@ -356,12 +415,12 @@
         }
 
         .terminal-tab:hover {
-            background: rgba(0, 255, 159, 0.1);
+            background: var(--color-shadow);
             color: var(--color-text);
         }
 
         .terminal-tab.active {
-            background: rgba(0, 255, 159, 0.15);
+            background: var(--color-shadow);
             color: var(--color-accent);
             border-bottom: 2px solid var(--color-accent);
         }
@@ -382,8 +441,8 @@
             height: 24px;
             margin-left: 0.5rem;
             padding: 0.25rem;
-            background: rgba(0, 255, 159, 0.1);
-            border: 1px solid rgba(0, 255, 159, 0.3);
+            background: var(--color-shadow);
+            border: 1px solid var(--color-glow);
             border-radius: 4px;
             color: var(--color-accent);
             cursor: pointer;
@@ -392,7 +451,7 @@
         }
 
         .copy-btn:hover {
-            background: rgba(0, 255, 159, 0.2);
+            background: var(--color-border);
             box-shadow: 0 0 15px var(--color-glow);
             transform: scale(1.1);
         }
@@ -423,9 +482,9 @@
         }
 
         .terminal-header {
-            background: rgba(0, 255, 159, 0.1);
+            background: var(--color-shadow);
             padding: 1rem 1.5rem;
-            border-bottom: 1px solid rgba(0, 255, 159, 0.3);
+            border-bottom: 1px solid var(--color-glow);
             display: flex;
             align-items: center;
             gap: 0.5rem;
@@ -544,7 +603,7 @@
         }
 
         .btn-secondary:hover {
-            background: rgba(0, 255, 159, 0.1);
+            background: var(--color-shadow);
             transform: translateY(-2px);
             box-shadow: 0 0 30px var(--color-glow);
         }
@@ -552,8 +611,8 @@
         /* Stats Bar */
         .stats-bar {
             padding: 4rem 0;
-            border-top: 1px solid rgba(0, 255, 159, 0.2);
-            background: rgba(21, 24, 32, 0.3);
+            border-top: 1px solid var(--color-border);
+            background: var(--color-bg-alt);
         }
 
         .stats-grid {
@@ -598,7 +657,7 @@
         /* Features Section */
         .features {
             padding: 6rem 0;
-            border-top: 1px solid rgba(0, 255, 159, 0.2);
+            border-top: 1px solid var(--color-border);
         }
 
         .section-title {
@@ -625,8 +684,8 @@
         }
 
         .feature-card {
-            background: rgba(21, 24, 32, 0.5);
-            border: 1px solid rgba(0, 255, 159, 0.2);
+            background: var(--color-bg-alt);
+            border: 1px solid var(--color-border);
             padding: 2rem;
             border-radius: 8px;
             transition: all 0.4s var(--ease-out-expo);
@@ -641,7 +700,7 @@
 
         .feature-card:hover {
             border-color: var(--color-accent);
-            box-shadow: 0 0 40px rgba(0, 255, 159, 0.2);
+            box-shadow: 0 0 40px var(--color-border);
             transform: translateY(-5px);
         }
 
@@ -666,7 +725,7 @@
         /* Coverage Section */
         .coverage {
             padding: 6rem 0;
-            border-top: 1px solid rgba(0, 255, 159, 0.2);
+            border-top: 1px solid var(--color-border);
             text-align: center;
         }
 
@@ -701,8 +760,8 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            background: rgba(0, 255, 159, 0.05);
-            border: 2px solid rgba(0, 255, 159, 0.2);
+            background: var(--color-shadow);
+            border: 2px solid var(--color-border);
             border-radius: 12px;
             padding: 1.5rem;
             transition: all 0.3s var(--ease-out-expo);
@@ -710,8 +769,8 @@
 
         .coverage-item:hover .coverage-logo-img {
             border-color: var(--color-accent);
-            background: rgba(0, 255, 159, 0.1);
-            box-shadow: 0 0 30px rgba(0, 255, 159, 0.3);
+            background: var(--color-shadow);
+            box-shadow: 0 0 30px var(--color-glow);
         }
 
         .coverage-logo-img svg,
@@ -758,7 +817,7 @@
         /* Tools Section */
         .tools-section {
             padding: 6rem 0;
-            border-top: 1px solid rgba(0, 255, 159, 0.2);
+            border-top: 1px solid var(--color-border);
         }
 
         .tools-grid {
@@ -769,8 +828,8 @@
         }
 
         .tool-card {
-            background: rgba(21, 24, 32, 0.5);
-            border: 1px solid rgba(0, 255, 159, 0.2);
+            background: var(--color-bg-alt);
+            border: 1px solid var(--color-border);
             border-left: 3px solid var(--color-accent);
             padding: 1.5rem;
             border-radius: 6px;
@@ -786,7 +845,7 @@
 
         .tool-card:hover {
             border-color: var(--color-accent);
-            box-shadow: 0 0 30px rgba(0, 255, 159, 0.2);
+            box-shadow: 0 0 30px var(--color-border);
             transform: translateY(-3px);
         }
 
@@ -819,7 +878,7 @@
         /* Examples Section */
         .examples {
             padding: 6rem 0;
-            border-top: 1px solid rgba(0, 255, 159, 0.2);
+            border-top: 1px solid var(--color-border);
         }
 
         .examples-grid {
@@ -829,8 +888,8 @@
         }
 
         .example-card {
-            background: rgba(21, 24, 32, 0.5);
-            border: 1px solid rgba(0, 255, 159, 0.2);
+            background: var(--color-bg-alt);
+            border: 1px solid var(--color-border);
             border-radius: 8px;
             overflow: hidden;
             opacity: 0;
@@ -845,13 +904,13 @@
 
         .example-card:hover {
             border-color: var(--color-accent);
-            box-shadow: 0 0 40px rgba(0, 255, 159, 0.2);
+            box-shadow: 0 0 40px var(--color-border);
         }
 
         .example-query {
             padding: 2rem;
-            background: rgba(0, 255, 159, 0.05);
-            border-bottom: 1px solid rgba(0, 255, 159, 0.2);
+            background: var(--color-shadow);
+            border-bottom: 1px solid var(--color-border);
             display: flex;
             align-items: center;
             gap: 1rem;
@@ -929,7 +988,7 @@
         /* Use Cases */
         .use-cases {
             padding: 6rem 0;
-            border-top: 1px solid rgba(0, 255, 159, 0.2);
+            border-top: 1px solid var(--color-border);
         }
 
         .use-case-grid {
@@ -939,8 +998,8 @@
         }
 
         .use-case {
-            background: rgba(21, 24, 32, 0.5);
-            border: 1px solid rgba(0, 255, 159, 0.2);
+            background: var(--color-bg-alt);
+            border: 1px solid var(--color-border);
             padding: 2.5rem;
             border-radius: 8px;
             display: grid;
@@ -959,7 +1018,7 @@
 
         .use-case:hover {
             border-color: var(--color-accent);
-            box-shadow: 0 0 40px rgba(0, 255, 159, 0.2);
+            box-shadow: 0 0 40px var(--color-border);
         }
 
         .use-case-number {
@@ -985,14 +1044,14 @@
         /* CTA Section */
         .cta-section {
             padding: 8rem 0;
-            border-top: 1px solid rgba(0, 255, 159, 0.2);
+            border-top: 1px solid var(--color-border);
             text-align: center;
         }
 
         .cta-box {
             max-width: 800px;
             margin: 0 auto;
-            background: rgba(21, 24, 32, 0.8);
+            background: var(--color-bg-alt);
             border: 2px solid var(--color-accent);
             padding: 4rem 3rem;
             border-radius: 12px;
@@ -1015,7 +1074,7 @@
         /* Tech Stack */
         .tech-stack {
             padding: 4rem 0 3rem;
-            border-top: 1px solid rgba(0, 255, 159, 0.2);
+            border-top: 1px solid var(--color-border);
             text-align: center;
         }
 
@@ -1043,8 +1102,8 @@
             font-family: var(--font-display);
             font-size: 0.9rem;
             padding: 0.75rem 1.25rem;
-            background: rgba(21, 24, 32, 0.5);
-            border: 1px solid rgba(0, 255, 159, 0.3);
+            background: var(--color-bg-alt);
+            border: 1px solid var(--color-glow);
             border-radius: 6px;
             color: var(--color-accent);
             transition: all 0.3s var(--ease-out-expo);
@@ -1057,14 +1116,14 @@
 
         .tech-badge:hover {
             border-color: var(--color-accent);
-            box-shadow: 0 0 20px rgba(0, 255, 159, 0.3);
+            box-shadow: 0 0 20px var(--color-glow);
             transform: translateY(-2px);
         }
 
         /* Footer */
         footer {
             padding: 4rem 0 2rem;
-            border-top: 1px solid rgba(0, 255, 159, 0.2);
+            border-top: 1px solid var(--color-border);
         }
 
         .footer-grid {
@@ -1081,11 +1140,15 @@
             color: var(--color-accent);
             text-shadow: 0 0 20px var(--color-glow);
             margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
         }
 
-        .footer-logo::before {
-            content: '> ';
-            color: var(--color-accent-alt);
+        .footer-logo img {
+            width: 40px;
+            height: 40px;
+            filter: drop-shadow(0 0 10px var(--color-glow));
         }
 
         .footer-desc {
@@ -1126,7 +1189,7 @@
 
         .footer-bottom {
             padding-top: 2rem;
-            border-top: 1px solid rgba(0, 255, 159, 0.1);
+            border-top: 1px solid var(--color-shadow);
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -1234,19 +1297,32 @@
     <header>
         <div class="container">
             <nav>
-                <div class="logo">metro-mcp</div>
-                <ul class="nav-links">
-                    <li><a href="#features">Features</a></li>
-                    <li><a href="#coverage">Coverage</a></li>
-                    <li><a href="#tools">Tools</a></li>
-                    <li><a href="#examples">Examples</a></li>
-                    <li><a href="#use-cases">Use Cases</a></li>
-                    <li><a href="https://github.com/Aarekaz/metro-mcp">GitHub</a></li>
-                </ul>
-                <div class="hamburger">
-                    <span></span>
-                    <span></span>
-                    <span></span>
+                <div class="logo">
+                    <img src="/metro-mcp-slick.svg" alt="Metro-MCP Logo" class="logo-img">
+                    metro-mcp
+                </div>
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <ul class="nav-links">
+                        <li><a href="#features">Features</a></li>
+                        <li><a href="#coverage">Coverage</a></li>
+                        <li><a href="#tools">Tools</a></li>
+                        <li><a href="#examples">Examples</a></li>
+                        <li><a href="#use-cases">Use Cases</a></li>
+                        <li><a href="https://github.com/Aarekaz/metro-mcp">GitHub</a></li>
+                    </ul>
+                    <button class="theme-toggle" aria-label="Toggle theme">
+                        <svg class="sun-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                        </svg>
+                        <svg class="moon-icon" style="display: none;" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                        </svg>
+                    </button>
+                    <div class="hamburger">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </div>
                 </div>
             </nav>
         </div>
@@ -1273,7 +1349,7 @@
                     <span class="accent">real-time</span> <span class="accent-alt">transit</span> vision
                 </h1>
                 <p class="hero-subtitle">
-                    Metro-MCP connects Claude and other AI agents to live transit data from NYC Subway and DC Metro. 
+                    Metro-MCP connects LLMs and other AI agents to live transit data from NYC Subway and DC Metro. 
                     Train positions, arrivals, delays—all in real-time through MCP.
                 </p>
 
@@ -1291,14 +1367,11 @@
                         <div class="terminal-panel active" id="quickstart">
                             <div class="terminal-body">
                                 <div class="terminal-line">
-                                    <span class="terminal-comment"># Setup in 4 steps:</span>
+                                    <span class="terminal-prompt">1.</span> Open Your Client's MCP/Connector settings
                                 </div>
                                 <div class="terminal-line">
-                                    <span class="terminal-prompt">1.</span> Open Your MCP client Desktop
-                                </div>
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">2.</span> Add this URL: <span class="terminal-string url-to-copy">https://metro-mcp.aarekaz.workers.dev</span>
-                                    <button class="copy-btn" data-copy="https://metro-mcp.aarekaz.workers.dev">
+                                    <span class="terminal-prompt">2.</span> Add this URL: <span class="terminal-string url-to-copy">https://metro-mcp.anuragd.me</span>
+                                    <button class="copy-btn" data-copy="https://metro-mcp.anuragd.me">
                                         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                                             <rect x="5" y="5" width="9" height="9" stroke="currentColor" stroke-width="1.5"/>
                                             <path d="M3 11V3C3 2.44772 3.44772 2 4 2H10" stroke="currentColor" stroke-width="1.5"/>
@@ -1792,7 +1865,10 @@
         <div class="container">
             <div class="footer-grid">
                 <div class="footer-col">
-                    <div class="footer-logo">metro-mcp</div>
+                    <div class="footer-logo">
+                        <img src="/metro-mcp-slick.svg" alt="Metro-MCP Logo">
+                        metro-mcp
+                    </div>
                     <p class="footer-desc">Real-time transit data for AI agents through MCP</p>
                 </div>
                 <div class="footer-col">
@@ -1829,6 +1905,42 @@
     </footer>
 
     <script>
+        // Theme toggle functionality
+        const themeToggle = document.querySelector('.theme-toggle');
+        const sunIcon = document.querySelector('.sun-icon');
+        const moonIcon = document.querySelector('.moon-icon');
+        const htmlElement = document.documentElement;
+
+        // Check for saved theme preference or default to dark mode
+        const currentTheme = localStorage.getItem('theme') || 'dark';
+        htmlElement.setAttribute('data-theme', currentTheme);
+
+        // Update icon based on current theme
+        function updateThemeIcon(theme) {
+            if (theme === 'light') {
+                sunIcon.style.display = 'none';
+                moonIcon.style.display = 'block';
+            } else {
+                sunIcon.style.display = 'block';
+                moonIcon.style.display = 'none';
+            }
+        }
+
+        updateThemeIcon(currentTheme);
+
+        // Toggle theme
+        themeToggle.addEventListener('click', () => {
+            const currentTheme = htmlElement.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+            htmlElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateThemeIcon(newTheme);
+
+            // Force a reflow to clear any hover effects
+            themeToggle.blur();
+        });
+
         // Hamburger menu toggle
         const hamburger = document.querySelector('.hamburger');
         const mobileMenu = document.querySelector('.mobile-menu');
@@ -1844,7 +1956,7 @@
 
         hamburger.addEventListener('click', toggleMobileMenu);
         mobileOverlay.addEventListener('click', toggleMobileMenu);
-        
+
         mobileLinks.forEach(link => {
             link.addEventListener('click', toggleMobileMenu);
         });

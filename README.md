@@ -218,11 +218,11 @@ The client will handle authentication automatically via the OAuth flow.
 
 If your MCP client doesn't support OAuth, you can still authenticate manually:
 
-1. Visit `https://metro-mcp.aarekaz.workers.dev/authorize` in your browser
+1. Visit `https://metro-mcp.anuragd.me/authorize` in your browser
 2. Authorize via GitHub
 3. Copy the JWT token displayed
 4. Configure your client with:
-   - Server URL: `https://metro-mcp.aarekaz.workers.dev/sse`
+   - Server URL: `https://metro-mcp.anuragd.me/sse`
    - Authorization Header: `Bearer your-jwt-token-here`
 
 ## OAuth Endpoints
