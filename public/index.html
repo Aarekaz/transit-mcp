@@ -3,21 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Metro-MCP — Real-time transit data for AI agents</title>
-    <meta name="description" content="Connect LLMs and AI agents to live NYC Subway and DC Metro data. Real-time arrivals, train positions, and service alerts through the Model Context Protocol.">
+    <title>Metro-MCP — Live transit data for AI agents</title>
+    <meta name="description" content="Connect LLMs and AI agents to live NYC Subway and DC Metro data. Current arrivals, train positions, and service alerts through the Model Context Protocol.">
     <link rel="icon" href="/favicon.ico" type="image/x-icon">
     
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://metro-mcp.anuragd.me/">
-    <meta property="og:title" content="Metro-MCP — Real-time transit data for AI agents">
-    <meta property="og:description" content="Connect LLMs and AI agents to live NYC Subway and DC Metro data. Real-time arrivals, train positions, and service alerts through MCP.">
+    <meta property="og:title" content="Metro-MCP — Live transit data for AI agents">
+    <meta property="og:description" content="Connect LLMs and AI agents to live NYC Subway and DC Metro data. Current arrivals, train positions, and service alerts through MCP.">
     <meta property="og:image" content="https://metro-mcp.anuragd.me/og-image.png">
 
     <!-- Twitter -->
     <meta property="twitter:card" content="summary_large_image">
     <meta property="twitter:url" content="https://metro-mcp.anuragd.me/">
-    <meta property="twitter:title" content="Metro-MCP — Real-time transit data for AI agents">
+    <meta property="twitter:title" content="Metro-MCP — Live transit data for AI agents">
     <meta property="twitter:description" content="Connect LLMs and AI agents to live NYC Subway and DC Metro data through MCP.">
     <meta property="twitter:image" content="https://metro-mcp.anuragd.me/og-image.png">
     
@@ -654,7 +654,7 @@
             letter-spacing: 0.1em;
         }
 
-        /* Features Section */
+        /* Features Section - Consolidated */
         .features {
             padding: 6rem 0;
             border-top: 1px solid var(--color-border);
@@ -672,14 +672,15 @@
         .section-subtitle {
             text-align: center;
             color: var(--color-muted);
-            max-width: 600px;
+            max-width: 700px;
             margin: 0 auto 4rem;
             font-size: 1.1rem;
+            line-height: 1.7;
         }
 
         .features-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
             gap: 2rem;
         }
 
@@ -720,162 +721,101 @@
         .feature-card p {
             color: var(--color-muted);
             line-height: 1.8;
+            margin-bottom: 1rem;
         }
 
-        /* Coverage Section */
+        .feature-card ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .feature-card ul li {
+            color: var(--color-text);
+            margin-bottom: 0.5rem;
+            position: relative;
+            padding-left: 1.5rem;
+            line-height: 1.6;
+            font-size: 0.95rem;
+        }
+
+        .feature-card ul li::before {
+            content: '→';
+            position: absolute;
+            left: 0;
+            color: var(--color-accent);
+        }
+
+        /* Coverage Section with Comparison Table */
         .coverage {
             padding: 6rem 0;
             border-top: 1px solid var(--color-border);
-            text-align: center;
         }
 
-        .coverage-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 3rem;
-            margin-top: 4rem;
-        }
-
-        .coverage-item {
-            opacity: 0;
-            transform: scale(0.9);
-            transition: all 0.5s var(--ease-out-expo);
-        }
-
-        .coverage-item.visible {
-            opacity: 1;
-            transform: scale(1);
-        }
-
-        .coverage-logo {
-            font-size: 4rem;
-            margin-bottom: 1rem;
-            filter: drop-shadow(0 0 20px var(--color-glow));
-        }
-
-        .coverage-logo-img {
-            width: 120px;
-            height: 120px;
-            margin: 0 auto 1rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: var(--color-shadow);
-            border: 2px solid var(--color-border);
-            border-radius: 12px;
-            padding: 1.5rem;
-            transition: all 0.3s var(--ease-out-expo);
-        }
-
-        .coverage-item:hover .coverage-logo-img {
-            border-color: var(--color-accent);
-            background: var(--color-shadow);
-            box-shadow: 0 0 30px var(--color-glow);
-        }
-
-        .coverage-logo-img svg,
-        .coverage-logo-img img {
-            width: 100%;
-            height: 100%;
-            filter: drop-shadow(0 0 10px var(--color-glow));
-        }
-
-        .coverage-item h3 {
-            font-family: var(--font-display);
-            font-size: 1.5rem;
-            margin-bottom: 0.5rem;
-            color: var(--color-accent);
-        }
-
-        .coverage-stats {
-            display: flex;
-            justify-content: center;
-            gap: 2rem;
-            margin-top: 1rem;
-        }
-
-        .stat {
-            display: flex;
-            flex-direction: column;
-        }
-
-        .stat-number {
-            font-family: var(--font-display);
-            font-size: 2rem;
-            font-weight: 800;
-            color: var(--color-accent-alt);
-            text-shadow: 0 0 20px var(--color-glow-alt);
-        }
-
-        .stat-label {
-            font-size: 0.85rem;
-            color: var(--color-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-
-        /* Tools Section */
-        .tools-section {
-            padding: 6rem 0;
-            border-top: 1px solid var(--color-border);
-        }
-
-        .tools-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-            gap: 1.5rem;
-            margin-top: 4rem;
-        }
-
-        .tool-card {
+        .comparison-table-wrapper {
+            max-width: 900px;
+            margin: 3rem auto;
             background: var(--color-bg-alt);
             border: 1px solid var(--color-border);
-            border-left: 3px solid var(--color-accent);
-            padding: 1.5rem;
-            border-radius: 6px;
-            transition: all 0.4s var(--ease-out-expo);
-            opacity: 0;
-            transform: translateY(20px);
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 0 40px var(--color-border);
         }
 
-        .tool-card.visible {
-            opacity: 1;
-            transform: translateY(0);
-        }
-
-        .tool-card:hover {
-            border-color: var(--color-accent);
-            box-shadow: 0 0 30px var(--color-border);
-            transform: translateY(-3px);
-        }
-
-        .tool-header {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            margin-bottom: 1rem;
-        }
-
-        .tool-icon {
-            font-size: 1.5rem;
-            filter: drop-shadow(0 0 8px var(--color-glow));
-        }
-
-        .tool-card h3 {
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
             font-family: var(--font-display);
-            font-size: 1rem;
+        }
+
+        .comparison-table thead {
+            background: var(--color-shadow);
+            border-bottom: 2px solid var(--color-accent);
+        }
+
+        .comparison-table th {
+            padding: 1.5rem 1rem;
+            text-align: left;
+            font-weight: 800;
             color: var(--color-accent);
-            margin: 0;
-        }
-
-        .tool-card p {
-            color: var(--color-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
             font-size: 0.9rem;
-            line-height: 1.6;
-            margin: 0;
         }
 
-        /* Examples Section */
+        .comparison-table th:first-child {
+            color: var(--color-text);
+        }
+
+        .comparison-table td {
+            padding: 1.25rem 1rem;
+            border-bottom: 1px solid var(--color-shadow);
+            color: var(--color-muted);
+        }
+
+        .comparison-table td:first-child {
+            font-weight: 600;
+            color: var(--color-text);
+        }
+
+        .comparison-table tr:hover {
+            background: var(--color-shadow);
+        }
+
+        .comparison-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .table-check {
+            color: var(--color-accent);
+            font-size: 1.2rem;
+        }
+
+        .table-cross {
+            color: var(--color-muted);
+            font-size: 1.2rem;
+        }
+
+        /* Collapsible Examples */
         .examples {
             padding: 6rem 0;
             border-top: 1px solid var(--color-border);
@@ -883,7 +823,7 @@
 
         .examples-grid {
             display: grid;
-            gap: 2rem;
+            gap: 1.5rem;
             margin-top: 4rem;
         }
 
@@ -902,15 +842,22 @@
             transform: translateY(0);
         }
 
-        .example-card:hover {
-            border-color: var(--color-accent);
-            box-shadow: 0 0 40px var(--color-border);
-        }
-
-        .example-query {
-            padding: 2rem;
+        .example-header {
+            padding: 1.5rem 2rem;
             background: var(--color-shadow);
             border-bottom: 1px solid var(--color-border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            transition: all 0.3s var(--ease-out-expo);
+        }
+
+        .example-header:hover {
+            background: var(--color-border);
+        }
+
+        .example-title {
             display: flex;
             align-items: center;
             gap: 1rem;
@@ -921,11 +868,31 @@
             filter: drop-shadow(0 0 10px var(--color-glow));
         }
 
-        .example-query p {
+        .example-header h3 {
             font-family: var(--font-display);
             font-size: 1.1rem;
             color: var(--color-accent);
             margin: 0;
+        }
+
+        .expand-icon {
+            font-size: 1.2rem;
+            color: var(--color-accent);
+            transition: transform 0.3s var(--ease-out-expo);
+        }
+
+        .example-card.expanded .expand-icon {
+            transform: rotate(180deg);
+        }
+
+        .example-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.4s var(--ease-out-expo);
+        }
+
+        .example-card.expanded .example-content {
+            max-height: 1000px;
         }
 
         .example-response {
@@ -985,60 +952,65 @@
             color: var(--color-accent-alt);
         }
 
-        /* Use Cases */
-        .use-cases {
+        /* Streamlined Tools Section */
+        .tools-section {
             padding: 6rem 0;
             border-top: 1px solid var(--color-border);
         }
 
-        .use-case-grid {
+        .tools-grid {
             display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
             gap: 2rem;
             margin-top: 4rem;
         }
 
-        .use-case {
+        .tool-card {
             background: var(--color-bg-alt);
             border: 1px solid var(--color-border);
-            padding: 2.5rem;
-            border-radius: 8px;
-            display: grid;
-            grid-template-columns: auto 1fr;
-            gap: 2rem;
-            align-items: center;
+            border-left: 3px solid var(--color-accent);
+            padding: 2rem;
+            border-radius: 6px;
+            transition: all 0.4s var(--ease-out-expo);
             opacity: 0;
-            transform: translateX(-40px);
-            transition: all 0.5s var(--ease-out-expo);
+            transform: translateY(20px);
         }
 
-        .use-case.visible {
+        .tool-card.visible {
             opacity: 1;
-            transform: translateX(0);
+            transform: translateY(0);
         }
 
-        .use-case:hover {
+        .tool-card:hover {
             border-color: var(--color-accent);
-            box-shadow: 0 0 40px var(--color-border);
+            box-shadow: 0 0 30px var(--color-border);
+            transform: translateY(-3px);
         }
 
-        .use-case-number {
-            font-family: var(--font-display);
-            font-size: 3rem;
-            font-weight: 800;
-            color: var(--color-accent);
-            text-shadow: 0 0 30px var(--color-glow);
-        }
-
-        .use-case-content h3 {
-            font-family: var(--font-display);
-            font-size: 1.5rem;
+        .tool-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
             margin-bottom: 1rem;
-            color: var(--color-text);
         }
 
-        .use-case-content p {
+        .tool-icon {
+            font-size: 1.8rem;
+            filter: drop-shadow(0 0 8px var(--color-glow));
+        }
+
+        .tool-card h3 {
+            font-family: var(--font-display);
+            font-size: 1.1rem;
+            color: var(--color-accent);
+            margin: 0;
+        }
+
+        .tool-card p {
             color: var(--color-muted);
-            line-height: 1.8;
+            font-size: 0.95rem;
+            line-height: 1.7;
+            margin: 0;
         }
 
         /* CTA Section */
@@ -1126,11 +1098,12 @@
             border-top: 1px solid var(--color-border);
         }
 
-        .footer-grid {
-            display: grid;
-            grid-template-columns: 2fr 1fr 1fr 1fr;
-            gap: 3rem;
-            margin-bottom: 3rem;
+        .footer-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 2rem;
         }
 
         .footer-logo {
@@ -1139,7 +1112,6 @@
             font-weight: 800;
             color: var(--color-accent);
             text-shadow: 0 0 20px var(--color-glow);
-            margin-bottom: 1rem;
             display: flex;
             align-items: center;
             gap: 0.75rem;
@@ -1149,67 +1121,6 @@
             width: 40px;
             height: 40px;
             filter: drop-shadow(0 0 10px var(--color-glow));
-        }
-
-        .footer-desc {
-            color: var(--color-muted);
-            line-height: 1.6;
-            max-width: 300px;
-        }
-
-        .footer-col h4 {
-            font-family: var(--font-display);
-            font-size: 0.9rem;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            color: var(--color-accent);
-            margin-bottom: 1rem;
-        }
-
-        .footer-col ul {
-            list-style: none;
-        }
-
-        .footer-col ul li {
-            margin-bottom: 0.75rem;
-        }
-
-        .footer-col ul li a {
-            font-family: var(--font-display);
-            font-size: 0.9rem;
-            color: var(--color-muted);
-            text-decoration: none;
-            transition: all 0.3s var(--ease-out-expo);
-        }
-
-        .footer-col ul li a:hover {
-            color: var(--color-accent);
-            text-shadow: 0 0 10px var(--color-glow);
-        }
-
-        .footer-bottom {
-            padding-top: 2rem;
-            border-top: 1px solid var(--color-shadow);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 1rem;
-        }
-
-        .footer-copy,
-        .footer-credit {
-            font-family: var(--font-display);
-            font-size: 0.85rem;
-            color: var(--color-muted);
-        }
-
-        .footer-content {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 2rem;
         }
 
         .footer-links {
@@ -1231,6 +1142,16 @@
             text-shadow: 0 0 10px var(--color-glow);
         }
 
+        .footer-copy {
+            font-family: var(--font-display);
+            font-size: 0.85rem;
+            color: var(--color-muted);
+            text-align: center;
+            margin-top: 3rem;
+            padding-top: 2rem;
+            border-top: 1px solid var(--color-shadow);
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             .nav-links {
@@ -1247,26 +1168,12 @@
 
             .terminal-body {
                 font-size: 0.75rem;
+                padding: 1.5rem;
             }
 
             .features-grid,
-            .coverage-grid {
+            .tools-grid {
                 grid-template-columns: 1fr;
-            }
-
-            .use-case {
-                grid-template-columns: 1fr;
-                text-align: center;
-            }
-
-            .footer-grid {
-                grid-template-columns: 1fr;
-                gap: 2rem;
-            }
-
-            .footer-bottom {
-                flex-direction: column;
-                text-align: center;
             }
 
             .tech-badges {
@@ -1290,6 +1197,25 @@
             .cta-box {
                 padding: 3rem 2rem;
             }
+
+            .comparison-table {
+                font-size: 0.85rem;
+            }
+
+            .comparison-table th,
+            .comparison-table td {
+                padding: 1rem 0.75rem;
+            }
+
+            .footer-content {
+                flex-direction: column;
+                text-align: center;
+            }
+
+            .footer-links {
+                flex-direction: column;
+                gap: 1rem;
+            }
         }
     </style>
 </head>
@@ -1307,7 +1233,6 @@
                         <li><a href="#coverage">Coverage</a></li>
                         <li><a href="#tools">Tools</a></li>
                         <li><a href="#examples">Examples</a></li>
-                        <li><a href="#use-cases">Use Cases</a></li>
                         <li><a href="https://github.com/Aarekaz/metro-mcp">GitHub</a></li>
                     </ul>
                     <button class="theme-toggle" aria-label="Toggle theme">
@@ -1335,7 +1260,6 @@
             <li><a href="#coverage">Coverage</a></li>
             <li><a href="#tools">Tools</a></li>
             <li><a href="#examples">Examples</a></li>
-            <li><a href="#use-cases">Use Cases</a></li>
             <li><a href="https://github.com/Aarekaz/metro-mcp">GitHub</a></li>
         </ul>
     </div>
@@ -1346,11 +1270,11 @@
                 <div class="hero-tag">Model Context Protocol Server</div>
                 <h1>
                     Give your AI agent<br>
-                    <span class="accent">real-time</span> <span class="accent-alt">transit</span> vision
+                    <span class="accent">live</span> <span class="accent-alt">transit</span> vision
                 </h1>
                 <p class="hero-subtitle">
-                    Metro-MCP connects LLMs and other AI agents to live transit data from NYC Subway and DC Metro. 
-                    Train positions, arrivals, delays—all in real-time through MCP.
+                    Metro-MCP connects LLMs and AI agents to current transit data from NYC Subway and DC Metro. 
+                    Train positions, arrivals, delays—all streaming through MCP with instant updates.
                 </p>
 
                 <div class="terminal-display">
@@ -1452,171 +1376,193 @@
             </div>
         </section>
 
+        <!-- Consolidated Features Section -->
         <section id="features" class="features">
             <div class="container">
-                <h2 class="section-title">Built for AI agents</h2>
+                <h2 class="section-title">Powering transit-aware AI applications</h2>
                 <p class="section-subtitle">
-                    Every tool designed to give language models the transit context they need
+                    From commuter assistants to analytics platforms, Metro-MCP provides the foundation for intelligent transit applications with up-to-date data and comprehensive coverage.
                 </p>
 
                 <div class="features-grid">
                     <div class="feature-card">
                         <div class="feature-icon">🚇</div>
-                        <h3>Real-time Predictions</h3>
+                        <h3>Live Arrival Predictions</h3>
                         <p>
-                            Get live arrival times for any station. AI agents can answer "when's the next train?" 
+                            Get current arrival times for any station. AI agents can answer "when's the next train?" 
                             with actual data, not guesses.
                         </p>
+                        <ul>
+                            <li>Smart commute planning</li>
+                            <li>Travel assistants</li>
+                            <li>Delay notifications</li>
+                        </ul>
                     </div>
 
                     <div class="feature-card">
                         <div class="feature-icon">📍</div>
-                        <h3>Live Train Positions</h3>
+                        <h3>Train Position Tracking</h3>
                         <p>
                             Track every train in the system. See exactly where trains are, which direction they're heading, 
-                            and how many cars they have.
+                            and train composition.
                         </p>
+                        <ul>
+                            <li>System monitoring</li>
+                            <li>Crowding insights</li>
+                            <li>Route optimization</li>
+                        </ul>
                     </div>
 
                     <div class="feature-card">
                         <div class="feature-icon">🚌</div>
-                        <h3>Bus Integration</h3>
+                        <h3>Multimodal Integration</h3>
                         <p>
-                            Complete DC Metro bus support. Real-time positions, predictions, routes, and stops. 
-                            Build multimodal transit assistants.
+                            Complete DC Metro bus support with instant positions, predictions, routes, and stops. 
+                            Build comprehensive transit assistants.
                         </p>
+                        <ul>
+                            <li>Bus + rail coordination</li>
+                            <li>Transfer planning</li>
+                            <li>Last-mile solutions</li>
+                        </ul>
                     </div>
 
                     <div class="feature-card">
                         <div class="feature-icon">⚠️</div>
-                        <h3>Service Alerts</h3>
+                        <h3>Service Disruption Alerts</h3>
                         <p>
-                            Stay ahead of disruptions. Get real-time incident reports, elevator outages, 
+                            Stay ahead of disruptions. Get instant incident reports, elevator outages, 
                             and service advisories as they happen.
                         </p>
+                        <ul>
+                            <li>Proactive route changes</li>
+                            <li>Accessibility updates</li>
+                            <li>Emergency notifications</li>
+                        </ul>
                     </div>
 
                     <div class="feature-card">
                         <div class="feature-icon">🗺️</div>
-                        <h3>Station Metadata</h3>
+                        <h3>Rich Station Metadata</h3>
                         <p>
                             Complete station info with coordinates, transfer connections, and line information. 
                             Build spatial reasoning into your AI.
                         </p>
+                        <ul>
+                            <li>Geographic queries</li>
+                            <li>Transfer optimization</li>
+                            <li>Accessibility info</li>
+                        </ul>
                     </div>
 
                     <div class="feature-card">
                         <div class="feature-icon">🔄</div>
-                        <h3>Auto-Refresh</h3>
+                        <h3>Auto-Refresh Data Streams</h3>
                         <p>
                             Data updates every 7-10 seconds. Your AI always has the freshest information 
                             without manual polling.
                         </p>
+                        <ul>
+                            <li>SSE event streams</li>
+                            <li>Efficient bandwidth</li>
+                            <li>Always up-to-date</li>
+                        </ul>
                     </div>
                 </div>
             </div>
         </section>
 
+        <!-- Coverage with Comparison Table -->
         <section id="coverage" class="coverage">
             <div class="container">
-                <h2 class="section-title">Two major transit systems</h2>
+                <h2 class="section-title">Two major transit systems, one unified API</h2>
                 <p class="section-subtitle">
-                    Comprehensive coverage of the NYC Subway and DC Metro, with more systems coming
+                    Comprehensive coverage of NYC Subway and DC Metro with different strengths and capabilities
                 </p>
 
-                <div class="coverage-grid">
-                    <div class="coverage-item">
-                        <div class="coverage-logo-img">
-                            <img src="https://upload.wikimedia.org/wikipedia/commons/3/3c/MTA_NYC_logo.svg" alt="MTA NYC Logo">
-                        </div>
-                        <h3>NYC Subway</h3>
-                        <div class="coverage-stats">
-                            <div class="stat">
-                                <div class="stat-number">496</div>
-                                <div class="stat-label">Stations</div>
-                            </div>
-                            <div class="stat">
-                                <div class="stat-number">29</div>
-                                <div class="stat-label">Lines</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="coverage-item">
-                        <div class="coverage-logo-img">
-                            <img src="https://upload.wikimedia.org/wikipedia/commons/1/1e/WMATA_Metro_Logo.svg" alt="WMATA Metro Logo">
-                        </div>
-                        <h3>DC Metro</h3>
-                        <div class="coverage-stats">
-                            <div class="stat">
-                                <div class="stat-number">98</div>
-                                <div class="stat-label">Stations</div>
-                            </div>
-                            <div class="stat">
-                                <div class="stat-number">6</div>
-                                <div class="stat-label">Lines</div>
-                            </div>
-                        </div>
-                    </div>
+                <div class="comparison-table-wrapper">
+                    <table class="comparison-table">
+                        <thead>
+                            <tr>
+                                <th>Feature</th>
+                                <th>DC Metro (WMATA)</th>
+                                <th>NYC Subway (MTA)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Train Arrivals</td>
+                                <td><span class="table-check">✓</span> Live predictions</td>
+                                <td><span class="table-check">✓</span> Live predictions</td>
+                            </tr>
+                            <tr>
+                                <td>Train Positions</td>
+                                <td><span class="table-check">✓</span> GPS tracking</td>
+                                <td><span class="table-check">✓</span> GPS tracking</td>
+                            </tr>
+                            <tr>
+                                <td>Service Alerts</td>
+                                <td><span class="table-check">✓</span> Incidents & advisories</td>
+                                <td><span class="table-check">✓</span> System-wide alerts</td>
+                            </tr>
+                            <tr>
+                                <td>Bus Integration</td>
+                                <td><span class="table-check">✓</span> Full support</td>
+                                <td><span class="table-cross">–</span> Rail only</td>
+                            </tr>
+                            <tr>
+                                <td>Stations</td>
+                                <td>98 stations</td>
+                                <td>496 stations</td>
+                            </tr>
+                            <tr>
+                                <td>Lines</td>
+                                <td>6 lines (Red, Orange, Silver, Blue, Yellow, Green)</td>
+                                <td>29 lines (A, C, E, 1, 2, 3, etc.)</td>
+                            </tr>
+                            <tr>
+                                <td>Geographic Coverage</td>
+                                <td>DC, MD, VA metro area</td>
+                                <td>NYC 5 boroughs</td>
+                            </tr>
+                            <tr>
+                                <td>Update Frequency</td>
+                                <td>7-10 seconds</td>
+                                <td>7-10 seconds</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </section>
 
-        <!-- MCP Tools -->
+        <!-- Streamlined Tools Section -->
         <section id="tools" class="tools-section">
             <div class="container">
-                <h2 class="section-title">13 Powerful MCP Tools</h2>
+                <h2 class="section-title">Core MCP Tools</h2>
                 <p class="section-subtitle">
-                    Complete toolkit for querying transit data through the Model Context Protocol
+                    Essential tools that enable AI agents to access and query transit data effectively
                 </p>
 
                 <div class="tools-grid">
                     <div class="tool-card">
                         <div class="tool-header">
-                            <span class="tool-icon">🚉</span>
-                            <h3>get_station_predictions</h3>
-                        </div>
-                        <p>Get real-time arrival predictions for any station. Returns next trains with line, destination, and minutes until arrival.</p>
-                    </div>
-
-                    <div class="tool-card">
-                        <div class="tool-header">
                             <span class="tool-icon">🔍</span>
-                            <h3>search_stations</h3>
+                            <h3>get_next_trains</h3>
                         </div>
-                        <p>Search for stations by name or code. Fuzzy matching helps find stations even with partial queries.</p>
+                        <p>
+                            Retrieve upcoming train arrivals at any station with estimated times, destinations, and line information. The foundation for commute planning and travel assistance.
+                        </p>
                     </div>
 
                     <div class="tool-card">
                         <div class="tool-header">
-                            <span class="tool-icon">🚇</span>
-                            <h3>get_stations_by_line</h3>
+                            <span class="tool-icon">📡</span>
+                            <h3>get_train_positions</h3>
                         </div>
-                        <p>List all stations on a specific transit line. Includes coordinates and transfer information.</p>
-                    </div>
-
-                    <div class="tool-card">
-                        <div class="tool-header">
-                            <span class="tool-icon">⚠️</span>
-                            <h3>get_incidents</h3>
-                        </div>
-                        <p>Retrieve current service alerts, delays, and disruptions across the transit system.</p>
-                    </div>
-
-                    <div class="tool-card">
-                        <div class="tool-header">
-                            <span class="tool-icon">🛗</span>
-                            <h3>get_elevator_incidents</h3>
-                        </div>
-                        <p>Check elevator and escalator outages at stations. Essential for accessibility planning.</p>
-                    </div>
-
-                    <div class="tool-card">
-                        <div class="tool-header">
-                            <span class="tool-icon">📍</span>
-                            <h3>get_all_stations</h3>
-                        </div>
-                        <p>Fetch complete list of all stations in a city with full metadata, coordinates, and line associations.</p>
+                        <p>
+                            Real-time location data for all active trains including direction, line, and car count. Essential for system monitoring and crowding analysis.
+                        </p>
                     </div>
 
                     <div class="tool-card">
@@ -1624,405 +1570,288 @@
                             <span class="tool-icon">🚌</span>
                             <h3>get_bus_predictions</h3>
                         </div>
-                        <p>Real-time bus arrival predictions for DC Metro bus stops. Includes route, direction, and minutes.</p>
+                        <p>
+                            Bus arrival predictions with route information and stop details. Enables multimodal trip planning and last-mile connectivity (DC Metro only).
+                        </p>
+                    </div>
+
+                    <div class="tool-card">
+                        <div class="tool-header">
+                            <span class="tool-icon">⚠️</span>
+                            <h3>get_alerts</h3>
+                        </div>
+                        <p>
+                            Service disruptions, elevator outages, and system advisories. Critical for proactive route adjustments and accessibility planning.
+                        </p>
                     </div>
 
                     <div class="tool-card">
                         <div class="tool-header">
                             <span class="tool-icon">🗺️</span>
-                            <h3>get_bus_routes</h3>
+                            <h3>get_stations</h3>
                         </div>
-                        <p>List all available bus routes in DC Metro system with route numbers and descriptions.</p>
-                    </div>
-
-                    <div class="tool-card">
-                        <div class="tool-header">
-                            <span class="tool-icon">📌</span>
-                            <h3>get_bus_stops</h3>
-                        </div>
-                        <p>Find bus stops by route or location. Returns stop IDs, names, and coordinates.</p>
-                    </div>
-
-                    <div class="tool-card">
-                        <div class="tool-header">
-                            <span class="tool-icon">🚍</span>
-                            <h3>get_bus_positions</h3>
-                        </div>
-                        <p>Track live positions of all buses on a route. Real-time GPS coordinates and heading.</p>
-                    </div>
-
-                    <div class="tool-card">
-                        <div class="tool-header">
-                            <span class="tool-icon">🚆</span>
-                            <h3>get_train_positions</h3>
-                        </div>
-                        <p>See exact positions of all trains in the system. Track every train car in real-time.</p>
+                        <p>
+                            Complete station metadata including coordinates, lines served, and transfer information. Enables geographic queries and spatial reasoning.
+                        </p>
                     </div>
 
                     <div class="tool-card">
                         <div class="tool-header">
                             <span class="tool-icon">🔄</span>
-                            <h3>get_station_transfers</h3>
+                            <h3>get_lines</h3>
                         </div>
-                        <p>Find all available transfers at a station. Essential for multi-line trip planning.</p>
-                    </div>
-
-                    <div class="tool-card">
-                        <div class="tool-header">
-                            <span class="tool-icon">📋</span>
-                            <h3>get_route_info</h3>
-                        </div>
-                        <p>Detailed information about specific routes including stops, schedules, and service patterns.</p>
+                        <p>
+                            Line information and service patterns. Helps agents understand the transit network structure and routing possibilities.
+                        </p>
                     </div>
                 </div>
             </div>
         </section>
 
-        <!-- Examples Section -->
+        <!-- Collapsible Examples Section -->
         <section id="examples" class="examples">
             <div class="container">
-                <h2 class="section-title">See it in action</h2>
+                <h2 class="section-title">Example queries</h2>
                 <p class="section-subtitle">
-                    Real queries you can ask right now
+                    See how AI agents can answer transit questions naturally using Metro-MCP
                 </p>
 
                 <div class="examples-grid">
                     <div class="example-card">
-                        <div class="example-query">
-                            <span class="query-icon">💬</span>
-                            <p>"When's the next train at Union Station?"</p>
-                        </div>
-                        <div class="example-response">
-                            <div class="response-header">
-                                <span class="response-indicator"></span>
-                                <span class="response-label">Metro-MCP Response</span>
+                        <div class="example-header">
+                            <div class="example-title">
+                                <span class="query-icon">💬</span>
+                                <h3>"When's the next Red Line train to Shady Grove?"</h3>
                             </div>
-                            <p>The next trains at Union Station are:</p>
-                            <ul>
-                                <li><strong>Red Line</strong> to Glenmont - 2 minutes</li>
-                                <li><strong>Red Line</strong> to Shady Grove - 4 minutes</li>
-                                <li><strong>Yellow Line</strong> to Huntington - 6 minutes</li>
-                            </ul>
+                            <span class="expand-icon">▼</span>
+                        </div>
+                        <div class="example-content">
+                            <div class="example-response">
+                                <div class="response-header">
+                                    <div class="response-indicator"></div>
+                                    <span class="response-label">AI Response</span>
+                                </div>
+                                <p>The next Red Line train to Shady Grove arrives in 4 minutes at Metro Center. After that:</p>
+                                <ul>
+                                    <li><strong>8 minutes</strong> — Second train</li>
+                                    <li><strong>14 minutes</strong> — Third train</li>
+                                    <li>Trains running on normal schedule, no reported delays</li>
+                                </ul>
+                            </div>
                         </div>
                     </div>
 
                     <div class="example-card">
-                        <div class="example-query">
-                            <span class="query-icon">💬</span>
-                            <p>"Show me all trains currently on the A line"</p>
-                        </div>
-                        <div class="example-response">
-                            <div class="response-header">
-                                <span class="response-indicator"></span>
-                                <span class="response-label">Metro-MCP Response</span>
+                        <div class="example-header">
+                            <div class="example-title">
+                                <span class="query-icon">💬</span>
+                                <h3>"Are there any service disruptions on my commute?"</h3>
                             </div>
-                            <p>Found 12 active trains on the A line:</p>
-                            <ul>
-                                <li>8 cars heading to Inwood-207th St</li>
-                                <li>4 cars heading to Far Rockaway</li>
-                                <li>All trains operating normally</li>
-                            </ul>
+                            <span class="expand-icon">▼</span>
+                        </div>
+                        <div class="example-content">
+                            <div class="example-response">
+                                <div class="response-header">
+                                    <div class="response-indicator"></div>
+                                    <span class="response-label">AI Response</span>
+                                </div>
+                                <p>Current alerts affecting your route:</p>
+                                <ul>
+                                    <li><strong>Orange Line:</strong> Single tracking between Stadium-Armory and Minnesota Ave, expect 10-15 min delays</li>
+                                    <li><strong>Metro Center:</strong> Elevator to Red Line platform out of service, use escalator</li>
+                                    <li>Consider: Blue Line alternative with 8-min transfer at L'Enfant Plaza</li>
+                                </ul>
+                            </div>
                         </div>
                     </div>
 
                     <div class="example-card">
-                        <div class="example-query">
-                            <span class="query-icon">💬</span>
-                            <p>"Any service disruptions on DC Metro?"</p>
-                        </div>
-                        <div class="example-response">
-                            <div class="response-header">
-                                <span class="response-indicator"></span>
-                                <span class="response-label">Metro-MCP Response</span>
+                        <div class="example-header">
+                            <div class="example-title">
+                                <span class="query-icon">💬</span>
+                                <h3>"Best way from Union Station to Reagan Airport?"</h3>
                             </div>
-                            <p>Current service alerts:</p>
-                            <ul>
-                                <li><strong>Blue Line:</strong> Single-tracking at Arlington Cemetery</li>
-                                <li><strong>Elevator:</strong> Out at Metro Center (north exit)</li>
-                                <li>All other lines operating normally</li>
-                            </ul>
+                            <span class="expand-icon">▼</span>
+                        </div>
+                        <div class="example-content">
+                            <div class="example-response">
+                                <div class="response-header">
+                                    <div class="response-indicator"></div>
+                                    <span class="response-label">AI Response</span>
+                                </div>
+                                <p>Fastest route (38 minutes total):</p>
+                                <ul>
+                                    <li><strong>Red Line</strong> to Metro Center (3 stops, 6 min)</li>
+                                    <li><strong>Transfer</strong> to Orange/Silver Line (2 min walk)</li>
+                                    <li><strong>Silver Line</strong> to Reagan National (6 stops, 28 min)</li>
+                                    <li>Next departure in 5 minutes, arrive by 3:45 PM</li>
+                                </ul>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
         </section>
 
-        <section id="use-cases" class="use-cases">
-            <div class="container">
-                <h2 class="section-title">What you can build</h2>
-                <p class="section-subtitle">
-                    From simple chatbots to complex routing systems
-                </p>
-
-                <div class="use-case-grid">
-                    <div class="use-case">
-                        <div class="use-case-number">01</div>
-                        <div class="use-case-content">
-                            <h3>Conversational Transit Assistant</h3>
-                            <p>
-                                Build AI agents that understand natural language transit queries. "What's the fastest way to Union Station?" 
-                                Your agent fetches live data and provides actual arrival times.
-                            </p>
-                        </div>
-                    </div>
-
-                    <div class="use-case">
-                        <div class="use-case-number">02</div>
-                        <div class="use-case-content">
-                            <h3>Real-time Disruption Monitoring</h3>
-                            <p>
-                                Create automated alerts for service changes. Your AI can monitor specific lines, 
-                                detect delays, and notify users before they even leave home.
-                            </p>
-                        </div>
-                    </div>
-
-                    <div class="use-case">
-                        <div class="use-case-number">03</div>
-                        <div class="use-case-content">
-                            <h3>Multimodal Trip Planning</h3>
-                            <p>
-                                Combine subway and bus data to find optimal routes. AI agents can reason about transfers, 
-                                wait times, and disruptions to suggest the best path.
-                            </p>
-                        </div>
-                    </div>
-
-                    <div class="use-case">
-                        <div class="use-case-number">04</div>
-                        <div class="use-case-content">
-                            <h3>Data Visualization Tools</h3>
-                            <p>
-                                Build interactive maps showing train positions in real-time. Perfect for dashboards, 
-                                transit analytics, or just making cool visualizations.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
+        <!-- CTA Section -->
         <section class="cta-section">
             <div class="container">
                 <div class="cta-box">
-                    <h2>Ready to connect your AI to the subway?</h2>
-                    <p>Metro-MCP is open source, actively maintained, and ready for production use.</p>
+                    <h2>Start building transit-aware AI</h2>
+                    <p>
+                        Deploy in minutes, scale infinitely. Metro-MCP runs on Cloudflare Workers with 
+                        enterprise-grade reliability.
+                    </p>
                     <div class="cta-group">
                         <a href="https://github.com/Aarekaz/metro-mcp" class="btn btn-primary">
-                            Get Started on GitHub →
+                            View Documentation →
                         </a>
-                        <a href="https://github.com/Aarekaz/metro-mcp/blob/main/README.md" class="btn btn-secondary">
-                            Read the Docs
+                        <a href="https://github.com/Aarekaz/metro-mcp#quick-start" class="btn btn-secondary">
+                            Quick Start Guide
                         </a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tech Stack -->
+        <section class="tech-stack">
+            <div class="container">
+                <div class="tech-stack-title">Built with modern technologies</div>
+                <div class="tech-badges">
+                    <div class="tech-badge">
+                        <span>TypeScript</span>
+                    </div>
+                    <div class="tech-badge">
+                        <span>Cloudflare Workers</span>
+                    </div>
+                    <div class="tech-badge">
+                        <span>MCP Protocol</span>
+                    </div>
+                    <div class="tech-badge">
+                        <span>WMATA API</span>
+                    </div>
+                    <div class="tech-badge">
+                        <span>MTA API</span>
                     </div>
                 </div>
             </div>
         </section>
     </main>
 
-    <!-- Tech Stack -->
-    <section class="tech-stack">
-        <div class="container">
-            <h3 class="tech-stack-title">Built with</h3>
-            <div class="tech-badges">
-                <div class="tech-badge">
-                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                        <path d="M0 10L10 0L20 10L10 20L0 10Z" fill="currentColor"/>
-                    </svg>
-                    <span>TypeScript</span>
-                </div>
-                <div class="tech-badge">
-                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                        <circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="2" fill="none"/>
-                        <circle cx="10" cy="10" r="3" fill="currentColor"/>
-                    </svg>
-                    <span>MCP Protocol</span>
-                </div>
-                <div class="tech-badge">
-                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                        <path d="M4 4L10 2L16 4L18 10L16 16L10 18L4 16L2 10L4 4Z" stroke="currentColor" stroke-width="1.5" fill="none"/>
-                    </svg>
-                    <span>Cloudflare Workers</span>
-                </div>
-                <div class="tech-badge">
-                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                        <rect x="3" y="3" width="14" height="14" stroke="currentColor" stroke-width="1.5" fill="none"/>
-                        <path d="M7 10L10 13L13 7" stroke="currentColor" stroke-width="1.5"/>
-                    </svg>
-                    <span>Real-time APIs</span>
-                </div>
-                <div class="tech-badge">
-                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                        <path d="M10 2L12 8H18L13 12L15 18L10 14L5 18L7 12L2 8H8L10 2Z" fill="currentColor"/>
-                    </svg>
-                    <span>Open Source</span>
-                </div>
-            </div>
-        </div>
-    </section>
-
     <footer>
         <div class="container">
-            <div class="footer-grid">
-                <div class="footer-col">
-                    <div class="footer-logo">
-                        <img src="/metro-mcp-slick.svg" alt="Metro-MCP Logo">
-                        metro-mcp
-                    </div>
-                    <p class="footer-desc">Real-time transit data for AI agents through MCP</p>
+            <div class="footer-content">
+                <div class="footer-logo">
+                    <img src="/metro-mcp-slick.svg" alt="Metro-MCP Logo">
+                    metro-mcp
                 </div>
-                <div class="footer-col">
-                    <h4>Product</h4>
-                    <ul>
-                        <li><a href="https://github.com/Aarekaz/metro-mcp">GitHub</a></li>
-                        <li><a href="https://github.com/Aarekaz/metro-mcp#readme">Documentation</a></li>
-                        <li><a href="https://github.com/Aarekaz/metro-mcp/releases">Changelog</a></li>
-                        <li><a href="https://github.com/Aarekaz/metro-mcp/issues">Issues</a></li>
-                    </ul>
-                </div>
-                <div class="footer-col">
-                    <h4>Resources</h4>
-                    <ul>
-                        <li><a href="https://modelcontextprotocol.io">MCP Protocol</a></li>
-                        <li><a href="https://developers.cloudflare.com/workers/">Cloudflare Workers</a></li>
-                        <li><a href="https://developer.wmata.com/">WMATA API</a></li>
-                        <li><a href="https://new.mta.info/developers">MTA API</a></li>
-                    </ul>
-                </div>
-                <div class="footer-col">
-                    <h4>Legal</h4>
-                    <ul>
-                        <li><a href="https://github.com/Aarekaz/metro-mcp/blob/main/LICENSE">MIT License</a></li>
-                        <li><a href="#privacy">Privacy Policy</a></li>
-                    </ul>
-                </div>
+                <ul class="footer-links">
+                    <li><a href="https://github.com/Aarekaz/metro-mcp">GitHub</a></li>
+                    <li><a href="https://github.com/Aarekaz/metro-mcp#documentation">Documentation</a></li>
+                    <li><a href="https://github.com/Aarekaz/metro-mcp/issues">Support</a></li>
+                    <li><a href="https://github.com/Aarekaz/metro-mcp/blob/main/LICENSE">License</a></li>
+                </ul>
             </div>
-            <div class="footer-bottom">
-                <p class="footer-copy">© 2025 Metro-MCP. Open source under MIT License.</p>
-                <p class="footer-credit">Built by <a href="https://anuragd.me" target="_blank" rel="noopener noreferrer" style="color: var(--color-accent); text-decoration: none; transition: all 0.3s var(--ease-out-expo);">Anurag Dhungana</a></p>
+            <div class="footer-copy">
+                © 2026 Metro-MCP • Built by <a href="https://github.com/Aarekaz" style="color: var(--color-accent); text-decoration: none;">Anurag Dhungana</a> • MIT License
             </div>
         </div>
     </footer>
 
     <script>
-        // Theme toggle functionality
+        // Theme Toggle
         const themeToggle = document.querySelector('.theme-toggle');
         const sunIcon = document.querySelector('.sun-icon');
         const moonIcon = document.querySelector('.moon-icon');
-        const htmlElement = document.documentElement;
+        const html = document.documentElement;
 
-        // Check for saved theme preference or default to dark mode
+        // Check for saved theme preference or default to 'dark'
         const currentTheme = localStorage.getItem('theme') || 'dark';
-        htmlElement.setAttribute('data-theme', currentTheme);
+        html.setAttribute('data-theme', currentTheme);
+        
+        if (currentTheme === 'light') {
+            sunIcon.style.display = 'none';
+            moonIcon.style.display = 'block';
+        }
 
-        // Update icon based on current theme
-        function updateThemeIcon(theme) {
-            if (theme === 'light') {
+        themeToggle.addEventListener('click', () => {
+            const theme = html.getAttribute('data-theme');
+            const newTheme = theme === 'dark' ? 'light' : 'dark';
+            
+            html.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            
+            if (newTheme === 'light') {
                 sunIcon.style.display = 'none';
                 moonIcon.style.display = 'block';
             } else {
                 sunIcon.style.display = 'block';
                 moonIcon.style.display = 'none';
             }
-        }
-
-        updateThemeIcon(currentTheme);
-
-        // Toggle theme
-        themeToggle.addEventListener('click', () => {
-            const currentTheme = htmlElement.getAttribute('data-theme');
-            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-
-            htmlElement.setAttribute('data-theme', newTheme);
-            localStorage.setItem('theme', newTheme);
-            updateThemeIcon(newTheme);
-
-            // Force a reflow to clear any hover effects
-            themeToggle.blur();
         });
 
-        // Hamburger menu toggle
+        // Mobile Menu
         const hamburger = document.querySelector('.hamburger');
         const mobileMenu = document.querySelector('.mobile-menu');
         const mobileOverlay = document.querySelector('.mobile-overlay');
         const mobileLinks = document.querySelectorAll('.mobile-menu a');
 
-        function toggleMobileMenu() {
+        hamburger.addEventListener('click', () => {
             hamburger.classList.toggle('active');
             mobileMenu.classList.toggle('active');
             mobileOverlay.classList.toggle('active');
-            document.body.style.overflow = mobileMenu.classList.contains('active') ? 'hidden' : '';
-        }
-
-        hamburger.addEventListener('click', toggleMobileMenu);
-        mobileOverlay.addEventListener('click', toggleMobileMenu);
-
-        mobileLinks.forEach(link => {
-            link.addEventListener('click', toggleMobileMenu);
         });
 
-        // Terminal tabs
+        mobileOverlay.addEventListener('click', () => {
+            hamburger.classList.remove('active');
+            mobileMenu.classList.remove('active');
+            mobileOverlay.classList.remove('active');
+        });
+
+        mobileLinks.forEach(link => {
+            link.addEventListener('click', () => {
+                hamburger.classList.remove('active');
+                mobileMenu.classList.remove('active');
+                mobileOverlay.classList.remove('active');
+            });
+        });
+
+        // Terminal Tabs
         const terminalTabs = document.querySelectorAll('.terminal-tab');
         const terminalPanels = document.querySelectorAll('.terminal-panel');
 
         terminalTabs.forEach(tab => {
             tab.addEventListener('click', () => {
-                const targetPanel = tab.dataset.tab;
+                const targetTab = tab.getAttribute('data-tab');
                 
                 terminalTabs.forEach(t => t.classList.remove('active'));
                 terminalPanels.forEach(p => p.classList.remove('active'));
                 
                 tab.classList.add('active');
-                document.getElementById(targetPanel).classList.add('active');
+                document.getElementById(targetTab).classList.add('active');
             });
         });
 
-        // Copy to clipboard
-        const copyBtn = document.querySelector('.copy-btn');
-        
-        if (copyBtn) {
-            copyBtn.addEventListener('click', async () => {
-                const textToCopy = copyBtn.dataset.copy;
+        // Copy Button
+        document.querySelectorAll('.copy-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const textToCopy = btn.getAttribute('data-copy');
                 
                 try {
                     await navigator.clipboard.writeText(textToCopy);
-                    copyBtn.classList.add('copied');
-                    copyBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                        <path d="M3 8L7 12L13 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                    </svg>`;
+                    btn.classList.add('copied');
                     
                     setTimeout(() => {
-                        copyBtn.classList.remove('copied');
-                        copyBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                            <rect x="5" y="5" width="9" height="9" stroke="currentColor" stroke-width="1.5"/>
-                            <path d="M3 11V3C3 2.44772 3.44772 2 4 2H10" stroke="currentColor" stroke-width="1.5"/>
-                        </svg>`;
+                        btn.classList.remove('copied');
                     }, 2000);
                 } catch (err) {
-                    console.error('Failed to copy:', err);
+                    console.error('Failed to copy text:', err);
                 }
             });
-        }
+        });
 
-        // Stats counter animation
-        function animateCounter(element) {
-            const target = parseInt(element.dataset.target);
-            const duration = 2000;
-            const increment = target / (duration / 16);
-            let current = 0;
-
-            const timer = setInterval(() => {
-                current += increment;
-                if (current >= target) {
-                    element.textContent = target + (element.textContent.includes('+') ? '+' : '');
-                    clearInterval(timer);
-                } else {
-                    element.textContent = Math.floor(current);
-                }
-            }, 16);
-        }
-
-        // Intersection Observer for scroll animations
+        // Intersection Observer for Animations
         const observerOptions = {
             threshold: 0.1,
             rootMargin: '0px 0px -50px 0px'
@@ -2032,51 +1861,56 @@
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
                     entry.target.classList.add('visible');
-                    
-                    // Trigger counter animation for stats
-                    if (entry.target.classList.contains('stat-item')) {
-                        const counter = entry.target.querySelector('[data-target]');
-                        if (counter && !counter.dataset.animated) {
-                            counter.dataset.animated = 'true';
-                            animateCounter(counter);
-                        }
-                    }
                 }
             });
         }, observerOptions);
 
-        // Observe all animatable elements
-        document.querySelectorAll('.feature-card').forEach((card, index) => {
-            card.style.transitionDelay = `${index * 0.1}s`;
-            observer.observe(card);
+        document.querySelectorAll('.stat-item, .feature-card, .tool-card, .example-card').forEach(el => {
+            observer.observe(el);
         });
 
-        document.querySelectorAll('.coverage-item').forEach((item, index) => {
-            item.style.transitionDelay = `${index * 0.2}s`;
-            observer.observe(item);
+        // Animated Counters
+        const animateCounter = (element, target) => {
+            const duration = 2000;
+            const start = 0;
+            const increment = target / (duration / 16);
+            let current = start;
+
+            const timer = setInterval(() => {
+                current += increment;
+                if (current >= target) {
+                    element.textContent = target;
+                    clearInterval(timer);
+                } else {
+                    element.textContent = Math.floor(current);
+                }
+            }, 16);
+        };
+
+        const statObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const numberElement = entry.target.querySelector('.stat-number');
+                    const target = parseInt(numberElement.getAttribute('data-target'));
+                    animateCounter(numberElement, target);
+                    statObserver.unobserve(entry.target);
+                }
+            });
+        }, observerOptions);
+
+        document.querySelectorAll('.stat-item').forEach(item => {
+            statObserver.observe(item);
         });
 
-        document.querySelectorAll('.use-case').forEach((useCase, index) => {
-            useCase.style.transitionDelay = `${index * 0.15}s`;
-            observer.observe(useCase);
+        // Collapsible Examples
+        document.querySelectorAll('.example-header').forEach(header => {
+            header.addEventListener('click', () => {
+                const card = header.closest('.example-card');
+                card.classList.toggle('expanded');
+            });
         });
 
-        document.querySelectorAll('.example-card').forEach((card, index) => {
-            card.style.transitionDelay = `${index * 0.15}s`;
-            observer.observe(card);
-        });
-
-        document.querySelectorAll('.stat-item').forEach((item, index) => {
-            item.style.transitionDelay = `${index * 0.1}s`;
-            observer.observe(item);
-        });
-
-        document.querySelectorAll('.tool-card').forEach((card, index) => {
-            card.style.transitionDelay = `${index * 0.05}s`;
-            observer.observe(card);
-        });
-
-        // Smooth scroll for anchor links
+        // Smooth Scroll
         document.querySelectorAll('a[href^="#"]').forEach(anchor => {
             anchor.addEventListener('click', function (e) {
                 e.preventDefault();
