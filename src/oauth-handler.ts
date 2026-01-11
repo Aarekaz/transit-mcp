@@ -1,26 +1,24 @@
 import { Env, AuthSession } from './types';
 import { AuthManager, AuthError } from './auth';
+import { detectResponseContext, addSecurityHeaders } from './middleware/security-headers';
 
 export class OAuthHandler {
   addSecurityHeaders(response: Response): Response {
-    const headers = new Headers(response.headers);
-    
-    // Security headers
-    headers.set('X-Content-Type-Options', 'nosniff');
-    headers.set('X-Frame-Options', 'DENY');
-    headers.set('X-XSS-Protection', '1; mode=block');
-    headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-    headers.set('Content-Security-Policy', "default-src 'none'; script-src 'none'; style-src 'none';");
-    
-    // CORS headers
-    headers.set('Access-Control-Allow-Origin', '*');
-    headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    headers.set('Access-Control-Allow-Headers', 'Content-Type, Last-Event-ID, Mcp-Session-Id, Authorization');
-    headers.set('Access-Control-Max-Age', '86400');
-    
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
+    // Detect response context from Content-Type
+    // This will automatically use 'stream' CSP for SSE responses
+    const context = detectResponseContext(response);
+
+    // Apply context-appropriate security headers
+    const secureResponse = addSecurityHeaders(response, context, true);
+
+    // Add MCP-specific CORS headers
+    const headers = new Headers(secureResponse.headers);
+    headers.set('Access-Control-Allow-Headers', 'Content-Type, Last-Event-ID, Mcp-Session-Id, Mcp-Protocol-Version, Authorization');
+    headers.set('Access-Control-Expose-Headers', 'Mcp-Session-Id, Mcp-Protocol-Version');
+
+    return new Response(secureResponse.body, {
+      status: secureResponse.status,
+      statusText: secureResponse.statusText,
       headers
     });
   }

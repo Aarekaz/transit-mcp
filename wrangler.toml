@@ -29,6 +29,17 @@ binding = "RATE_LIMIT_KV"
 id = "93885a8c949b4298a7d866e2cef408b3"
 preview_id = "7cbeddccb3a94346b4452f40bc692b39"
 
+# KV Namespace for MCP session management
+# WHY MCP SESSIONS:
+# - Tracks active MCP connections with Mcp-Session-Id header
+# - Stores session state for SSE event resumability
+# - Enables event ID tracking and Last-Event-ID support
+# - Automatic cleanup via TTL (24 hours)
+[[kv_namespaces]]
+binding = "MCP_SESSIONS"
+id = "5d8c66d201ed4fa3ac00f7acdb930632"
+preview_id = "da9efc735f9a49f7ba1827ebf5d33d29"
+
 # Non-secret environment variables
 [vars]
 GITHUB_CLIENT_ID = "Ov23liGFwmOZeECJ6yeN"  # OAuth client ID (public)

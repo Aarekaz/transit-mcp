@@ -50,17 +50,31 @@ export interface Env {
 
   /**
    * Rate limiting storage
-   * 
+   *
    * WHY SEPARATE KV:
    * - High write volume (every request)
    * - Automatic expiration (TTL)
    * - Separate from OAuth data (different access patterns)
-   * 
+   *
    * USAGE:
    * await env.RATE_LIMIT_KV.put(key, count, { expirationTtl: 60 });
    * const count = await env.RATE_LIMIT_KV.get(key);
    */
   RATE_LIMIT_KV?: KVNamespace;     // Optional for backward compatibility
+
+  /**
+   * MCP session storage
+   *
+   * WHY MCP SESSIONS:
+   * - Tracks active MCP connections with Mcp-Session-Id header
+   * - Stores session state for SSE event resumability
+   * - Automatic cleanup via TTL (24 hours)
+   *
+   * USAGE:
+   * await env.MCP_SESSIONS.put(`session:${sessionId}`, JSON.stringify(session), { expirationTtl: 86400 });
+   * const sessionData = await env.MCP_SESSIONS.get(`session:${sessionId}`);
+   */
+  MCP_SESSIONS?: KVNamespace;      // Optional for backward compatibility
 
   // Optional Configuration
   ENVIRONMENT?: string;            // Environment name (development/staging/production)

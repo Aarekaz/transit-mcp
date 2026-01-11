@@ -1,4 +1,4 @@
-import { MCPRequest, MCPResponse, MCPCapabilities } from './mcp-types';
+import { MCPRequest, MCPResponse, MCPCapabilities, MCPSession } from './mcp-types';
 import { MCP_TOOLS } from './mcp-tools';
 import { Env } from './types';
 import { validateToolParameters, handleWMATAError } from './error-handler';
@@ -7,17 +7,76 @@ import { SupportedCity } from './transit/base';
 import { WMATAClient } from './transit/wmata-client';
 
 export class MCPHandler {
-  async processMCPMethod(request: MCPRequest, env: Env): Promise<MCPResponse> {
+  /**
+   * Handle MCP initialize request with session creation
+   *
+   * Creates a new MCP session, stores it in KV, and returns the initialize response
+   * along with the session ID for the router to add as a header.
+   *
+   * @param id - JSON-RPC request ID
+   * @param env - Cloudflare Workers environment
+   * @param userId - Authenticated user ID from JWT
+   * @returns Initialize response and session ID
+   */
+  async handleInitialize(
+    id: string | number,
+    env: Env,
+    userId: string
+  ): Promise<{ response: MCPResponse; sessionId: string }> {
+    // Generate new session ID (UUID v4)
+    const sessionId = crypto.randomUUID();
+
+    // Create session object
+    const session: MCPSession = {
+      sessionId,
+      userId,
+      createdAt: Date.now(),
+      lastEventId: 0,
+      protocolVersion: '2025-06-18'
+    };
+
+    // Store session in KV with 24-hour TTL (86400 seconds)
+    await env.MCP_SESSIONS?.put(
+      `session:${sessionId}`,
+      JSON.stringify(session),
+      { expirationTtl: 86400 }
+    );
+
+    // Return initialize response
+    const response: MCPResponse = {
+      jsonrpc: '2.0',
+      id,
+      result: {
+        protocolVersion: '2025-06-18',
+        capabilities: {
+          tools: {
+            listChanged: true
+          }
+        } as MCPCapabilities,
+        serverInfo: {
+          name: 'Metro MCP',
+          version: '3.0.0'
+        }
+      }
+    };
+
+    return { response, sessionId };
+  }
+
+  async processMCPMethod(request: MCPRequest, env: Env, _sessionId?: string): Promise<MCPResponse> {
     const { method, params = {}, id } = request;
     
     try {
       switch (method) {
         case 'initialize':
+          // NOTE: When initialize is called from router with handleInitialize(),
+          // this case won't be reached. This is kept for backwards compatibility
+          // with direct processMCPMethod calls.
           return {
             jsonrpc: '2.0',
             id,
             result: {
-              protocolVersion: '2025-03-26',
+              protocolVersion: '2025-06-18',
               capabilities: {
                 tools: {
                   listChanged: true
