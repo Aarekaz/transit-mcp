@@ -20,8 +20,9 @@ export class MCPHandler {
    */
   async handleInitialize(
     id: string | number,
-    env: Env,
-    userId: string
+    _env: Env,
+    userId: string,
+    sessionKV: KVNamespace
   ): Promise<{ response: MCPResponse; sessionId: string }> {
     // Generate new session ID (UUID v4)
     const sessionId = crypto.randomUUID();
@@ -36,7 +37,7 @@ export class MCPHandler {
     };
 
     // Store session in KV with 24-hour TTL (86400 seconds)
-    await env.MCP_SESSIONS?.put(
+    await sessionKV.put(
       `session:${sessionId}`,
       JSON.stringify(session),
       { expirationTtl: 86400 }
@@ -55,7 +56,7 @@ export class MCPHandler {
         } as MCPCapabilities,
         serverInfo: {
           name: 'Metro MCP',
-          version: '3.0.0'
+          version: '3.1.3'
         }
       }
     };
@@ -63,7 +64,7 @@ export class MCPHandler {
     return { response, sessionId };
   }
 
-  async processMCPMethod(request: MCPRequest, env: Env, _sessionId?: string): Promise<MCPResponse> {
+  async processMCPMethod(request: MCPRequest, env: Env): Promise<MCPResponse> {
     const { method, params = {}, id } = request;
     
     try {
@@ -84,7 +85,7 @@ export class MCPHandler {
               } as MCPCapabilities,
               serverInfo: {
                 name: 'Metro MCP',
-                version: '3.0.0'
+                version: '3.1.3'
               }
             }
           };
