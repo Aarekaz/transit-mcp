@@ -40,6 +40,6 @@ export interface MCPSession {
   sessionId: string;           // UUID v4
   userId: string;              // From JWT
   createdAt: number;           // Unix timestamp (milliseconds)
-  lastEventId: number;         // Counter for SSE events
+  lastEventId: number;         // Timestamp of last SSE event (ms)
   protocolVersion: string;     // MCP protocol version
 }

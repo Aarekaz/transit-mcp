@@ -3,6 +3,83 @@ import { AuthManager, AuthError } from './auth';
 import { detectResponseContext, addSecurityHeaders } from './middleware/security-headers';
 
 export class OAuthHandler {
+  private base64UrlEncodeBytes(bytes: Uint8Array): string {
+    return btoa(String.fromCharCode(...bytes))
+      .replace(/=/g, '')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_');
+  }
+
+  private base64UrlEncodeString(value: string): string {
+    return this.base64UrlEncodeBytes(new TextEncoder().encode(value));
+  }
+
+  private base64UrlDecodeToString(value: string): string {
+    const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    const bytes = Uint8Array.from(atob(padded), char => char.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  }
+
+  private async signStateData(payload: Record<string, unknown>, env: Env): Promise<string> {
+    if (!env.JWT_SECRET) {
+      throw new AuthError('JWT secret not configured', 500);
+    }
+
+    const body = this.base64UrlEncodeString(JSON.stringify(payload));
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(env.JWT_SECRET),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
+    const signatureB64 = this.base64UrlEncodeBytes(new Uint8Array(signature));
+
+    return `${body}.${signatureB64}`;
+  }
+
+  private async verifyStateData(state: string, env: Env): Promise<Record<string, unknown> | null> {
+    if (!env.JWT_SECRET) {
+      return null;
+    }
+
+    const [body, signature] = state.split('.');
+    if (!body || !signature) {
+      return null;
+    }
+
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(env.JWT_SECRET),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    const expectedSig = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
+    const expectedSigB64 = this.base64UrlEncodeBytes(new Uint8Array(expectedSig));
+
+    if (signature !== expectedSigB64) {
+      return null;
+    }
+
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(this.base64UrlDecodeToString(body));
+    } catch {
+      return null;
+    }
+
+    if (typeof payload.exp === 'number' && payload.exp < Date.now()) {
+      return null;
+    }
+
+    return payload;
+  }
+
   addSecurityHeaders(response: Response): Response {
     // Detect response context from Content-Type
     // This will automatically use 'stream' CSP for SSE responses
@@ -93,16 +170,20 @@ export class OAuthHandler {
       const authManager = new AuthManager(env);
 
       // Generate OAuth state that includes MCP client info and PKCE challenge
-      const oauthState = authManager.generateState();
-
-      // Store PKCE challenge and client info temporarily (5 minutes)
-      await env.OAUTH_CLIENTS.put(`pkce:${oauthState}`, JSON.stringify({
+      const pkcePayload = {
         clientId,
         redirectUri: redirectUri || client.redirect_uris[0],
         codeChallenge,
         codeChallengeMethod,
-        mcpState: state
-      }), { expirationTtl: 300 });
+        mcpState: state,
+        exp: Date.now() + (5 * 60 * 1000)
+      };
+      const oauthState = await this.signStateData(pkcePayload, env);
+
+      // Store PKCE challenge and client info temporarily (5 minutes)
+      await env.OAUTH_CLIENTS.put(`pkce:${oauthState}`, JSON.stringify(pkcePayload), {
+        expirationTtl: 300
+      });
 
       const authUrl = authManager.generateAuthURL(oauthState);
 
@@ -348,7 +429,11 @@ export class OAuthHandler {
 
       // Retrieve PKCE data from KV using state
       const pkceDataStr = await env.OAUTH_CLIENTS.get(`pkce:${state}`);
-      if (!pkceDataStr) {
+      let pkceData = pkceDataStr ? JSON.parse(pkceDataStr) : null;
+      if (!pkceData) {
+        pkceData = await this.verifyStateData(state, env);
+      }
+      if (!pkceData) {
         return this.addSecurityHeaders(new Response(`
           <html>
             <head><title>Metro MCP - OAuth Error</title></head>
@@ -362,8 +447,6 @@ export class OAuthHandler {
           headers: { 'Content-Type': 'text/html' }
         }));
       }
-
-      const pkceData = JSON.parse(pkceDataStr);
 
       // Exchange GitHub code for user info
       const githubAccessToken = await authManager.exchangeCodeForToken(githubCode);

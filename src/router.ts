@@ -13,7 +13,7 @@ export class Router {
   private getServerInfoResponse(): Response {
     return new Response(JSON.stringify({
       name: 'Metro MCP',
-      version: '3.0.0',
+      version: '3.1.3',
       description: 'MCP server for US transit systems (DC Metro, NYC Subway)',
       protocolVersion: '2025-06-18',
       status: 'operational',
@@ -23,7 +23,8 @@ export class Router {
       links: {
         author: 'https://anuragd.me',
         github: 'https://github.com/anuragdhungana/metro-mcp',
-        mcpServer: 'https://metro-mcp.anuragd.me/sse',
+        mcpServer: 'https://metro-mcp.anuragd.me/mcp',  // Recommended endpoint
+        mcpServerLegacy: 'https://metro-mcp.anuragd.me/sse',  // Legacy alias (still works)
         website: 'https://metro-mcp.anuragd.me',
         documentation: 'https://github.com/anuragdhungana/metro-mcp/blob/main/README.md',
       },
@@ -57,13 +58,20 @@ export class Router {
         toolsAvailable: 13
       },
       endpoints: {
-        mcp: '/sse',
+        mcp: ['/mcp', '/sse'],  // Both endpoints supported (Streamable HTTP)
+        mcpRecommended: '/mcp',  // Preferred endpoint name
         oauth: {
           authorize: '/authorize',
           token: '/token',
           register: '/register'
         },
         discovery: '/.well-known/oauth-authorization-server'
+      },
+      transport: {
+        type: 'streamable-http',  // MCP Streamable HTTP (2025-06-18)
+        note: 'NOT the deprecated SSE transport',
+        supportsJSON: true,
+        supportsSSE: true
       },
       authentication: {
         type: 'OAuth 2.1',
@@ -126,6 +134,25 @@ export class Router {
     }
 
     // OAuth 2.0 Authorization Server Metadata (RFC 8414) - for MCP OAuth discovery
+    if (url.pathname.startsWith('/.well-known/oauth-protected-resource')) {
+      const baseUrl = `${url.protocol}//${url.host}`;
+      const suffix = url.pathname.replace('/.well-known/oauth-protected-resource', '');
+      const resourcePath = (!suffix || suffix === '/') ? '/mcp' : suffix;
+
+      return new Response(JSON.stringify({
+        resource: `${baseUrl}${resourcePath}`,
+        authorization_servers: [baseUrl],
+        scopes_supported: ['profile'],
+        bearer_methods_supported: ['header', 'query']
+      }, null, 2), {
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+
+    // OAuth 2.0 Authorization Server Metadata (RFC 8414) - for MCP OAuth discovery
     if (url.pathname === '/.well-known/oauth-authorization-server') {
       const baseUrl = `${url.protocol}//${url.host}`;
       return new Response(JSON.stringify({
@@ -136,7 +163,7 @@ export class Router {
         grant_types_supported: ['authorization_code', 'refresh_token'],
         response_types_supported: ['code'],
         code_challenge_methods_supported: ['S256'],
-        token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
+        token_endpoint_auth_methods_supported: ['none', 'client_secret_post', 'client_secret_basic'],
         scopes_supported: ['profile']
       }, null, 2), {
         headers: {
@@ -173,8 +200,10 @@ export class Router {
       return this.handleMCPRequest(request, env);
     }
 
-    // SSE endpoint for MCP protocol (protected)
-    if (url.pathname === '/sse') {
+    // MCP Streamable HTTP endpoint (protected)
+    // Supports both /mcp (recommended) and /sse (legacy name)
+    // Note: This implements Streamable HTTP (2025-06-18), NOT the deprecated SSE transport
+    if (url.pathname === '/sse' || url.pathname === '/mcp') {
       return this.handleSSE(request, env);
     }
 
@@ -190,7 +219,7 @@ export class Router {
     // Validate Origin header to prevent DNS rebinding attacks
     const origin = request.headers.get('Origin');
     if (origin && !this.isValidOrigin(origin)) {
-      return new Response('Invalid origin', { status: 403 });
+      return this.createMCPErrorResponse(null, -32001, 'Forbidden', 'Invalid origin', 403);
     }
 
     // Check authentication for MCP endpoints
@@ -260,7 +289,7 @@ export class Router {
       }
     }
 
-    return new Response('Method not allowed', { status: 405 });
+    return this.createMCPErrorResponse(null, -32600, 'Method not allowed', null, 405);
   }
 
   /**
@@ -279,11 +308,11 @@ export class Router {
     // Validate Origin header to prevent DNS rebinding attacks
     const origin = request.headers.get('Origin');
     if (origin && !this.isValidOrigin(origin)) {
-      return new Response('Invalid origin', { status: 403 });
+      return this.createMCPErrorResponse(null, -32001, 'Forbidden', 'Invalid origin', 403);
     }
 
-    // Check protocol version (default to 2025-03-26 if omitted)
-    const protocolVersion = request.headers.get('Mcp-Protocol-Version') || '2025-03-26';
+    // Check protocol version (default to 2025-06-18 if omitted)
+    const protocolVersion = request.headers.get('Mcp-Protocol-Version') || '2025-06-18';
     const supportedVersions = ['2025-03-26', '2025-06-18'];
 
     if (!supportedVersions.includes(protocolVersion)) {
@@ -301,6 +330,17 @@ export class Router {
           status: 400,
           headers: { 'Content-Type': 'application/json' }
         }
+      );
+    }
+
+    const sessionKV = env.MCP_SESSIONS;
+    if (!sessionKV) {
+      return this.createMCPErrorResponse(
+        null,
+        -32603,
+        'Server configuration error',
+        'MCP_SESSIONS KV binding missing',
+        500
       );
     }
 
@@ -330,31 +370,43 @@ export class Router {
 
     // Handle GET requests for SSE stream (Server → Client messages)
     if (request.method === 'GET') {
-      return this.handleGETSSE(request, env);
+      return this.handleGETSSE(request, sessionKV);
     }
 
     // Handle POST requests (Client → Server requests)
     if (request.method === 'POST') {
-      return this.handlePOSTSSE(request, env, authResult.session!);
+      return this.handlePOSTSSE(request, env, sessionKV, authResult.session!);
     }
 
-    return new Response('Method not allowed', { status: 405 });
+    return this.createMCPErrorResponse(null, -32600, 'Method not allowed', null, 405);
   }
 
   /**
    * Handle GET /sse - Persistent SSE connection for server-to-client messages
    */
-  private async handleGETSSE(request: Request, env: Env): Promise<Response> {
+  private async handleGETSSE(request: Request, sessionKV: KVNamespace): Promise<Response> {
     // Validate session ID
     const sessionId = request.headers.get('Mcp-Session-Id');
     if (!sessionId) {
-      return new Response('Mcp-Session-Id header required', { status: 400 });
+      return this.createMCPErrorResponse(
+        null,
+        -32001,
+        'Session required',
+        'Mcp-Session-Id header required',
+        400
+      );
     }
 
     // Validate session exists
-    const sessionData = await env.MCP_SESSIONS?.get(`session:${sessionId}`);
+    const sessionData = await sessionKV.get(`session:${sessionId}`);
     if (!sessionData) {
-      return new Response('Session not found', { status: 404 });
+      return this.createMCPErrorResponse(
+        null,
+        -32001,
+        'Session not found',
+        'Session expired or not found',
+        404
+      );
     }
 
     // Support resumability via Last-Event-ID
@@ -365,12 +417,19 @@ export class Router {
 
     // Create persistent SSE stream
     // Note: Cloudflare Workers have connection time limits (~100 seconds)
+    const lastEventId = request.headers.get('Last-Event-ID');
     const stream = new ReadableStream({
       start(controller) {
         // Send initial comment to establish connection
         controller.enqueue(
-          new TextEncoder().encode(`: Connected to Metro MCP (session: ${sessionId})\n\n`)
+          new TextEncoder().encode(': Connected to Metro MCP\n\n')
         );
+
+        if (lastEventId) {
+          controller.enqueue(
+            new TextEncoder().encode('event: warning\ndata: Event replay not supported\n\n')
+          );
+        }
 
         // In a full implementation, this would:
         // 1. Listen for server-initiated notifications from a message queue
@@ -382,7 +441,7 @@ export class Router {
       },
       cancel() {
         // Cleanup when client closes connection
-        console.log(`SSE connection closed for session: ${sessionId}`);
+        console.log('SSE connection closed');
       }
     });
 
@@ -404,6 +463,7 @@ export class Router {
   private async handlePOSTSSE(
     request: Request,
     env: Env,
+    sessionKV: KVNamespace,
     authSession: AuthSession
   ): Promise<Response> {
     // Parse request body
@@ -446,14 +506,22 @@ export class Router {
           body.id,
           -32001,
           'Session required',
-          'Mcp-Session-Id header missing for non-initialize request'
+          'Mcp-Session-Id header missing for non-initialize request',
+          400
         );
       }
 
       // Validate session exists
-      const sessionData = await env.MCP_SESSIONS?.get(`session:${sessionId}`);
+      const sessionData = await sessionKV.get(`session:${sessionId}`);
       if (!sessionData) {
-        return new Response('Session not found', { status: 404 });
+        // Session expired or doesn't exist - client should re-initialize
+        return this.createMCPErrorResponse(
+          body.id,
+          -32001,
+          'Session expired or not found',
+          'Please send an initialize request to create a new session',
+          404
+        );
       }
     }
 
@@ -466,13 +534,14 @@ export class Router {
       const result = await this.mcpHandler.handleInitialize(
         body.id,
         env,
-        authSession.userId
+        authSession.userId,
+        sessionKV
       );
       response = result.response;
       newSessionId = result.sessionId;
     } else {
       // Handle other methods
-      response = await this.mcpHandler.processMCPMethod(body, env, sessionId!);
+      response = await this.mcpHandler.processMCPMethod(body, env);
     }
 
     // Handle notifications - return 202 Accepted with no body
@@ -487,18 +556,16 @@ export class Router {
     if (wantsSSE) {
       // Client wants SSE format
       const session = newSessionId
-        ? await this.getSession(newSessionId, env)
-        : await this.getSession(sessionId!, env);
+        ? await this.getSession(newSessionId, sessionKV)
+        : await this.getSession(sessionId!, sessionKV);
 
-      const eventId = `${session.lastEventId}`;
+      const eventId = `${Date.now()}-${crypto.randomUUID()}`;
 
-      // Increment event ID for next message
-      session.lastEventId++;
-      await env.MCP_SESSIONS?.put(
-        `session:${session.sessionId}`,
-        JSON.stringify(session),
-        { expirationTtl: 86400 }
-      );
+      // Update lastEventId as a best-effort timestamp (no replay yet)
+      session.lastEventId = Date.now();
+      await sessionKV.put(`session:${session.sessionId}`, JSON.stringify(session), {
+        expirationTtl: 86400
+      });
 
       const sseResponse = createSSEResponse(response, eventId);
 
@@ -526,8 +593,8 @@ export class Router {
   /**
    * Retrieve session from KV storage
    */
-  private async getSession(sessionId: string, env: Env): Promise<MCPSession> {
-    const sessionData = await env.MCP_SESSIONS?.get(`session:${sessionId}`);
+  private async getSession(sessionId: string, sessionKV: KVNamespace): Promise<MCPSession> {
+    const sessionData = await sessionKV.get(`session:${sessionId}`);
     if (!sessionData) {
       throw new Error('Session not found');
     }
@@ -537,40 +604,33 @@ export class Router {
   isValidOrigin(origin: string): boolean {
     try {
       const originUrl = new URL(origin);
-      // Allow specific domains for production
-      const allowedHosts = [
-        'localhost',
-        '127.0.0.1',
-        'claude.ai',
-        'api.claude.ai'
-      ];
-      const allowedDomains = [
-        '.anthropic.com',
-        '.claude.ai',
-        '.modelcontextprotocol.io'
-      ];
-      
-      return allowedHosts.includes(originUrl.hostname) || 
-             allowedDomains.some(domain => originUrl.hostname.endsWith(domain));
+      return originUrl.protocol === 'https:' || originUrl.protocol === 'http:';
     } catch {
       return false;
     }
   }
 
-  createMCPErrorResponse(id: string | number | null, code: number, message: string, data?: any): Response {
+  createMCPErrorResponse(
+    id: string | number | null,
+    code: number,
+    message: string,
+    data?: any,
+    status: number = 400
+  ): Response {
     const errorResponse: MCPResponse = {
       jsonrpc: '2.0',
       id: id || 0,
       error: { code, message, data }
     };
     
-    return new Response(JSON.stringify(errorResponse), {
-      status: 400,
+    const response = new Response(JSON.stringify(errorResponse), {
+      status,
       headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-      },
+        'Content-Type': 'application/json'
+      }
     });
+
+    return this.oauthHandler.addSecurityHeaders(response);
   }
 
   async checkRateLimit(_request: Request, _env: Env): Promise<{allowed: boolean, remaining: number}> {
