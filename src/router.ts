@@ -4,6 +4,7 @@ import { MCPHandler } from './mcp-handler';
 import { OAuthHandler } from './oauth-handler';
 import { AuthManager, AuthError } from './auth';
 import { createSSEResponse } from './utils/sse-formatter';
+import { SERVER_VERSION, MCP_PROTOCOL_VERSION } from './config';
 
 export class Router {
   private mcpHandler = new MCPHandler();
@@ -13,12 +14,11 @@ export class Router {
   private getServerInfoResponse(): Response {
     return new Response(JSON.stringify({
       name: 'Metro MCP',
-      version: '3.1.3',
+      version: SERVER_VERSION,
       description: 'MCP server for US transit systems (DC Metro, NYC Subway)',
-      protocolVersion: '2025-06-18',
+      protocolVersion: MCP_PROTOCOL_VERSION,
       status: 'operational',
       timestamp: new Date().toISOString(),
-      lastUpdated: '2025-12-27',
       author: 'Anurag Dhungana',
       links: {
         author: 'https://anuragd.me',

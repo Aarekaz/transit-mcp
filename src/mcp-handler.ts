@@ -5,6 +5,7 @@ import { validateToolParameters, handleWMATAError } from './error-handler';
 import { getTransitClient, isSupportedCity } from './transit/registry';
 import { SupportedCity } from './transit/base';
 import { WMATAClient } from './transit/wmata-client';
+import { SERVER_VERSION, MCP_PROTOCOL_VERSION } from './config';
 
 export class MCPHandler {
   /**
@@ -33,7 +34,7 @@ export class MCPHandler {
       userId,
       createdAt: Date.now(),
       lastEventId: 0,
-      protocolVersion: '2025-06-18'
+      protocolVersion: MCP_PROTOCOL_VERSION
     };
 
     // Store session in KV with 24-hour TTL (86400 seconds)
@@ -48,7 +49,7 @@ export class MCPHandler {
       jsonrpc: '2.0',
       id,
       result: {
-        protocolVersion: '2025-06-18',
+        protocolVersion: MCP_PROTOCOL_VERSION,
         capabilities: {
           tools: {
             listChanged: true
@@ -56,7 +57,7 @@ export class MCPHandler {
         } as MCPCapabilities,
         serverInfo: {
           name: 'Metro MCP',
-          version: '3.1.3'
+          version: SERVER_VERSION
         }
       }
     };
@@ -77,7 +78,7 @@ export class MCPHandler {
             jsonrpc: '2.0',
             id,
             result: {
-              protocolVersion: '2025-06-18',
+              protocolVersion: MCP_PROTOCOL_VERSION,
               capabilities: {
                 tools: {
                   listChanged: true
@@ -85,7 +86,7 @@ export class MCPHandler {
               } as MCPCapabilities,
               serverInfo: {
                 name: 'Metro MCP',
-                version: '3.1.3'
+                version: SERVER_VERSION
               }
             }
           };
