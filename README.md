@@ -2,7 +2,7 @@
 
 > Model Context Protocol Server for US Transit Systems (DC Metro & NYC Subway)
 
-[![MCP](https://img.shields.io/badge/MCP-2025--03--26-blue)](https://modelcontextprotocol.io)
+[![MCP](https://img.shields.io/badge/MCP-2025--06--18-blue)](https://modelcontextprotocol.io)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange)](https://workers.cloudflare.com)
 [![OAuth 2.1](https://img.shields.io/badge/OAuth-2.1%20%2B%20PKCE-green)](https://oauth.net/2.1/)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
@@ -277,9 +277,13 @@ The server exposes the following tools through the MCP protocol:
 
 ### MCP Protocol
 
-- **Version:** 2025-03-26
-- **Transport:** SSE (Server-Sent Events)
-- **Authentication:** OAuth 2.1 with PKCE (S256)
+- **Version:** 2025-06-18
+- **Transport:** Streamable HTTP (single endpoint, JSON or SSE responses based on `Accept` header)
+- **Authentication:** OAuth 2.1 with PKCE (S256) + RFC 8707 resource indicators (audience-bound tokens)
+- **Tool result shape:** Every tool emits `structuredContent` (typed object matching `outputSchema`) alongside the legacy `content[0].text` (serialized JSON) for backwards compatibility.
+- **Tool annotations:** Every tool declares `readOnlyHint`, `idempotentHint`, `openWorldHint` so clients can render safe-action affordances.
+
+**Server-push limitations:** GET-stream push (server-initiated notifications) and `Last-Event-ID` resumability are not yet implemented — Cloudflare Workers' request model would require Durable Objects to hold a persistent connection. Tracked as a future migration.
 
 ### Transit APIs
 

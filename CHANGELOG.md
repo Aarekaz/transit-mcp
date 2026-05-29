@@ -5,6 +5,62 @@ All notable changes to Metro MCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - MCP 2025-06-18 alignment + RFC 8707 audience binding
+
+### Added
+
+#### MCP 2025-06-18 surface
+- Tool `title` (human-readable display name, separate from machine `name`)
+- Tool `annotations`: `readOnlyHint`, `idempotentHint`, `openWorldHint` declared on
+  every tool. All Metro MCP tools are read-only live-data queries.
+- Tool `outputSchema` declared for every tool. Clients can validate responses
+  and integrate typed data without re-parsing.
+- Tool results now emit `structuredContent` alongside `content`. The text
+  payload is the JSON serialization of `structuredContent`, per spec SHOULD.
+- Normalized prediction shape: `minutesAway: integer | null` +
+  `arrivalStatus: 'ARRIVING' | 'BOARDING' | 'DELAYED' | 'SCHEDULED'` instead
+  of the mixed `"3 min" | "ARR"` string. Clients can now sort/compare and
+  render however they want.
+
+#### RFC 8707 — Resource Indicators (audience binding)
+- `/authorize` accepts an optional `resource` parameter (must be an absolute URI)
+- Tokens issued from such flows carry a JWT `aud` claim bound to the canonical
+  MCP resource URI (`{scheme}://{host}/mcp`).
+- Each authenticated request verifies that the token's audience matches the
+  request's canonical resource. Mismatch → 401.
+- `/.well-known/oauth-authorization-server` now advertises
+  `resource_indicators_supported: true`.
+
+#### Honesty in the transport advertisement
+- Server-info now distinguishes:
+  - `supportsSSEResponses: true` — POST → SSE response format works
+  - `supportsServerPush: false` — persistent GET-stream push is not implemented
+  - `supportsResumability: false` — Last-Event-ID replay is not implemented
+
+### Changed
+
+- Single source of truth for `SERVER_VERSION` and `MCP_PROTOCOL_VERSION` in
+  `src/config.ts`. Removed hardcoded `'3.1.3'` and `'2025-06-18'` strings from
+  `router.ts` and `mcp-handler.ts`.
+- `package.json` version bumped 3.1.1 → 3.2.0.
+
+### Deprecation timeline
+
+- **Legacy tokens (no `aud` claim) are grandfathered.** They continue to work
+  with a `console.warn` deprecation log until their natural 90-day TTL expires.
+  Re-authenticate with a `resource` parameter to bind future tokens.
+- Clients SHOULD send `resource={mcp_endpoint}` on `/authorize`. Future major
+  versions may require it.
+
+### Backwards compatibility
+
+- All new tool fields (`title`, `annotations`, `outputSchema`, `structuredContent`)
+  are additive. Clients that only know MCP 2025-03-26 keep reading `content[0].text`
+  unchanged.
+- The text payload is now the serialization of `structuredContent` (per spec).
+  It is no longer pretty-printed with 2-space indentation — clients that parse
+  it as JSON are unaffected; clients that displayed it raw will see compact JSON.
+
 ## [Unreleased] - Security and Testing Improvements
 
 ### Added
