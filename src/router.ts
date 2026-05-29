@@ -164,7 +164,11 @@ export class Router {
         response_types_supported: ['code'],
         code_challenge_methods_supported: ['S256'],
         token_endpoint_auth_methods_supported: ['none', 'client_secret_post', 'client_secret_basic'],
-        scopes_supported: ['profile']
+        scopes_supported: ['profile'],
+        // RFC 8707 — declare that this server understands the `resource` parameter
+        // and issues audience-bound tokens when it is provided.
+        resource_indicators_supported: true,
+        authorization_response_iss_parameter_supported: true
       }, null, 2), {
         headers: {
           'Content-Type': 'application/json',
@@ -650,12 +654,27 @@ export class Router {
     try {
       const authManager = new AuthManager(env);
       const token = authManager.extractTokenFromRequest(request);
-      
+
       if (!token) {
         return { authenticated: false, error: 'No authentication token provided' };
       }
 
       const session = await authManager.verifyJWT(token);
+
+      // RFC 8707 audience enforcement.
+      // - Token with aud → must match the request's canonical MCP resource
+      // - Token without aud → grandfathered (legacy), accept with a console warning.
+      //   Old tokens drain naturally as their 90-day TTL expires.
+      if (!authManager.verifyAudience(session, request.url)) {
+        return { authenticated: false, error: 'Token audience does not match this resource (RFC 8707)' };
+      }
+      if (!session.audience) {
+        console.warn(
+          `[deprecation] Legacy token without 'aud' claim accepted for user ${session.userLogin}. ` +
+          `Re-authenticate with a 'resource' parameter to bind future tokens.`
+        );
+      }
+
       return { authenticated: true, session };
     } catch (error) {
       if (error instanceof AuthError) {
