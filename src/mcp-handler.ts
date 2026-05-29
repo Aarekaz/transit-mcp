@@ -217,26 +217,33 @@ export class MCPHandler {
           }
 
           const predictions = await client.getStationPredictions(stationId);
+          const structured = {
+            city,
+            station: stationId,
+            predictions: predictions.map(p => {
+              const isNumeric = typeof p.minutesAway === 'number';
+              const statusMap: Record<string, 'ARRIVING' | 'BOARDING' | 'DELAYED'> = {
+                ARR: 'ARRIVING',
+                BRD: 'BOARDING',
+                DLY: 'DELAYED'
+              };
+              const sentinel = typeof p.minutesAway === 'string' ? p.minutesAway.toUpperCase() : '';
+              return {
+                line: p.line,
+                destination: p.destination,
+                minutesAway: isNumeric ? (p.minutesAway as number) : null,
+                arrivalStatus: isNumeric
+                  ? ('SCHEDULED' as const)
+                  : (statusMap[sentinel] ?? 'SCHEDULED'),
+                cars: p.cars ?? null,
+                direction: p.direction ?? null,
+                track: p.track ?? null
+              };
+            })
+          };
           result = {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  city,
-                  station: stationId,
-                  predictions: predictions.map(p => ({
-                    line: p.line,
-                    destination: p.destination,
-                    minutes: typeof p.minutesAway === 'string'
-                      ? p.minutesAway
-                      : `${p.minutesAway} min`,
-                    cars: p.cars,
-                    direction: p.direction,
-                    track: p.track
-                  }))
-                }, null, 2)
-              }
-            ]
+            content: [{ type: 'text', text: JSON.stringify(structured) }],
+            structuredContent: structured
           };
           break;
         }
@@ -244,23 +251,20 @@ export class MCPHandler {
         case 'search_stations': {
           const query = args.query as string;
           const stations = await client.searchStation(query);
+          const structured = {
+            city,
+            query,
+            results: stations.map(s => ({
+              id: s.id,
+              name: s.name,
+              lines: s.lines,
+              coordinates: { lat: s.latitude, lon: s.longitude },
+              address: s.address ?? null
+            }))
+          };
           result = {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  city,
-                  query,
-                  results: stations.map(s => ({
-                    id: s.id,
-                    name: s.name,
-                    lines: s.lines,
-                    coordinates: { lat: s.latitude, lon: s.longitude },
-                    address: s.address
-                  }))
-                }, null, 2)
-              }
-            ]
+            content: [{ type: 'text', text: JSON.stringify(structured) }],
+            structuredContent: structured
           };
           break;
         }
@@ -268,178 +272,155 @@ export class MCPHandler {
         case 'get_stations_by_line': {
           const lineCode = args.lineCode as string;
           const lineStations = await client.getStationsByLine(lineCode);
+          const structured = {
+            city,
+            line: lineCode,
+            stations: lineStations.map(s => ({
+              id: s.id,
+              name: s.name,
+              lines: s.lines,
+              coordinates: { lat: s.latitude, lon: s.longitude },
+              address: s.address ?? null
+            }))
+          };
           result = {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  city,
-                  line: lineCode,
-                  stations: lineStations.map(s => ({
-                    id: s.id,
-                    name: s.name,
-                    coordinates: { lat: s.latitude, lon: s.longitude },
-                    address: s.address
-                  }))
-                }, null, 2)
-              }
-            ]
+            content: [{ type: 'text', text: JSON.stringify(structured) }],
+            structuredContent: structured
           };
           break;
         }
 
         case 'get_incidents': {
           const incidents = await client.getIncidents();
+          const structured = {
+            city,
+            incidents: incidents.map(i => ({
+              id: i.incidentId,
+              description: i.description,
+              linesAffected: i.linesAffected,
+              severity: i.severity,
+              type: i.incidentType,
+              lastUpdated: i.timestamp
+            }))
+          };
           result = {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  city,
-                  incidents: incidents.map(i => ({
-                    id: i.incidentId,
-                    description: i.description,
-                    linesAffected: i.linesAffected,
-                    severity: i.severity,
-                    type: i.incidentType,
-                    lastUpdated: i.timestamp
-                  }))
-                }, null, 2)
-              }
-            ]
+            content: [{ type: 'text', text: JSON.stringify(structured) }],
+            structuredContent: structured
           };
           break;
         }
 
         case 'get_elevator_incidents': {
-          // Elevator incidents only supported for DC
           if (city !== 'dc') {
             throw new Error('Elevator incidents are only supported for DC Metro');
           }
           const wmataClient = client as WMATAClient;
           const elevatorIncidents = await wmataClient.getElevatorIncidents();
+          const structured = {
+            city,
+            elevatorIncidents: elevatorIncidents.map(i => ({
+              id: i.incidentId,
+              description: i.description,
+              stationName: i.startLocation || i.endLocation || null,
+              lastUpdated: i.timestamp
+            }))
+          };
           result = {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  city,
-                  elevatorIncidents: elevatorIncidents.map(i => ({
-                    id: i.incidentId,
-                    description: i.description,
-                    stationName: i.startLocation || i.endLocation,
-                    lastUpdated: i.timestamp
-                  }))
-                }, null, 2)
-              }
-            ]
+            content: [{ type: 'text', text: JSON.stringify(structured) }],
+            structuredContent: structured
           };
           break;
         }
 
         case 'get_all_stations': {
           const allStations = await client.getStations();
+          const structured = {
+            city,
+            totalStations: allStations.length,
+            stations: allStations.map(s => ({
+              id: s.id,
+              name: s.name,
+              lines: s.lines,
+              coordinates: { lat: s.latitude, lon: s.longitude },
+              address: s.address ?? null
+            }))
+          };
           result = {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  city,
-                  totalStations: allStations.length,
-                  stations: allStations.map(s => ({
-                    id: s.id,
-                    name: s.name,
-                    lines: s.lines,
-                    coordinates: { lat: s.latitude, lon: s.longitude },
-                    address: s.address
-                  }))
-                }, null, 2)
-              }
-            ]
+            content: [{ type: 'text', text: JSON.stringify(structured) }],
+            structuredContent: structured
           };
           break;
         }
 
         case 'get_bus_predictions': {
-          // Bus predictions only supported for DC
           const wmataClient = client as WMATAClient;
           const stopId = args.stopId as string;
           const busPredictions = await wmataClient.getBusPredictions(stopId);
+          const structured = {
+            city: 'dc' as const,
+            stopId,
+            predictions: busPredictions.map(p => ({
+              route: p.RouteID,
+              direction: p.DirectionText,
+              minutesAway: p.Minutes,
+              vehicleId: p.VehicleID ?? null,
+              tripId: p.TripID ?? null
+            }))
+          };
           result = {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  city: 'dc',
-                  stopId,
-                  predictions: busPredictions.map(p => ({
-                    route: p.RouteID,
-                    direction: p.DirectionText,
-                    minutes: p.Minutes,
-                    vehicleId: p.VehicleID,
-                    tripId: p.TripID
-                  }))
-                }, null, 2)
-              }
-            ]
+            content: [{ type: 'text', text: JSON.stringify(structured) }],
+            structuredContent: structured
           };
           break;
         }
 
         case 'get_train_positions': {
-          // Train positions only supported for DC
           const wmataClient = client as WMATAClient;
           const trainPositions = await wmataClient.getTrainPositions();
+          const structured = {
+            city: 'dc' as const,
+            totalTrains: trainPositions.length,
+            trains: trainPositions.map(t => ({
+              trainId: t.TrainId,
+              trainNumber: t.TrainNumber ?? null,
+              line: t.LineCode ?? null,
+              destination: t.DestinationStationCode ?? null,
+              carCount: t.CarCount ?? null,
+              direction: (t.DirectionNum === 1
+                ? 'Northbound/Eastbound'
+                : 'Southbound/Westbound') as 'Northbound/Eastbound' | 'Southbound/Westbound',
+              circuitId: t.CircuitId ?? null,
+              secondsAtLocation: t.SecondsAtLocation ?? null,
+              serviceType: t.ServiceType ?? null
+            }))
+          };
           result = {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  city: 'dc',
-                  totalTrains: trainPositions.length,
-                  trains: trainPositions.map(t => ({
-                    trainId: t.TrainId,
-                    trainNumber: t.TrainNumber,
-                    line: t.LineCode,
-                    destination: t.DestinationStationCode,
-                    carCount: t.CarCount,
-                    direction: t.DirectionNum === 1 ? 'Northbound/Eastbound' : 'Southbound/Westbound',
-                    circuitId: t.CircuitId,
-                    secondsAtLocation: t.SecondsAtLocation,
-                    serviceType: t.ServiceType
-                  }))
-                }, null, 2)
-              }
-            ]
+            content: [{ type: 'text', text: JSON.stringify(structured) }],
+            structuredContent: structured
           };
           break;
         }
 
         case 'get_bus_routes': {
-          // List all bus routes
           const wmataClient = client as WMATAClient;
           const busRoutes = await wmataClient.getBusRoutes();
+          const structured = {
+            city: 'dc' as const,
+            totalRoutes: busRoutes.length,
+            routes: busRoutes.map(r => ({
+              id: r.RouteID,
+              name: r.Name,
+              description: r.LineDescription ?? null
+            }))
+          };
           result = {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  city: 'dc',
-                  totalRoutes: busRoutes.length,
-                  routes: busRoutes.map(r => ({
-                    id: r.RouteID,
-                    name: r.Name,
-                    description: r.LineDescription
-                  }))
-                }, null, 2)
-              }
-            ]
+            content: [{ type: 'text', text: JSON.stringify(structured) }],
+            structuredContent: structured
           };
           break;
         }
 
         case 'get_bus_stops': {
-          // Get bus stops (all or filtered by location)
           const wmataClient = client as WMATAClient;
           const { latitude, longitude, radius } = args;
           const busStops = await wmataClient.getBusStops(
@@ -447,87 +428,75 @@ export class MCPHandler {
             longitude as number | undefined,
             radius as number | undefined
           );
+          const structured = {
+            city: 'dc' as const,
+            totalStops: busStops.length,
+            searchLocation: latitude !== undefined && longitude !== undefined
+              ? { lat: latitude as number, lon: longitude as number, radiusMeters: (radius as number | undefined) ?? null }
+              : null,
+            stops: busStops.map(s => ({
+              id: s.StopID,
+              name: s.Name,
+              coordinates: { lat: s.Lat, lon: s.Lon },
+              routes: s.Routes
+            }))
+          };
           result = {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  city: 'dc',
-                  totalStops: busStops.length,
-                  searchLocation: latitude !== undefined && longitude !== undefined
-                    ? { lat: latitude, lon: longitude, radiusMeters: radius }
-                    : 'all stops',
-                  stops: busStops.map(s => ({
-                    id: s.StopID,
-                    name: s.Name,
-                    coordinates: { lat: s.Lat, lon: s.Lon },
-                    routes: s.Routes
-                  }))
-                }, null, 2)
-              }
-            ]
+            content: [{ type: 'text', text: JSON.stringify(structured) }],
+            structuredContent: structured
           };
           break;
         }
 
         case 'get_bus_positions': {
-          // Get real-time bus positions
           const wmataClient = client as WMATAClient;
           const { routeId } = args;
           const busPositions = await wmataClient.getBusPositions(routeId as string | undefined);
+          const structured = {
+            city: 'dc' as const,
+            routeFilter: (routeId as string | undefined) ?? null,
+            totalBuses: busPositions.length,
+            buses: busPositions.map(b => ({
+              vehicleId: b.VehicleID,
+              route: b.RouteID,
+              direction: b.DirectionText,
+              coordinates: { lat: b.Lat, lon: b.Lon },
+              headsign: b.TripHeadsign ?? null,
+              deviation: b.Deviation ?? null,
+              lastUpdated: b.DateTime
+            }))
+          };
           result = {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  city: 'dc',
-                  routeFilter: routeId || 'all routes',
-                  totalBuses: busPositions.length,
-                  buses: busPositions.map(b => ({
-                    vehicleId: b.VehicleID,
-                    route: b.RouteID,
-                    direction: b.DirectionText,
-                    coordinates: { lat: b.Lat, lon: b.Lon },
-                    headsign: b.TripHeadsign,
-                    deviation: b.Deviation,
-                    lastUpdated: b.DateTime
-                  }))
-                }, null, 2)
-              }
-            ]
+            content: [{ type: 'text', text: JSON.stringify(structured) }],
+            structuredContent: structured
           };
           break;
         }
 
         case 'get_station_transfers': {
           const stationId = args.stationId as string;
-
-          // Get station transfers (NYC only for now)
           const station = (await client.getStations()).find(s => s.id === stationId);
           if (!station) {
             throw new Error(`Station not found: ${stationId}`);
           }
 
           const transfers = station.transfers || [];
+          const structured = {
+            city,
+            stationId,
+            stationName: station.name,
+            totalTransfers: transfers.length,
+            transfers: transfers.map(t => ({
+              toStationId: t.toStationId,
+              toStationName: t.toStationName,
+              walkTimeSeconds: t.transferTime,
+              walkTimeMinutes: Math.ceil(t.transferTime / 60),
+              transferType: t.transferType
+            }))
+          };
           result = {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  city,
-                  stationId,
-                  stationName: station.name,
-                  totalTransfers: transfers.length,
-                  transfers: transfers.map(t => ({
-                    toStationId: t.toStationId,
-                    toStationName: t.toStationName,
-                    walkTimeSeconds: t.transferTime,
-                    walkTimeMinutes: Math.ceil(t.transferTime / 60),
-                    transferType: t.transferType
-                  }))
-                }, null, 2)
-              }
-            ]
+            content: [{ type: 'text', text: JSON.stringify(structured) }],
+            structuredContent: structured
           };
           break;
         }
@@ -540,19 +509,16 @@ export class MCPHandler {
             throw new Error(`Route not found: ${routeId}. Make sure you're using the correct route ID for ${city}.`);
           }
 
+          const structured = {
+            city,
+            routeId: route.routeId,
+            shortName: route.shortName,
+            longName: route.longName,
+            description: route.description
+          };
           result = {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  city,
-                  routeId: route.routeId,
-                  shortName: route.shortName,
-                  longName: route.longName,
-                  description: route.description
-                }, null, 2)
-              }
-            ]
+            content: [{ type: 'text', text: JSON.stringify(structured) }],
+            structuredContent: structured
           };
           break;
         }
