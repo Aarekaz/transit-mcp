@@ -21,6 +21,18 @@
 import { Env } from './types';
 
 /**
+ * Single source of truth for the server version. Keep in sync with package.json
+ * on every release — referenced by /, /mcp serverInfo, and the AS metadata.
+ */
+export const SERVER_VERSION = '3.2.0';
+
+/**
+ * MCP protocol version this server implements. Used in handshake (`initialize`
+ * result) and for negotiating the `Mcp-Protocol-Version` header.
+ */
+export const MCP_PROTOCOL_VERSION = '2025-06-18';
+
+/**
  * Configuration interface
  * 
  * WHY SEPARATE INTERFACE:
@@ -136,7 +148,7 @@ export function loadConfig(env: Env): Config {
       // Different environments may need different behavior
       // (e.g., more logging in dev, stricter validation in prod)
       environment: detectEnvironment(env),
-      version: '1.0.0',
+      version: SERVER_VERSION,
     },
   };
 }
