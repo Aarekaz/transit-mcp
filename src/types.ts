@@ -114,6 +114,13 @@ export interface AuthSession {
   userId: string;        // GitHub user ID
   userLogin: string;     // GitHub username
   expiresAt: number;     // Unix timestamp (seconds)
+  /**
+   * Resource indicator (RFC 8707) bound to this token.
+   * When present, the request URL's canonical MCP resource MUST match this value.
+   * Absent on legacy tokens issued before audience binding was introduced —
+   * those are accepted with a deprecation warning until they expire.
+   */
+  audience?: string;
 }
 
 /**
