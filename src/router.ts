@@ -69,9 +69,15 @@ export class Router {
       },
       transport: {
         type: 'streamable-http',  // MCP Streamable HTTP (2025-06-18)
-        note: 'NOT the deprecated SSE transport',
+        note: 'MCP Streamable HTTP transport (not the deprecated SSE-only transport)',
         supportsJSON: true,
-        supportsSSE: true
+        // POST responses can be delivered as SSE when Accept: text/event-stream
+        supportsSSEResponses: true,
+        // Persistent GET-stream server push is not implemented yet — would
+        // require Durable Objects to hold the connection. Tracked separately.
+        supportsServerPush: false,
+        // Last-Event-ID replay is not implemented (no event log on KV-backed sessions).
+        supportsResumability: false
       },
       authentication: {
         type: 'OAuth 2.1',
