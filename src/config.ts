@@ -24,7 +24,7 @@ import { Env } from './types';
  * Single source of truth for the server version. Keep in sync with package.json
  * on every release — referenced by /, /mcp serverInfo, and the AS metadata.
  */
-export const SERVER_VERSION = '3.2.0';
+export const SERVER_VERSION = '4.0.0';
 
 /**
  * MCP protocol version this server implements. Used in handshake (`initialize`
