@@ -148,7 +148,7 @@ bunx wrangler kv namespace create "RATE_LIMIT_KV"
 bunx wrangler kv namespace create "RATE_LIMIT_KV" --preview
 ```
 
-Copy the IDs from the output and update `wrangler.toml`.
+Copy the IDs from the output and update `wrangler.jsonc`.
 
 **5. Configure environment:**
 
@@ -156,8 +156,8 @@ Copy the example files and fill in your values:
 
 ```bash
 # Copy wrangler config
-cp wrangler.toml.example wrangler.toml
-# Update the KV namespace IDs in wrangler.toml
+cp wrangler.jsonc.example wrangler.jsonc
+# Update the KV namespace IDs in wrangler.jsonc
 
 # Copy local development secrets
 cp .dev.vars.example .dev.vars

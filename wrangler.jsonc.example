@@ -1,0 +1,65 @@
+/**
+ * Example wrangler.jsonc for self-hosting. Copy to wrangler.jsonc and
+ * fill in the placeholders below.
+ *
+ * Then create the KV namespaces and DO migration:
+ *   bunx wrangler kv namespace create "OAUTH_CLIENTS"
+ *   bunx wrangler kv namespace create "OAUTH_CLIENTS" --preview
+ *   bunx wrangler kv namespace create "RATE_LIMIT_KV"
+ *   bunx wrangler kv namespace create "RATE_LIMIT_KV" --preview
+ *
+ * The DO migration runs automatically on first `wrangler deploy`.
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "metro-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-07",
+  "workers_dev": true,
+  "keep_vars": true,
+  "minify": true,
+  "upload_source_maps": true,
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MCP_SESSION",
+        "class_name": "MetroMcpAgent"
+      }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["MetroMcpAgent"]
+    }
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_CLIENTS",
+      "id": "your-kv-namespace-id-here",
+      "preview_id": "your-preview-kv-namespace-id-here"
+    },
+    {
+      "binding": "RATE_LIMIT_KV",
+      "id": "your-rate-limit-kv-id-here",
+      "preview_id": "your-preview-rate-limit-kv-id-here"
+    }
+  ],
+
+  "vars": {
+    "GITHUB_CLIENT_ID": "your-github-oauth-app-client-id",
+    "OAUTH_REDIRECT_URI": "https://your-subdomain.workers.dev/callback"
+  },
+
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 0.1,
+      "invocation_logs": true
+    }
+  }
+}
