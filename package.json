@@ -6,19 +6,20 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "build": "tsc",
+    "build": "NODE_OPTIONS=--max-old-space-size=8192 tsc",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
-    "lint": "tsc --noEmit",
-    "type-check": "tsc --noEmit"
+    "lint": "NODE_OPTIONS=--max-old-space-size=8192 tsc --noEmit",
+    "type-check": "NODE_OPTIONS=--max-old-space-size=8192 tsc --noEmit"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^0.0.6",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "agents": "0.13.3",
-    "gtfs-realtime-bindings": "^1.1.1"
+    "gtfs-realtime-bindings": "^1.1.1",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.16.10",
