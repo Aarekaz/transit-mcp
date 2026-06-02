@@ -1,5 +1,5 @@
 import { McpAgent } from 'agents/mcp';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { Env } from './types';
 import { SERVER_VERSION } from './config';
@@ -86,6 +86,141 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
     this.registerBusTools();
     this.registerTrainTools();
     this.registerRouteTools();
+    this.registerResources();
+  }
+
+  // ─── Resources ─────────────────────────────────────────────────────
+  /**
+   * Three transit:// resource templates expose catalog data so clients
+   * can read individual stations/routes/incidents by URI rather than
+   * routing every query through a tool call.
+   *
+   * Listing is deliberately empty for stations/routes — the catalog is
+   * large (~600 stations) and tool-driven discovery (search_stations,
+   * get_stations_by_line) is the right entry point. Incidents return a
+   * per-city URI in the list so subscribers can pick one to watch.
+   *
+   * resources/subscribe push notifications will land in a follow-up
+   * once we add a Cron-driven incident poller (Phase 2.5). For now the
+   * incident resource is read-only; clients poll.
+   */
+  private registerResources(): void {
+    this.server.registerResource(
+      'station',
+      new ResourceTemplate('transit://stations/{city}/{id}', { list: undefined }),
+      {
+        title: 'Transit station',
+        description: 'Individual transit station metadata (coordinates, lines, address).',
+        mimeType: 'application/json'
+      },
+      async (uri, { city, id }) => {
+        const cityStr = String(city);
+        const idStr = String(id);
+        const client = getTransitClient(cityStr as SupportedCity, this.env);
+        const station = (await client.getStations()).find(s => s.id === idStr);
+        if (!station) {
+          throw new Error(`Station not found: ${idStr} (city: ${cityStr})`);
+        }
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: 'application/json',
+              text: JSON.stringify({
+                id: station.id,
+                name: station.name,
+                lines: station.lines,
+                coordinates: { lat: station.latitude, lon: station.longitude },
+                address: station.address ?? null,
+                transfers: station.transfers ?? []
+              })
+            }
+          ]
+        };
+      }
+    );
+
+    this.server.registerResource(
+      'route',
+      new ResourceTemplate('transit://routes/{city}/{id}', { list: undefined }),
+      {
+        title: 'Transit route',
+        description: 'Route metadata (service patterns, descriptions). NYC routes have rich data; DC currently does not.',
+        mimeType: 'application/json'
+      },
+      async (uri, { city, id }) => {
+        const cityStr = String(city);
+        const idStr = String(id);
+        const client = getTransitClient(cityStr as SupportedCity, this.env);
+        const route = await client.getRouteInfo(idStr);
+        if (!route) {
+          throw new Error(`Route not found: ${idStr} (city: ${cityStr})`);
+        }
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: 'application/json',
+              text: JSON.stringify(route)
+            }
+          ]
+        };
+      }
+    );
+
+    this.server.registerResource(
+      'incidents',
+      new ResourceTemplate('transit://incidents/{city}', {
+        // List the two supported per-city incident feeds so a client
+        // doesn't need prior knowledge to discover them.
+        list: async () => ({
+          resources: [
+            {
+              uri: 'transit://incidents/dc',
+              name: 'DC Metro incidents',
+              description: 'Current service advisories for WMATA Metro.',
+              mimeType: 'application/json'
+            },
+            {
+              uri: 'transit://incidents/nyc',
+              name: 'NYC Subway incidents',
+              description: 'Current service advisories for MTA Subway.',
+              mimeType: 'application/json'
+            }
+          ]
+        })
+      }),
+      {
+        title: 'Transit incidents',
+        description: 'Live service advisories for a transit system. Read-only in 4.0; subscribe support arrives with the incident poller in Phase 2.5.',
+        mimeType: 'application/json'
+      },
+      async (uri, { city }) => {
+        const cityStr = String(city);
+        const client = getTransitClient(cityStr as SupportedCity, this.env);
+        const incidents = await client.getIncidents();
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: 'application/json',
+              text: JSON.stringify({
+                city: cityStr,
+                fetchedAt: new Date().toISOString(),
+                incidents: incidents.map(i => ({
+                  id: i.incidentId,
+                  description: i.description,
+                  linesAffected: i.linesAffected,
+                  severity: i.severity,
+                  type: i.incidentType,
+                  lastUpdated: i.timestamp
+                }))
+              })
+            }
+          ]
+        };
+      }
+    );
   }
 
   // ─── Station tools ─────────────────────────────────────────────────
