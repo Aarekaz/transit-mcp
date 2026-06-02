@@ -5,6 +5,7 @@ import { OAuthHandler } from './oauth-handler';
 import { AuthManager, AuthError } from './auth';
 import { createSSEResponse } from './utils/sse-formatter';
 import { SERVER_VERSION, MCP_PROTOCOL_VERSION } from './config';
+import { MetroMcpAgent, Props } from './mcp-agent';
 
 export class Router {
   private mcpHandler = new MCPHandler();
@@ -69,15 +70,13 @@ export class Router {
       },
       transport: {
         type: 'streamable-http',  // MCP Streamable HTTP (2025-06-18)
-        note: 'MCP Streamable HTTP transport (not the deprecated SSE-only transport)',
+        note: 'MCP Streamable HTTP transport. Sessions live in a Durable Object via cloudflare/agents McpAgent.',
         supportsJSON: true,
-        // POST responses can be delivered as SSE when Accept: text/event-stream
         supportsSSEResponses: true,
-        // Persistent GET-stream server push is not implemented yet — would
-        // require Durable Objects to hold the connection. Tracked separately.
-        supportsServerPush: false,
-        // Last-Event-ID replay is not implemented (no event log on KV-backed sessions).
-        supportsResumability: false
+        // Persistent server push: hibernatable WebSockets on the DO transport.
+        supportsServerPush: true,
+        // Last-Event-ID replay via DurableObjectEventStore.
+        supportsResumability: true
       },
       authentication: {
         type: 'OAuth 2.1',
@@ -107,7 +106,7 @@ export class Router {
     });
   }
 
-  async handleRequest(request: Request, env: Env): Promise<Response> {
+  async handleRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     
     // Rate limiting check
@@ -210,11 +209,12 @@ export class Router {
       return this.handleMCPRequest(request, env);
     }
 
-    // MCP Streamable HTTP endpoint (protected)
-    // Supports both /mcp (recommended) and /sse (legacy name)
-    // Note: This implements Streamable HTTP (2025-06-18), NOT the deprecated SSE transport
+    // MCP Streamable HTTP endpoint (protected). Both /mcp and /sse delegate
+    // to the same MetroMcpAgent — /sse selects the legacy SSE transport so
+    // existing clients keep working; /mcp uses transport: "auto" (Streamable
+    // HTTP with SSE response fallback based on Accept header).
     if (url.pathname === '/sse' || url.pathname === '/mcp') {
-      return this.handleSSE(request, env);
+      return this.serveAgent(request, env, ctx, url.pathname);
     }
 
     // Legacy compatibility - return server info for GET requests to other paths
@@ -223,6 +223,70 @@ export class Router {
     }
 
     return new Response('Not Found', { status: 404 });
+  }
+
+  /**
+   * Verify the bearer token, propagate the authenticated user as Props on
+   * the execution context, and hand the request off to the McpAgent's
+   * fetch handler.
+   *
+   * The McpAgent SDK reads `ctx.props` to populate the DO's `props` field —
+   * this is the workers-oauth-provider convention. Our JWT layer plays the
+   * role of that OAuth provider.
+   */
+  private async serveAgent(
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext,
+    pathname: string
+  ): Promise<Response> {
+    const origin = request.headers.get('Origin');
+    if (origin && !this.isValidOrigin(origin)) {
+      return this.createMCPErrorResponse(null, -32001, 'Forbidden', 'Invalid origin', 403);
+    }
+
+    const authResult = await this.authenticateRequest(request, env);
+    if (!authResult.authenticated) {
+      const baseUrl = `${new URL(request.url).protocol}//${new URL(request.url).host}`;
+      return this.oauthHandler.addSecurityHeaders(new Response(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: null,
+          error: {
+            code: -32001,
+            message: 'Unauthorized',
+            data: authResult.error || 'Authentication required'
+          }
+        }),
+        {
+          status: 401,
+          headers: {
+            'Content-Type': 'application/json',
+            'WWW-Authenticate': `Bearer realm="Metro MCP", authorization_uri="${baseUrl}/authorize", error="invalid_token"`
+          }
+        }
+      ));
+    }
+
+    const props: Props = {
+      userId: authResult.session!.userId,
+      userLogin: authResult.session!.userLogin,
+      audience: authResult.session!.audience
+    };
+    // ExecutionContext does not formally type `.props` — the workers-oauth-provider
+    // convention attaches it at runtime and McpAgent.serve reads it from there.
+    (ctx as ExecutionContext & { props?: Props }).props = props;
+
+    // /sse uses the legacy SSE transport (one stream per request).
+    // /mcp uses transport: "auto" — Streamable HTTP with SSE response fallback.
+    const transport = pathname === '/sse' ? 'sse' : 'auto';
+    const handler = MetroMcpAgent.serve(pathname, {
+      binding: 'MCP_SESSION',
+      transport
+    });
+
+    const response = await handler.fetch(request, env, ctx);
+    return this.oauthHandler.addSecurityHeaders(response);
   }
 
   async handleMCPRequest(request: Request, env: Env): Promise<Response> {

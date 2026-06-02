@@ -83,6 +83,17 @@ export function createMockKV(): KVNamespace {
  * const env = createMockEnv({ WMATA_API_KEY: 'test-key' });
  * ```
  */
+// Stub DurableObjectNamespace — sufficient for the existing unit tests
+// which never call into the DO. Tests that exercise the DO use
+// @cloudflare/vitest-pool-workers with a real runtime instead.
+function createMockDONamespace(): DurableObjectNamespace {
+  return new Proxy({}, {
+    get() {
+      throw new Error('MCP_SESSION DO binding accessed in a non-DO-aware test. Use vitest-pool-workers.');
+    }
+  }) as unknown as DurableObjectNamespace;
+}
+
 export function createMockEnv(overrides: Partial<Env> = {}): Env {
   return {
     GITHUB_CLIENT_ID: 'test-client-id',
@@ -92,6 +103,7 @@ export function createMockEnv(overrides: Partial<Env> = {}): Env {
     JWT_SECRET: 'test-jwt-secret-at-least-32-characters-long',
     OAUTH_CLIENTS: createMockKV(),
     RATE_LIMIT_KV: createMockKV(),
+    MCP_SESSION: createMockDONamespace(),
     ENVIRONMENT: 'test',
     ...overrides,
   };
