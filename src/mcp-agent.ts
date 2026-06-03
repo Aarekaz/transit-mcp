@@ -272,6 +272,38 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
               throw new Error(`No station found matching: ${stationName}`);
             }
             stationId = matches[0]!.id;
+            // Disambiguate via elicitation when multiple stations match.
+            // Common case: "Times Square" → 127, R16, 725 (multiple platform-
+            // level IDs). Previously we silently picked the first; now we ask.
+            // Clients without elicitation support naturally fall back to that
+            // first-match behavior because elicitInput rejects in that case.
+            if (matches.length > 1) {
+              try {
+                const choice = await this.elicitInput({
+                  message: `Multiple stations match "${stationName}". Please choose:`,
+                  requestedSchema: {
+                    type: 'object',
+                    properties: {
+                      stationId: {
+                        type: 'string',
+                        enum: matches.map(m => m.id),
+                        description: matches.map(m => `${m.id} — ${m.name}`).join('; ')
+                      }
+                    },
+                    required: ['stationId']
+                  }
+                });
+                if (choice.action === 'accept' && choice.content?.stationId) {
+                  stationId = String(choice.content.stationId);
+                } else if (choice.action === 'decline' || choice.action === 'cancel') {
+                  throw new Error(`Station selection ${choice.action}ed by user`);
+                }
+              } catch (e) {
+                // Client doesn't support elicitation, or it failed for some
+                // other reason. Fall back to the first match (legacy behavior).
+                if (e instanceof Error && e.message.startsWith('Station selection ')) throw e;
+              }
+            }
           }
 
           const predictions = await client.getStationPredictions(stationId);
@@ -398,10 +430,26 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
           stations: z.array(stationItemSchema)
         }
       },
-      async ({ city }) =>
+      async ({ city }, extra) =>
         withTransitErrors(async () => {
+          // NYC returns ~496 stations and parsing the bundled list takes
+          // noticeable time. Emit progress when the client opts in via
+          // params._meta.progressToken (MCP 2025-06-18).
+          const progressToken = extra?._meta?.progressToken;
+          const reportProgress = async (progress: number, total: number, message: string) => {
+            if (progressToken !== undefined) {
+              await extra.sendNotification({
+                method: 'notifications/progress',
+                params: { progressToken, progress, total, message }
+              });
+            }
+          };
+
+          await reportProgress(0, 2, `Fetching ${city.toUpperCase()} stations…`);
           const client = getTransitClient(city as SupportedCity, this.env);
           const all = await client.getStations();
+          await reportProgress(1, 2, `Normalizing ${all.length} stations…`);
+
           const structured = {
             city,
             totalStations: all.length,

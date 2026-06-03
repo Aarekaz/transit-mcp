@@ -6,13 +6,13 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "build": "NODE_OPTIONS=--max-old-space-size=8192 tsc",
+    "build": "NODE_OPTIONS=--max-old-space-size=12288 tsc",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
-    "lint": "NODE_OPTIONS=--max-old-space-size=8192 tsc --noEmit",
-    "type-check": "NODE_OPTIONS=--max-old-space-size=8192 tsc --noEmit"
+    "lint": "NODE_OPTIONS=--max-old-space-size=12288 tsc --noEmit",
+    "type-check": "NODE_OPTIONS=--max-old-space-size=12288 tsc --noEmit"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^0.0.6",
