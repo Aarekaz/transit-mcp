@@ -278,12 +278,18 @@ The server exposes the following tools through the MCP protocol:
 ### MCP Protocol
 
 - **Version:** 2025-06-18
-- **Transport:** Streamable HTTP (single endpoint, JSON or SSE responses based on `Accept` header)
-- **Authentication:** OAuth 2.1 with PKCE (S256) + RFC 8707 resource indicators (audience-bound tokens)
+- **Transport:** Streamable HTTP via [`cloudflare/agents`](https://github.com/cloudflare/agents) `McpAgent`. Sessions are Durable Object instances (one per `Mcp-Session-Id`) with hibernatable WebSockets — the DO evicts while idle and wakes on incoming messages, so quiet sessions cost nothing.
+- **Authentication:** OAuth 2.1 with PKCE (S256) + RFC 8707 resource indicators (audience-bound tokens). The Worker shell verifies the JWT and propagates the user's identity to the DO via `ctx.props`.
 - **Tool result shape:** Every tool emits `structuredContent` (typed object matching `outputSchema`) alongside the legacy `content[0].text` (serialized JSON) for backwards compatibility.
 - **Tool annotations:** Every tool declares `readOnlyHint`, `idempotentHint`, `openWorldHint` so clients can render safe-action affordances.
-
-**Server-push limitations:** GET-stream push (server-initiated notifications) and `Last-Event-ID` resumability are not yet implemented — Cloudflare Workers' request model would require Durable Objects to hold a persistent connection. Tracked as a future migration.
+- **Capabilities exposed:**
+  - `tools` — 13 transit query tools (DC + NYC)
+  - `resources` — three `transit://` URI templates (stations, routes, incidents)
+  - `prompts` — three canned templates (service-briefing, commute-planner, accessibility-check)
+  - `elicitation` — server asks the user to disambiguate when a station name matches multiple platforms
+  - Server push: enabled (DurableObject-backed)
+  - Resumability: enabled via `DurableObjectEventStore` (`Last-Event-ID` replay)
+  - Progress notifications: emitted for `get_all_stations` when the client opts in via `params._meta.progressToken`
 
 ### Transit APIs
 
@@ -308,7 +314,10 @@ The server uses GTFS-Realtime feeds from the MTA. Public API endpoints (no API k
 ### Hosting
 
 - **Platform:** Cloudflare Workers
-- **Storage:** Cloudflare KV (for OAuth client registration)
+- **Storage:**
+  - Cloudflare KV `OAUTH_CLIENTS` — registered OAuth clients
+  - Cloudflare KV `RATE_LIMIT_KV` — rate-limit counters
+  - Durable Object `MCP_SESSION` (class `MetroMcpAgent`) — per-session MCP state, transport, and event log
 - **Runtime:** V8 isolates with global edge deployment
 
 ### Source Structure
