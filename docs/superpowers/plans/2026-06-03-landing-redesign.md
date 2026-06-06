@@ -751,39 +751,19 @@ Reload. Test each:
 
 ---
 
-## Task 9: Add live version/status fetch + reduced-motion guard
+## ~~Task 9: Add live version/status fetch~~ (dropped during execution)
 
-**Files:**
-- Modify: `public/index.html` — extend the existing `<script>` block
+During inline execution we realized that Cloudflare Workers' `[assets]`
+binding intercepts `GET /` before the worker runs — so the version
+fetch in the page would receive `index.html` itself, not the server-info
+JSON. Per user decision: drop the version + status from the footer
+entirely. The footer is now just `© 2026 Anurag Dhungana · MIT`. The
+Task 1 markup reflects this; the original 3-extra-span footer was
+never written to disk.
 
-- [ ] **Step 1: Add the version/status fetch at the end of the IIFE**
-
-Insert at the end of the IIFE in `<script>`:
-
-```js
-      // Pull live server version + status from `/`. Best-effort; silent on failure.
-      (async () => {
-        try {
-          const res = await fetch('/', {
-            headers: { 'Accept': 'application/json' },
-            cache: 'no-store'
-          });
-          if (!res.ok) return;
-          const info = await res.json();
-          const versionEl = document.getElementById('server-version');
-          const statusEl  = document.getElementById('server-status');
-          if (info.version) versionEl.textContent = `v${info.version}`;
-          if (info.status)  statusEl.textContent  = `status: ${info.status}`;
-        } catch { /* silent */ }
-      })();
-```
-
-- [ ] **Step 2: Reload and verify footer updates**
-
-Reload. Watch the footer.
-Expected: For a moment the footer shows `v—` and `status: …` (the initial placeholders). Within a fraction of a second they update to the real values returned by `/` (e.g., `v4.0.0` and `status: operational` when running against the Phase 2 branch, or `v3.1.1` / `status: operational` against `main`). When `wrangler dev` returns the server-info JSON from `Router.getServerInfoResponse`, this should populate.
-
-If `/` doesn't return JSON in your local dev environment yet (the server-info handler matches on path + GET only — that's the existing behavior), the placeholders remain — that's acceptable and silent.
+The reduced-motion guard (`@media (prefers-reduced-motion: reduce)`)
+that was originally bundled into this task is included in the modal/toast
+CSS block (Task 6) since that's where the animated elements live.
 
 ---
 
