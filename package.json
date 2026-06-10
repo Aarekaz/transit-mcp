@@ -28,7 +28,7 @@
     "@vitest/ui": "^2.1.8",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8",
-    "wrangler": "^4.28.1"
+    "wrangler": "^4.99.0"
   },
   "keywords": [
     "mcp",

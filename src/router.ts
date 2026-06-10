@@ -195,9 +195,10 @@ export class Router {
       return this.oauthHandler.handleCallback(request, env);
     }
 
-    // Root path: return server info on GET. POST to / is no longer an
-    // MCP alias — clients use /mcp (recommended) or /sse (legacy).
-    if (url.pathname === '/' && request.method === 'GET') {
+    // JSON server-info — moved off `/` in 4.0 so the assets binding can
+    // serve the landing page (public/index.html). Discovery clients that
+    // want the structured payload hit /info; MCP clients use /mcp.
+    if (url.pathname === '/info' && request.method === 'GET') {
       return this.getServerInfoResponse();
     }
 
@@ -209,11 +210,11 @@ export class Router {
       return this.serveAgent(request, env, ctx, url.pathname);
     }
 
-    // Legacy compatibility - return server info for GET requests to other paths
+    // Unmatched GETs → delegate to the static assets binding (landing page).
+    // Unmatched non-GET → 404.
     if (request.method === 'GET') {
-      return this.getServerInfoResponse();
+      return env.ASSETS.fetch(request);
     }
-
     return new Response('Not Found', { status: 404 });
   }
 

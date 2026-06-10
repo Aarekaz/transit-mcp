@@ -104,6 +104,7 @@ export function createMockEnv(overrides: Partial<Env> = {}): Env {
     OAUTH_CLIENTS: createMockKV(),
     RATE_LIMIT_KV: createMockKV(),
     MCP_SESSION: createMockDONamespace(),
+    ASSETS: { fetch: vi.fn() } as unknown as Fetcher,
     ENVIRONMENT: 'test',
     ...overrides,
   };

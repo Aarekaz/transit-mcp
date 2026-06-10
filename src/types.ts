@@ -84,6 +84,13 @@ export interface Env {
    */
   MCP_SESSION: DurableObjectNamespace;
 
+  /**
+   * Static assets fetcher (public/index.html landing page).
+   * The worker delegates unmatched GETs here so the landing page renders
+   * instead of 404ing.
+   */
+  ASSETS: Fetcher;
+
   // Optional Configuration
   ENVIRONMENT?: string;            // Environment name (development/staging/production)
 }

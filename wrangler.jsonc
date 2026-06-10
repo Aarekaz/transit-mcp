@@ -12,6 +12,9 @@
   // 2026-04-07 enables the runtime auto-Close-reply behavior for
   // hibernatable WebSockets used by McpAgent's transport.
   "compatibility_date": "2026-04-07",
+  // nodejs_compat: cloudflare/agents pulls node:async_hooks +
+  // node:diagnostics_channel; a transitive mimetext dep needs node:path/os.
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "keep_vars": true,
   "minify": true,
@@ -58,7 +61,10 @@
   },
 
   "assets": {
-    "directory": "./public"
+    "directory": "./public",
+    // Expose the assets fetcher on env.ASSETS so the worker can delegate
+    // unmatched GETs (e.g. `/`) to the static landing page.
+    "binding": "ASSETS"
   },
 
   "observability": {
