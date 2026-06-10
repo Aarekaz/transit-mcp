@@ -1,100 +1,15 @@
 import { Env, AuthSession } from './types';
 import { OAuthHandler } from './oauth-handler';
 import { AuthManager, AuthError } from './auth';
-import { SERVER_VERSION, MCP_PROTOCOL_VERSION } from './config';
 import { MetroMcpAgent, Props } from './mcp-agent';
+import { getServerInfo } from './server-info';
 
 export class Router {
   private oauthHandler = new OAuthHandler();
 
 
   private getServerInfoResponse(): Response {
-    return new Response(JSON.stringify({
-      name: 'Metro MCP',
-      version: SERVER_VERSION,
-      description: 'MCP server for US transit systems (DC Metro, NYC Subway)',
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      status: 'operational',
-      timestamp: new Date().toISOString(),
-      author: 'Anurag Dhungana',
-      links: {
-        author: 'https://anuragd.me',
-        github: 'https://github.com/anuragdhungana/metro-mcp',
-        mcpServer: 'https://metro-mcp.anuragd.me/mcp',  // Recommended endpoint
-        mcpServerLegacy: 'https://metro-mcp.anuragd.me/sse',  // Legacy alias (still works)
-        website: 'https://metro-mcp.anuragd.me',
-        documentation: 'https://github.com/anuragdhungana/metro-mcp/blob/main/README.md',
-      },
-      capabilities: {
-        tools: {
-          listChanged: true
-        }
-      },
-      cities: [
-        {
-          code: 'dc',
-          name: 'Washington DC Metro',
-          system: 'WMATA',
-          stations: 98,
-          lines: 6,
-          features: ['real-time', 'alerts', 'elevators', 'search', 'line-info', 'bus-routes', 'bus-stops', 'bus-positions', 'train-positions']
-        },
-        {
-          code: 'nyc',
-          name: 'New York City Subway',
-          system: 'MTA',
-          stations: 496,
-          lines: 29,
-          features: ['real-time', 'alerts', 'search', 'line-info', 'transfers', 'route-info']
-        }
-      ],
-      stats: {
-        totalStations: 594,
-        totalLines: 35,
-        citiesSupported: 2,
-        toolsAvailable: 13
-      },
-      endpoints: {
-        mcp: ['/mcp', '/sse'],  // Both endpoints supported (Streamable HTTP)
-        mcpRecommended: '/mcp',  // Preferred endpoint name
-        oauth: {
-          authorize: '/authorize',
-          token: '/token',
-          register: '/register'
-        },
-        discovery: '/.well-known/oauth-authorization-server'
-      },
-      transport: {
-        type: 'streamable-http',  // MCP Streamable HTTP (2025-06-18)
-        note: 'MCP Streamable HTTP transport. Sessions live in a Durable Object via cloudflare/agents McpAgent.',
-        supportsJSON: true,
-        supportsSSEResponses: true,
-        // Persistent server push: hibernatable WebSockets on the DO transport.
-        supportsServerPush: true,
-        // Last-Event-ID replay via DurableObjectEventStore.
-        supportsResumability: true
-      },
-      authentication: {
-        type: 'OAuth 2.1',
-        pkce: true,
-        provider: 'GitHub'
-      },
-      tools: [
-        'get_station_predictions',
-        'search_stations',
-        'get_stations_by_line',
-        'get_incidents',
-        'get_elevator_incidents',
-        'get_all_stations',
-        'get_bus_predictions',
-        'get_bus_routes',
-        'get_bus_stops',
-        'get_bus_positions',
-        'get_train_positions',
-        'get_station_transfers',
-        'get_route_info'
-      ]
-    }, null, 2), {
+    return new Response(JSON.stringify(getServerInfo('https://metro-mcp.anuragd.me'), null, 2), {
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',

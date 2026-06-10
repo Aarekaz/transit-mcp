@@ -15,6 +15,7 @@ import {
   WMATAStation,
   WMATAPrediction,
   WMATAIncident,
+  WMATAElevatorIncident,
   WMATABusPrediction,
   WMATATrainPosition,
   WMATABusRoute,
@@ -162,13 +163,13 @@ export class WMATAClient extends TransitAPIClient {
    * Get elevator and escalator incidents
    * Note: This is DC Metro specific, not part of base Transit interface
    */
-  async getElevatorIncidents(): Promise<TransitIncident[]> {
+  async getElevatorIncidents(): Promise<WMATAElevatorIncident[]> {
     // Elevator incidents change moderately, cache for 5 minutes
-    const data = await this.makeRequest<{ ElevatorIncidents: WMATAIncident[] }>(
+    const data = await this.makeRequest<{ ElevatorIncidents: WMATAElevatorIncident[] }>(
       '/Incidents.svc/json/ElevatorIncidents',
       300
     );
-    return data.ElevatorIncidents.map((incident) => this.normalizeIncident(incident));
+    return data.ElevatorIncidents;
   }
 
   /**

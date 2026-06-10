@@ -311,6 +311,27 @@ export interface WMATAIncident {
 }
 
 /**
+ * WMATA elevator/escalator outage from API
+ *
+ * Endpoint: /Incidents.svc/json/ElevatorIncidents
+ */
+export interface WMATAElevatorIncident {
+  UnitName: string;
+  UnitType: string;
+  UnitStatus: string | null;
+  StationCode: string;
+  StationName: string;
+  LocationDescription: string;
+  SymptomCode: string | null;
+  SymptomDescription: string;
+  TimeOutOfService: string;
+  DisplayOrder: number;
+  DateOutOfServ: string;
+  DateUpdated: string;
+  EstimatedReturnToService: string | null;
+}
+
+/**
  * WMATA bus prediction from API
  *
  * Endpoint: /NextBusService.svc/json/jPredictions

@@ -8,6 +8,7 @@ import { SupportedCity } from './transit/base';
 import { WMATAClient } from './transit/wmata-client';
 import { handleWMATAError } from './error-handler';
 import { formatStationPredictionsForMcp } from './mcp/prediction-format';
+import { formatElevatorIncidentsForMcp } from './mcp/elevator-format';
 
 /**
  * Per-session authentication context, propagated from the JWT verified
@@ -563,7 +564,14 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
             z.object({
               id: z.string(),
               description: z.string(),
-              stationName: z.string().nullable(),
+              unitName: z.string(),
+              unitType: z.string(),
+              stationCode: z.string(),
+              stationName: z.string(),
+              locationDescription: z.string(),
+              symptomDescription: z.string(),
+              outOfServiceAt: z.string(),
+              estimatedReturnToService: z.string().nullable(),
               lastUpdated: z.string()
             })
           )
@@ -575,12 +583,7 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
           const incidents = await client.getElevatorIncidents();
           const structured = {
             city,
-            elevatorIncidents: incidents.map(i => ({
-              id: i.incidentId,
-              description: i.description,
-              stationName: i.startLocation || i.endLocation || null,
-              lastUpdated: i.timestamp
-            }))
+            elevatorIncidents: formatElevatorIncidentsForMcp(incidents)
           };
           return {
             content: [{ type: 'text' as const, text: JSON.stringify(structured) }],
