@@ -1,0 +1,31 @@
+name: type-check
+
+# Type-check the worker source with `tsc --noEmit` on every PR and
+# every push to main. This is the CI gate we removed from the Cloudflare
+# Workers Builds pipeline (see commit 87294df) because tsc OOMs in the
+# 4 GB build runners while resolving Zod's deep generic types. GitHub
+# Actions ubuntu-latest gives 7 GB which is enough as long as we set the
+# heap explicitly — Node otherwise defaults to ~4 GB and thrashes the same
+# way the Workers Builds runner did.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  type-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Type check
+        run: bun run type-check
