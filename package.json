@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "build": "NODE_OPTIONS=--max-old-space-size=12288 tsc",
+    "build": "echo 'no build step needed: wrangler bundles src/index.ts directly via esbuild. Type-check runs via `bun run type-check` locally or in a separate CI job.'",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
