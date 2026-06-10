@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>metro-mcp docs</title>
+  <meta name="description" content="Connect MCP clients to metro-mcp and understand the live DC Metro and NYC Subway data behind each tool.">
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #fafbfc;
+      --ink: #0a2540;
+      --ink-2: #5b6470;
+      --ink-3: #8a93a0;
+      --border: #e6e8eb;
+      --accent: #ff6b1a;
+      --surface: #ffffff;
+      --soft: #f3f7fb;
+      --good: #16a34a;
+      --radius-pill: 999px;
+      --radius-card: 12px;
+      --font-ui: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font-ui);
+      font-size: 15px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+    a { color: inherit; text-decoration: none; }
+    code, pre { font-family: var(--font-mono); }
+    button {
+      font-family: inherit;
+      font-size: inherit;
+      color: inherit;
+      background: none;
+      border: 0;
+      cursor: pointer;
+    }
+    :focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+    }
+
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 24px;
+      height: 64px;
+      flex-shrink: 0;
+    }
+    @media (min-width: 720px) {
+      nav { padding: 18px 48px; }
+    }
+    .brand,
+    .nav-links,
+    .github-link {
+      display: inline-flex;
+      align-items: center;
+    }
+    .brand {
+      gap: 10px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .brand-icon {
+      width: 24px;
+      height: 24px;
+      display: block;
+    }
+    .wordmark { font-size: 15px; }
+    .nav-links {
+      gap: 20px;
+      color: var(--ink-2);
+      font-size: 14px;
+    }
+    .nav-links a:hover { color: var(--ink); }
+    .github-link { gap: 6px; }
+    .github-icon {
+      width: 17px;
+      height: 17px;
+      flex: 0 0 17px;
+    }
+    .cta-pill {
+      background: var(--ink);
+      color: #fff;
+      padding: 7px 14px;
+      border-radius: var(--radius-pill);
+      font-size: 13px;
+      font-weight: 500;
+      transition: filter 120ms ease;
+    }
+    .cta-pill:hover { filter: brightness(1.15); }
+
+    main {
+      width: min(1120px, calc(100% - 48px));
+      margin: 0 auto;
+      padding: 58px 0 88px;
+    }
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 28px;
+      padding-bottom: 44px;
+      border-bottom: 1px solid var(--border);
+    }
+    @media (min-width: 900px) {
+      .hero {
+        grid-template-columns: minmax(0, 1.1fr) 360px;
+        align-items: end;
+      }
+    }
+    h1 {
+      max-width: 760px;
+      font-size: clamp(40px, 6vw, 72px);
+      line-height: 0.98;
+      letter-spacing: -0.03em;
+      font-weight: 650;
+    }
+    .accent { color: var(--accent); }
+    .lede {
+      max-width: 680px;
+      margin-top: 22px;
+      color: var(--ink-2);
+      font-size: clamp(16px, 1.7vw, 19px);
+      line-height: 1.65;
+    }
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 24px;
+    }
+    .primary-action,
+    .secondary-action {
+      display: inline-flex;
+      align-items: center;
+      min-height: 40px;
+      border-radius: var(--radius-pill);
+      padding: 9px 16px;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .primary-action {
+      background: var(--ink);
+      color: #fff;
+    }
+    .secondary-action {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--ink);
+    }
+    .status-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      padding: 18px;
+      box-shadow: 0 18px 40px rgba(10, 37, 64, 0.06);
+    }
+    .status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      color: var(--ink-2);
+    }
+    .status-row:first-child { padding-top: 0; }
+    .status-row:last-child { border-bottom: 0; padding-bottom: 0; }
+    .status-row strong { color: var(--ink); font-weight: 600; }
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--good);
+      box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.15);
+      display: inline-block;
+      margin-right: 7px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 36px;
+      margin-top: 38px;
+    }
+    @media (min-width: 980px) {
+      .layout {
+        grid-template-columns: 220px minmax(0, 1fr);
+        align-items: start;
+      }
+    }
+    .toc {
+      display: none;
+      position: sticky;
+      top: 88px;
+      color: var(--ink-2);
+      font-size: 13px;
+    }
+    @media (min-width: 980px) {
+      .toc { display: block; }
+    }
+    .toc a {
+      display: block;
+      padding: 7px 0;
+      font-weight: 500;
+      transition: color 140ms ease, font-weight 140ms ease;
+    }
+    .toc a:hover { color: var(--ink); }
+    .toc a[aria-current="true"] {
+      color: var(--ink);
+      font-weight: 700;
+    }
+    .docs {
+      display: grid;
+      gap: 46px;
+      min-width: 0;
+    }
+    section {
+      scroll-margin-top: 92px;
+    }
+    h2 {
+      font-size: clamp(25px, 3vw, 34px);
+      line-height: 1.12;
+      letter-spacing: -0.02em;
+      font-weight: 650;
+      margin-bottom: 12px;
+    }
+    h3 {
+      font-size: 17px;
+      line-height: 1.25;
+      font-weight: 650;
+      margin: 0 0 8px;
+    }
+    .section-copy {
+      max-width: 740px;
+      color: var(--ink-2);
+      margin-bottom: 18px;
+    }
+
+    .code-block {
+      position: relative;
+      overflow: hidden;
+      border-radius: var(--radius-card);
+      background: #07111f;
+      border: 1px solid #14243a;
+      box-shadow: 0 16px 36px rgba(10, 37, 64, 0.08);
+    }
+    .code-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 10px 12px;
+      border-bottom: 1px solid #17263a;
+      color: #9fb0c3;
+      font-size: 12px;
+    }
+    pre {
+      overflow-x: auto;
+      padding: 16px;
+      color: #d8e5f4;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+    .copy-button {
+      border: 1px solid #27384e;
+      border-radius: 7px;
+      color: #d8e5f4;
+      padding: 4px 8px;
+      font-size: 12px;
+    }
+    .copy-button:hover { background: #101d2d; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 14px;
+    }
+    .info-card,
+    .tool-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      padding: 16px;
+    }
+    .info-card p,
+    .tool-card p {
+      color: var(--ink-2);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      max-width: 100%;
+      border-radius: var(--radius-pill);
+      background: var(--soft);
+      border: 1px solid var(--border);
+      padding: 4px 9px;
+      color: var(--ink-2);
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .chip code,
+    .info-card code,
+    .tool-card code {
+      overflow-wrap: anywhere;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      background: var(--surface);
+    }
+    table {
+      width: 100%;
+      min-width: 720px;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th,
+    td {
+      padding: 12px 14px;
+      vertical-align: top;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+    }
+    th {
+      background: var(--soft);
+      color: var(--ink);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    tr:last-child td { border-bottom: 0; }
+    td code {
+      color: var(--ink);
+      font-size: 12px;
+      background: var(--soft);
+      border-radius: 6px;
+      padding: 2px 5px;
+      white-space: nowrap;
+    }
+    .note {
+      margin-top: 14px;
+      color: var(--ink-2);
+      font-size: 13px;
+    }
+    .endpoint-list {
+      display: grid;
+      gap: 10px;
+    }
+    .endpoint {
+      display: grid;
+      grid-template-columns: 86px minmax(0, 1fr);
+      gap: 12px;
+      align-items: baseline;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 13px;
+    }
+    .method {
+      width: max-content;
+      border-radius: 6px;
+      background: var(--ink);
+      color: #fff;
+      padding: 2px 7px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+    .endpoint code {
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .endpoint p {
+      grid-column: 2;
+      color: var(--ink-2);
+    }
+    .source-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+    @media (min-width: 760px) {
+      .source-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    .source-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      overflow: hidden;
+    }
+    .source-card header {
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .source-card .table-wrap {
+      border: 0;
+      border-radius: 0;
+    }
+    .source-card table {
+      min-width: 520px;
+    }
+    .toast {
+      position: fixed;
+      bottom: 28px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--ink);
+      color: #fff;
+      border-radius: var(--radius-pill);
+      padding: 8px 14px;
+      font-size: 13px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 150ms ease;
+    }
+    .toast[data-show="true"] { opacity: 1; }
+    footer {
+      border-top: 1px solid var(--border);
+      color: var(--ink-3);
+      padding: 18px 24px;
+      text-align: center;
+      font-size: 12px;
+    }
+
+    @media (max-width: 620px) {
+      nav { padding: 16px 18px; }
+      .nav-links { gap: 12px; }
+      .nav-links a:first-child { display: none; }
+      main {
+        width: min(100% - 32px, 1120px);
+        padding-top: 42px;
+      }
+      .hero { padding-bottom: 34px; }
+      h1 { font-size: 42px; }
+      .endpoint { grid-template-columns: 1fr; }
+      .endpoint p { grid-column: 1; }
+    }
+  </style>
+</head>
+<body>
+  <nav aria-label="Primary">
+    <a class="brand" href="/">
+      <img class="brand-icon" src="/metro-mcp-slick.svg" alt="" width="24" height="24">
+      <span class="wordmark">metro-mcp</span>
+    </a>
+    <div class="nav-links">
+      <a href="/docs/" aria-current="page">Docs</a>
+      <a class="github-link" href="https://github.com/Aarekaz/metro-mcp">
+        <svg class="github-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M12 .5A12 12 0 0 0 8.2 23.9c.6.1.82-.26.82-.58v-2.2c-3.34.73-4.04-1.42-4.04-1.42-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.08 1.84 2.82 1.31 3.5 1 .11-.78.42-1.31.76-1.61-2.66-.3-5.46-1.33-5.46-5.93 0-1.31.47-2.38 1.24-3.22-.13-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.4 11.4 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.25 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.8 5.62-5.48 5.92.43.37.82 1.1.82 2.22v3.29c0 .32.21.7.83.58A12 12 0 0 0 12 .5Z"/>
+        </svg>
+        <span>GitHub</span>
+      </a>
+      <a class="cta-pill" href="#connect">Add to LLM</a>
+    </div>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <div>
+        <h1>Docs for the <span class="accent">live transit MCP</span>.</h1>
+        <p class="lede">metro-mcp exposes DC Metro and NYC Subway data through MCP tools, resources, and prompts. This page covers client setup, public endpoints, what each tool can answer, and which official transit feeds power the results.</p>
+        <div class="hero-actions">
+          <a class="primary-action" href="#connect">Connect your client</a>
+          <a class="secondary-action" href="#tools">Browse tools</a>
+        </div>
+      </div>
+      <aside class="status-panel" aria-label="Server summary">
+        <div class="status-row"><span><span class="live-dot"></span>Production</span><strong>metro-mcp.anuragd.me</strong></div>
+        <div class="status-row"><span>Transport</span><strong>Streamable HTTP</strong></div>
+        <div class="status-row"><span>Stations</span><strong>598 total</strong></div>
+        <div class="status-row"><span>Tools</span><strong>13 MCP tools</strong></div>
+      </aside>
+    </header>
+
+    <div class="layout">
+      <aside class="toc" aria-label="Page sections">
+        <a href="#connect" aria-current="true">Connect</a>
+        <a href="#endpoints">HTTP endpoints</a>
+        <a href="#tools">Tools</a>
+        <a href="#data">Data sources</a>
+        <a href="#resources">Resources and prompts</a>
+        <a href="#architecture">Cloudflare stack</a>
+      </aside>
+
+      <div class="docs">
+        <section id="connect">
+          <h2>Connect an MCP client</h2>
+          <p class="section-copy">The production MCP endpoint is protected with OAuth discovery and supports Streamable HTTP. Most modern clients only need the server URL and will handle registration, authorization, and token exchange.</p>
+          <div class="code-block">
+            <div class="code-title">
+              <span>Claude Desktop / Cursor config</span>
+              <button class="copy-button" type="button">Copy</button>
+            </div>
+            <pre><code>{
+  "mcpServers": {
+    "metro-mcp": {
+      "url": "https://metro-mcp.anuragd.me/mcp"
+    }
+  }
+}</code></pre>
+          </div>
+          <div class="grid" style="margin-top: 14px;">
+            <div class="info-card">
+              <h3>Codex CLI</h3>
+              <p>Register the same Streamable HTTP endpoint from a terminal.</p>
+              <div class="chip-row"><span class="chip"><code>codex mcp add metro-mcp https://metro-mcp.anuragd.me/mcp</code></span></div>
+            </div>
+            <div class="info-card">
+              <h3>Generic client</h3>
+              <p>Use name <code>metro-mcp</code>, URL <code>https://metro-mcp.anuragd.me/mcp</code>, and transport <code>streamable-http</code>.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="endpoints">
+          <h2>HTTP endpoints</h2>
+          <p class="section-copy">The Worker serves both the public website and the MCP/OAuth API. MCP traffic is authenticated; metadata and the static pages are public.</p>
+          <div class="endpoint-list">
+            <div class="endpoint"><span class="method">GET</span><code>/</code><p>Landing page.</p></div>
+            <div class="endpoint"><span class="method">GET</span><code>/docs/</code><p>This documentation page.</p></div>
+            <div class="endpoint"><span class="method">GET</span><code>/info</code><p>JSON server summary: supported cities, station counts, capabilities, and MCP endpoint.</p></div>
+            <div class="endpoint"><span class="method">POST</span><code>/mcp</code><p>Primary MCP Streamable HTTP endpoint. Requires OAuth bearer token after discovery.</p></div>
+            <div class="endpoint"><span class="method">GET/POST</span><code>/sse</code><p>Legacy SSE alias for clients that still expect the old transport shape.</p></div>
+            <div class="endpoint"><span class="method">GET</span><code>/.well-known/oauth-protected-resource</code><p>OAuth protected-resource metadata for MCP clients.</p></div>
+            <div class="endpoint"><span class="method">GET</span><code>/.well-known/oauth-authorization-server</code><p>Authorization server metadata, including authorize, token, and dynamic registration endpoints.</p></div>
+            <div class="endpoint"><span class="method">GET/POST</span><code>/authorize /token /register /callback</code><p>OAuth 2.1 + PKCE flow used by clients to connect securely.</p></div>
+          </div>
+        </section>
+
+        <section id="tools">
+          <h2>MCP tools</h2>
+          <p class="section-copy">Every tool is read-only and returns structured content plus serialized JSON text for older clients. Station-name tools search first, and ambiguous matches can trigger MCP elicitation where the client supports it.</p>
+          <div class="grid">
+            <div class="tool-card">
+              <h3>Station discovery</h3>
+              <p><code>search_stations</code>, <code>get_all_stations</code>, and <code>get_stations_by_line</code> cover both DC and NYC. Results include IDs, names, lines, coordinates, and addresses when available.</p>
+            </div>
+            <div class="tool-card">
+              <h3>Arrivals</h3>
+              <p><code>get_station_predictions</code> resolves a station name or code and returns line, destination, minutes away, arrival time, status, cars, direction, and track where the feed provides it.</p>
+            </div>
+            <div class="tool-card">
+              <h3>Service state</h3>
+              <p><code>get_incidents</code> works for DC and NYC. <code>get_elevator_incidents</code> is DC-only and returns unit, station, symptom, outage time, estimated return, and update time.</p>
+            </div>
+            <div class="tool-card">
+              <h3>DC bus and rail operations</h3>
+              <p><code>get_bus_predictions</code>, <code>get_bus_routes</code>, <code>get_bus_stops</code>, <code>get_bus_positions</code>, and <code>get_train_positions</code> expose WMATA bus arrivals, route catalogs, stop search, live buses, and live train positions.</p>
+            </div>
+            <div class="tool-card">
+              <h3>NYC route detail</h3>
+              <p><code>get_route_info</code> returns route names and service descriptions. <code>get_station_transfers</code> returns platform and nearby transfers with walk times in seconds and minutes.</p>
+            </div>
+            <div class="tool-card">
+              <h3>Progress and safety hints</h3>
+              <p><code>get_all_stations</code> emits progress notifications when clients pass a progress token. Tool annotations mark calls as read-only, idempotent, and open-world because they query live transit systems.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="data">
+          <h2>Data sources and cache windows</h2>
+          <p class="section-copy">metro-mcp normalizes official agency data into MCP-friendly JSON. DC data is fetched from WMATA REST APIs with Cloudflare edge caching; NYC uses MTA GTFS-realtime feeds plus bundled station and route metadata.</p>
+          <div class="source-grid">
+            <article class="source-card">
+              <header>
+                <h3>WMATA: DC Metro and Metrobus</h3>
+                <p class="note">Requires the server-side WMATA API key configured in the Worker environment.</p>
+              </header>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Capability</th><th>Official endpoint</th><th>Cache</th></tr></thead>
+                  <tbody>
+                    <tr><td>Stations</td><td><code>/Rail.svc/json/jStations</code></td><td>1 hour</td></tr>
+                    <tr><td>Rail arrivals</td><td><code>/StationPrediction.svc/json/GetPrediction/{station}</code></td><td>30 sec</td></tr>
+                    <tr><td>Incidents</td><td><code>/Incidents.svc/json/Incidents</code></td><td>5 min</td></tr>
+                    <tr><td>Elevator outages</td><td><code>/Incidents.svc/json/ElevatorIncidents</code></td><td>5 min</td></tr>
+                    <tr><td>Bus arrivals</td><td><code>/NextBusService.svc/json/jPredictions</code></td><td>30 sec</td></tr>
+                    <tr><td>Train positions</td><td><code>/TrainPositions/TrainPositions</code></td><td>10 sec</td></tr>
+                    <tr><td>Bus routes</td><td><code>/Bus.svc/json/jRoutes</code></td><td>1 hour</td></tr>
+                    <tr><td>Bus stops</td><td><code>/Bus.svc/json/jStops</code></td><td>30 min</td></tr>
+                    <tr><td>Bus positions</td><td><code>/Bus.svc/json/jBusPositions</code></td><td>10 sec</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </article>
+
+            <article class="source-card">
+              <header>
+                <h3>MTA: NYC Subway</h3>
+                <p class="note">Public feeds are read without a server-side API key.</p>
+              </header>
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>Capability</th><th>Source</th><th>Cache</th></tr></thead>
+                  <tbody>
+                    <tr><td>Arrivals</td><td><code>nyct/gtfs*</code> GTFS-realtime protobuf feeds for ACE, BDFM, G, JZ, NQRW, L, numbered lines, and SIR</td><td>30 sec in-memory</td></tr>
+                    <tr><td>Alerts</td><td><code>camsys/subway-alerts.json</code></td><td>Live fetch</td></tr>
+                    <tr><td>Stations</td><td>Bundled <code>NYC_STATIONS</code> metadata</td><td>Static asset in code</td></tr>
+                    <tr><td>Routes</td><td>Bundled <code>NYC_ROUTES</code> metadata</td><td>Static asset in code</td></tr>
+                    <tr><td>Transfers</td><td>Bundled station transfer records</td><td>Static asset in code</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section id="resources">
+          <h2>Resources and prompts</h2>
+          <p class="section-copy">Clients that support more of MCP can read resource URIs directly and invoke prompt templates instead of hand-writing tool instructions.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Type</th><th>Name</th><th>What it does</th></tr></thead>
+              <tbody>
+                <tr><td>Resource</td><td><code>transit://stations/{city}/{id}</code></td><td>Station metadata with coordinates, lines, address, and transfer records.</td></tr>
+                <tr><td>Resource</td><td><code>transit://routes/{city}/{id}</code></td><td>Route metadata. NYC has rich route records; DC route detail is not implemented yet.</td></tr>
+                <tr><td>Resource</td><td><code>transit://incidents/{city}</code></td><td>Live per-city incident feed. Read-only in this release.</td></tr>
+                <tr><td>Prompt</td><td><code>service-briefing</code></td><td>Asks the model to summarize current incidents for a whole system or line.</td></tr>
+                <tr><td>Prompt</td><td><code>commute-planner</code></td><td>Asks the model to resolve stations, check arrivals, inspect incidents, and produce a route plan.</td></tr>
+                <tr><td>Prompt</td><td><code>accessibility-check</code></td><td>Uses DC elevator outages to flag accessibility impacts along a route.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="architecture">
+          <h2>Cloudflare stack</h2>
+          <p class="section-copy">metro-mcp runs as a small Cloudflare application: the edge handles web pages, authentication, MCP requests, live sessions, lightweight storage, and logs close to the user.</p>
+          <div class="grid">
+            <div class="info-card">
+              <h3>Workers</h3>
+              <p>The Worker is the front door. It serves the site, publishes OAuth discovery, accepts MCP traffic, and routes requests to the right part of the app.</p>
+            </div>
+            <div class="info-card">
+              <h3>Durable Objects</h3>
+              <p>Durable Objects keep each MCP session stateful. They let clients resume conversations, receive streamed events, and stay connected without keeping every session hot all the time.</p>
+            </div>
+            <div class="info-card">
+              <h3>KV</h3>
+              <p>KV stores small pieces of shared state, like OAuth client registrations and rate-limit counters, so any edge location can handle the next request.</p>
+            </div>
+            <div class="info-card">
+              <h3>Assets and logs</h3>
+              <p>Cloudflare serves the landing page and docs as static assets, while Worker logs and source maps make production behavior easier to debug after deploys.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <footer>&copy; 2026 Anurag Dhungana &middot; MIT</footer>
+  <div class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const toast = document.querySelector('.toast');
+      const showToast = (message) => {
+        toast.textContent = message;
+        toast.dataset.show = 'true';
+        window.clearTimeout(showToast.timer);
+        showToast.timer = window.setTimeout(() => { toast.dataset.show = 'false'; }, 1400);
+      };
+
+      document.querySelectorAll('.copy-button').forEach((button) => {
+        button.addEventListener('click', async () => {
+          const code = button.closest('.code-block')?.querySelector('code')?.textContent || '';
+          try {
+            await navigator.clipboard.writeText(code);
+            showToast('Copied');
+          } catch {
+            showToast('Copy failed');
+          }
+        });
+      });
+
+      const tocLinks = Array.from(document.querySelectorAll('.toc a'));
+      const sections = tocLinks
+        .map((link) => document.querySelector(link.getAttribute('href')))
+        .filter(Boolean);
+
+      const setActiveSection = (id) => {
+        tocLinks.forEach((link) => {
+          const isActive = link.getAttribute('href') === `#${id}`;
+          if (isActive) {
+            link.setAttribute('aria-current', 'true');
+          } else {
+            link.removeAttribute('aria-current');
+          }
+        });
+      };
+
+      if ('IntersectionObserver' in window && sections.length > 0) {
+        const visibleSections = new Map();
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              visibleSections.set(entry.target.id, entry.intersectionRatio);
+            } else {
+              visibleSections.delete(entry.target.id);
+            }
+          });
+
+          if (visibleSections.size === 0) return;
+          const activeId = [...visibleSections.entries()]
+            .sort((a, b) => b[1] - a[1])[0][0];
+          setActiveSection(activeId);
+        }, {
+          rootMargin: '-18% 0px -58% 0px',
+          threshold: [0, 0.2, 0.45, 0.7, 1]
+        });
+
+        sections.forEach((section) => observer.observe(section));
+      }
+
+      tocLinks.forEach((link) => {
+        link.addEventListener('click', () => {
+          const id = link.getAttribute('href')?.slice(1);
+          if (id) setActiveSection(id);
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -99,6 +99,11 @@
       font-weight: 600;
       letter-spacing: -0.01em;
     }
+    nav .brand-icon {
+      width: 24px;
+      height: 24px;
+      display: block;
+    }
     nav .wordmark { font-size: 15px; }
 
     nav .nav-links {
@@ -108,7 +113,17 @@
       font-size: 14px;
       color: var(--ink-2);
     }
+    nav .nav-links a {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
     nav .nav-links a:hover { color: var(--ink); }
+    nav .github-icon {
+      width: 17px;
+      height: 17px;
+      flex: 0 0 17px;
+    }
 
     nav .cta-pill {
       background: var(--ink);
@@ -134,34 +149,36 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 48px 24px 56px;
+      padding: 48px 24px 28px;
       overflow: hidden;
       min-height: calc(100vh - 64px - 40px - 480px);
+      background: var(--bg);
     }
-
-    .halftone {
+    .hero-section::before {
+      content: "";
       position: absolute;
-      top: 38%;
-      left: -120px;
-      right: -120px;
-      height: 220px;
-      background: radial-gradient(var(--ink) 1.5px, transparent 1.5px) 0 0 / 12px 12px;
-      -webkit-mask:
-        radial-gradient(ellipse 70% 32% at 22% 50%, black, transparent 70%),
-        radial-gradient(ellipse 65% 28% at 78% 50%, black, transparent 70%);
-              mask:
-        radial-gradient(ellipse 70% 32% at 22% 50%, black, transparent 70%),
-        radial-gradient(ellipse 65% 28% at 78% 50%, black, transparent 70%);
-      -webkit-mask-composite: source-over;
-              mask-composite: add;
-      opacity: 0.4;
-      pointer-events: none;
+      inset: 0;
+      background-image: url("/train-classic-bg.jpg");
+      background-size: 1180px auto;
+      background-repeat: no-repeat;
+      background-position: calc(50% - 40px) 54%;
+      opacity: 0.78;
+      filter: saturate(0.8) contrast(1.18);
       z-index: 0;
+    }
+    .hero-section::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(180deg, rgba(250, 251, 252, 0.66) 0%, rgba(250, 251, 252, 0.52) 46%, rgba(250, 251, 252, 0.9) 100%),
+        radial-gradient(ellipse 70% 44% at 50% 42%, rgba(250, 251, 252, 0.24), rgba(250, 251, 252, 0.86) 75%);
+      z-index: 1;
     }
 
     .hero {
       position: relative;
-      z-index: 1;
+      z-index: 3;
       max-width: 680px;
       text-align: center;
       display: flex;
@@ -172,12 +189,12 @@
 
     /* ─── Chat demo section ─────────────────────────────────── */
     .chat-section {
-      padding: 0 24px 80px;
+      padding: 0 24px 36px;
       max-width: 760px;
       margin: 0 auto;
       width: 100%;
     }
-    @media (min-width: 720px) { .chat-section { padding: 0 48px 96px; } }
+    @media (min-width: 720px) { .chat-section { padding: 0 48px 42px; } }
 
     .chat-label {
       text-align: center;
@@ -190,6 +207,9 @@
     }
 
     .chat-panel {
+      display: flex;
+      flex-direction: column;
+      height: 398px;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 14px;
@@ -200,6 +220,7 @@
     }
 
     .chat-head {
+      flex: 0 0 auto;
       display: flex;
       align-items: center;
       gap: 10px;
@@ -234,11 +255,13 @@
     .chat-replay:hover { background: var(--surface); color: var(--ink); }
 
     .chat-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden;
       padding: 20px 22px;
       font-size: 14px;
       line-height: 1.55;
       color: var(--ink);
-      min-height: 320px;
     }
 
     .msg {
@@ -357,6 +380,7 @@
 
     /* Carousel dots */
     .chat-dots {
+      flex: 0 0 auto;
       display: flex;
       justify-content: center;
       gap: 8px;
@@ -405,9 +429,102 @@
     }
 
     .hero .footnote {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 6px 8px;
       font-size: 13px;
       color: var(--ink-3);
       margin-top: 4px;
+    }
+    .compat-examples {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .compat-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--ink-2);
+      white-space: nowrap;
+    }
+    .compat-logo {
+      width: 14px;
+      height: 14px;
+      display: block;
+      opacity: 0.82;
+    }
+
+    .infra-strip {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: -2px;
+      max-width: 720px;
+    }
+    .infra-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      padding: 7px 12px;
+      border: 1px solid rgba(10, 37, 64, 0.09);
+      border-radius: var(--radius-pill);
+      background: rgba(255, 255, 255, 0.54);
+      color: #506176;
+      font-size: 12px;
+      font-weight: 500;
+      box-shadow: 0 1px 2px rgba(10, 37, 64, 0.03);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      text-decoration: none;
+      transition: border-color 120ms ease, transform 120ms ease;
+    }
+    a.infra-chip:hover {
+      border-color: rgba(10, 37, 64, 0.2);
+      transform: translateY(-1px);
+    }
+    .infra-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+    }
+    .cloudflare-mark {
+      width: 22px;
+      height: 16px;
+      color: #f38020;
+    }
+    .mta-mark {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #0039a6;
+      color: #fff;
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: -0.05em;
+    }
+    .wmata-logo {
+      width: 19px;
+      height: 19px;
+      border-radius: 4px;
+      display: block;
+    }
+
+    @media (max-width: 560px) {
+      .infra-strip { gap: 6px; }
+      .infra-chip {
+        min-height: 28px;
+        padding: 5px 9px;
+        font-size: 11.5px;
+      }
     }
 
     /* ─── CTA row ───────────────────────────────────────────── */
@@ -458,11 +575,12 @@
     footer {
       flex-shrink: 0;
       padding: 14px 24px;
-      height: 40px;
+      min-height: 40px;
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 8px;
+      gap: 10px;
+      flex-wrap: wrap;
       font-size: 12px;
       color: var(--ink-3);
     }
@@ -470,6 +588,33 @@
       footer { padding: 14px 48px; }
     }
     footer .dot-sep { color: var(--border); }
+    .footer-link,
+    .footer-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--ink-3);
+      transition: color 120ms ease, border-color 120ms ease;
+    }
+    .footer-link:hover,
+    .footer-action:hover {
+      color: var(--ink);
+    }
+    .footer-favicon {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      display: block;
+    }
+    .footer-action {
+      min-height: 26px;
+      padding: 4px 9px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-pill);
+      background: var(--surface);
+      font-weight: 500;
+    }
+    .footer-action:hover { border-color: rgba(10, 37, 64, 0.18); }
 
     /* ─── Modal ─────────────────────────────────────────────── */
     dialog#install-dialog {
@@ -478,6 +623,11 @@
       background: transparent;
       max-width: 560px;
       width: calc(100% - 32px);
+      max-height: calc(100dvh - 32px);
+      margin: auto;
+      position: fixed;
+      inset: 0;
+      overflow: visible;
     }
     dialog#install-dialog::backdrop {
       background: rgba(10, 37, 64, 0.45);
@@ -497,6 +647,8 @@
       border-radius: var(--radius-card);
       box-shadow: var(--shadow-modal);
       padding: 24px;
+      max-height: inherit;
+      overflow: auto;
     }
     .dialog-header {
       display: flex;
@@ -613,23 +765,23 @@
 <body>
   <nav aria-label="Primary">
     <a class="brand" href="/">
-      <svg class="mark" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
-        <rect width="20" height="20" rx="5" fill="#0a2540"/>
-        <path d="M4.5 14V6h1.8l2.7 5 2.7-5h1.8v8h-1.5V8.6L9.7 13h-1.4L5.9 8.6V14z" fill="#fff"/>
-      </svg>
+      <img class="brand-icon" src="/metro-mcp-slick.svg" alt="" width="24" height="24">
       <span class="wordmark">metro-mcp</span>
     </a>
     <div class="nav-links">
-      <a href="https://github.com/Aarekaz/metro-mcp#mcp-client-integration">Docs</a>
-      <a href="https://github.com/Aarekaz/metro-mcp">GitHub</a>
+      <a href="/docs/">Docs</a>
+      <a href="https://github.com/Aarekaz/metro-mcp">
+        <svg class="github-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M12 .5A12 12 0 0 0 8.2 23.9c.6.1.82-.26.82-.58v-2.2c-3.34.73-4.04-1.42-4.04-1.42-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.08 1.84 2.82 1.31 3.5 1 .11-.78.42-1.31.76-1.61-2.66-.3-5.46-1.33-5.46-5.93 0-1.31.47-2.38 1.24-3.22-.13-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.4 11.4 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.25 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.8 5.62-5.48 5.92.43.37.82 1.1.82 2.22v3.29c0 .32.21.7.83.58A12 12 0 0 0 12 .5Z"/>
+        </svg>
+        <span>GitHub</span>
+      </a>
       <button type="button" class="cta-pill" data-open-install>Add to LLM</button>
     </div>
   </nav>
 
   <main>
     <section class="hero-section">
-      <div class="halftone" aria-hidden="true"></div>
-
       <div class="hero">
         <h1>Plug your LLM into the <span class="accent">subway</span>.</h1>
         <p class="subtitle">DC Metro and NYC Subway via the Model Context Protocol. Connect any MCP client to live arrivals, incidents, and 598 stations.</p>
@@ -638,9 +790,34 @@
             <span class="url-text">metro-mcp.anuragd.me/mcp</span>
             <span class="url-status" aria-hidden="true">Copy</span>
           </button>
-          <button type="button" class="cta-button" data-open-install>Add to LLM</button>
+          <button type="button" class="cta-button" data-open-install>Connect</button>
         </div>
-        <p class="footnote">Works with Claude · Cursor · Codex · Gemini</p>
+        <p class="footnote">
+          <span>Works with any MCP-compatible LLM/client</span>
+          <span class="compat-examples" aria-label="Example clients">
+            <span class="compat-item"><img class="compat-logo" src="/client-claude.svg" alt="" width="14" height="14">Claude</span>
+            <span class="compat-item"><img class="compat-logo" src="/client-cursor.svg" alt="" width="14" height="14">Cursor</span>
+            <span class="compat-item"><img class="compat-logo" src="/client-openai.svg" alt="" width="14" height="14">Codex</span>
+            <span class="compat-item"><img class="compat-logo" src="/client-gemini.svg" alt="" width="14" height="14">Gemini</span>
+          </span>
+        </p>
+        <div class="infra-strip" aria-label="Built on Cloudflare and official transit feeds">
+          <a class="infra-chip" href="https://developers.cloudflare.com/workers/" target="_blank" rel="noreferrer" aria-label="Open Cloudflare Workers documentation">
+            <svg class="infra-mark cloudflare-mark" viewBox="0 0 64 40" aria-hidden="true">
+              <path fill="currentColor" d="M45.8 18.2c-.8-5.5-5.5-9.7-11.2-9.7-5.1 0-9.4 3.4-10.8 8.1a8.8 8.8 0 0 0-3.3-.6c-5.2 0-9.5 4-9.9 9.1H8.2C3.7 25.1 0 28.5 0 32.7 0 36.8 3.7 40 8.2 40h38.9c7.2 0 13-5.4 13-12.1 0-6.2-5-11.3-11.5-12a12 12 0 0 0-2.8 2.3Z"/>
+              <path fill="#faae40" d="M48.8 15.9c6.5.7 11.5 5.8 11.5 12 0 6.7-5.8 12.1-13 12.1H22.8l25.6-24.1h.4Z" opacity=".82"/>
+            </svg>
+            Cloudflare Workers
+          </a>
+          <a class="infra-chip" href="https://developer.wmata.com/apis" target="_blank" rel="noreferrer" aria-label="Open WMATA API documentation">
+            <img class="infra-mark wmata-logo" src="/wmata-metro-logo.svg" alt="" width="19" height="19">
+            WMATA API
+          </a>
+          <a class="infra-chip" href="https://www.mta.info/developers" target="_blank" rel="noreferrer" aria-label="Open MTA developer resources">
+            <span class="infra-mark mta-mark" aria-hidden="true">MTA</span>
+            MTA feeds
+          </a>
+        </div>
       </div>
     </section>
 
@@ -668,9 +845,16 @@
   </main>
 
   <footer>
-    <span>© 2026 Anurag Dhungana</span>
+    <a class="footer-link" href="https://www.anuragd.me" target="_blank" rel="noreferrer">
+      <span>© 2026</span>
+      <img class="footer-favicon" src="https://www.anuragd.me/favicon.ico" alt="" width="14" height="14">
+      <span>Anurag Dhungana</span>
+    </a>
     <span class="dot-sep">·</span>
     <span>MIT</span>
+    <span class="dot-sep">·</span>
+    <a class="footer-action" href="https://github.com/Aarekaz/metro-mcp/issues/new?labels=enhancement&amp;title=Feature%20request%3A%20" target="_blank" rel="noreferrer">Suggest a feature</a>
+    <a class="footer-action" href="https://github.com/Aarekaz/metro-mcp/issues/new?labels=bug&amp;title=Bug%20report%3A%20" target="_blank" rel="noreferrer">Report issue</a>
   </footer>
 
   <dialog id="install-dialog" aria-labelledby="install-title">
@@ -845,7 +1029,7 @@
           tool: {
             name: 'get_station_predictions',
             args: '{ <span class="json-key">"city"</span>: <span class="json-str">"nyc"</span>, <span class="json-key">"stationName"</span>: <span class="json-str">"Union Square"</span> }',
-            ms: 280
+            ms: 610
           },
           response:
             'Yes &mdash; the next ' +
@@ -861,7 +1045,7 @@
           tool: {
             name: 'get_incidents',
             args: '{ <span class="json-key">"city"</span>: <span class="json-str">"dc"</span> }',
-            ms: 180
+            ms: 210
           },
           response:
             'Yes &mdash; there\'s an active delay at <strong>L\'Enfant Plaza</strong> affecting ' +
@@ -875,7 +1059,7 @@
           tool: {
             name: 'get_incidents',
             args: '{ <span class="json-key">"city"</span>: <span class="json-str">"nyc"</span> }',
-            ms: 200
+            ms: 210
           },
           response:
             'Yes &mdash; the <span class="line-badge" style="background:#A7A9AC;color:#0a2540">L</span> is running every 8 min between 8th Ave and Bedford Ave ' +
@@ -887,7 +1071,7 @@
           tool: {
             name: 'get_elevator_incidents',
             args: '{ <span class="json-key">"city"</span>: <span class="json-str">"dc"</span> }',
-            ms: 150
+            ms: 330
           },
           response:
             'All 4 elevators at <strong>Union Station</strong> are operational. No reported outages.'
@@ -898,7 +1082,7 @@
           tool: {
             name: 'get_station_predictions',
             args: '{ <span class="json-key">"city"</span>: <span class="json-str">"nyc"</span>, <span class="json-key">"stationName"</span>: <span class="json-str">"Times Square"</span> }',
-            ms: 240
+            ms: 190
           },
           response:
             'The next <span class="line-badge" style="background:#EE352E">1</span> trains at <strong>Times Square &mdash; 42 St</strong>:' +
@@ -914,23 +1098,22 @@
           tool: {
             name: 'get_bus_positions',
             args: '{ <span class="json-key">"routeId"</span>: <span class="json-str">"30N"</span> }',
-            ms: 320
+            ms: 310
           },
           response:
-            'Three <span class="line-badge" style="background:#0a2540">30N</span> buses are in service:' +
+            'Live <span class="line-badge" style="background:#0a2540">30N</span> vehicle feed checked:' +
             '<ul>' +
-              '<li>One at <strong>16th &amp; K</strong> &mdash; northbound, 0.4 mi away</li>' +
-              '<li>One near <strong>Lincoln Memorial</strong></li>' +
-              '<li>One near <strong>Pentagon</strong></li>' +
+              '<li>Active buses appear when WMATA reports vehicle positions</li>' +
+              '<li>Filter by route ID, then map vehicle IDs and coordinates</li>' +
             '</ul>' +
-            'Closest northbound arrives in ~6 min.'
+            'Use <strong>get_bus_predictions</strong> for stop-specific ETAs.'
         }
       ];
 
       const TIMING = {
         type: 26,         // ms per char (user typing)
         afterType: 350,
-        toolMin: 600,
+        toolMin: 180,
         afterTool: 380,
         afterResponse: 4200
       };
