@@ -23,3 +23,7 @@ test-mcp.sh
 # IDE
 .claude
 .DS_Store
+.claude/settings.local.json
+
+# Visual companion brainstorm sessions (local only)
+.superpowers/

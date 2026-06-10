@@ -2,7 +2,7 @@
 
 > Model Context Protocol Server for US Transit Systems (DC Metro & NYC Subway)
 
-[![MCP](https://img.shields.io/badge/MCP-2025--03--26-blue)](https://modelcontextprotocol.io)
+[![MCP](https://img.shields.io/badge/MCP-2025--06--18-blue)](https://modelcontextprotocol.io)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange)](https://workers.cloudflare.com)
 [![OAuth 2.1](https://img.shields.io/badge/OAuth-2.1%20%2B%20PKCE-green)](https://oauth.net/2.1/)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
@@ -148,7 +148,7 @@ bunx wrangler kv namespace create "RATE_LIMIT_KV"
 bunx wrangler kv namespace create "RATE_LIMIT_KV" --preview
 ```
 
-Copy the IDs from the output and update `wrangler.toml`.
+Copy the IDs from the output and update `wrangler.jsonc`.
 
 **5. Configure environment:**
 
@@ -156,8 +156,8 @@ Copy the example files and fill in your values:
 
 ```bash
 # Copy wrangler config
-cp wrangler.toml.example wrangler.toml
-# Update the KV namespace IDs in wrangler.toml
+cp wrangler.jsonc.example wrangler.jsonc
+# Update the KV namespace IDs in wrangler.jsonc
 
 # Copy local development secrets
 cp .dev.vars.example .dev.vars
@@ -277,9 +277,19 @@ The server exposes the following tools through the MCP protocol:
 
 ### MCP Protocol
 
-- **Version:** 2025-03-26
-- **Transport:** SSE (Server-Sent Events)
-- **Authentication:** OAuth 2.1 with PKCE (S256)
+- **Version:** 2025-06-18
+- **Transport:** Streamable HTTP via [`cloudflare/agents`](https://github.com/cloudflare/agents) `McpAgent`. Sessions are Durable Object instances (one per `Mcp-Session-Id`) with hibernatable WebSockets — the DO evicts while idle and wakes on incoming messages, so quiet sessions cost nothing.
+- **Authentication:** OAuth 2.1 with PKCE (S256) + RFC 8707 resource indicators (audience-bound tokens). The Worker shell verifies the JWT and propagates the user's identity to the DO via `ctx.props`.
+- **Tool result shape:** Every tool emits `structuredContent` (typed object matching `outputSchema`) alongside the legacy `content[0].text` (serialized JSON) for backwards compatibility.
+- **Tool annotations:** Every tool declares `readOnlyHint`, `idempotentHint`, `openWorldHint` so clients can render safe-action affordances.
+- **Capabilities exposed:**
+  - `tools` — 13 transit query tools (DC + NYC)
+  - `resources` — three `transit://` URI templates (stations, routes, incidents)
+  - `prompts` — three canned templates (service-briefing, commute-planner, accessibility-check)
+  - `elicitation` — server asks the user to disambiguate when a station name matches multiple platforms
+  - Server push: enabled (DurableObject-backed)
+  - Resumability: enabled via `DurableObjectEventStore` (`Last-Event-ID` replay)
+  - Progress notifications: emitted for `get_all_stations` when the client opts in via `params._meta.progressToken`
 
 ### Transit APIs
 
@@ -304,7 +314,10 @@ The server uses GTFS-Realtime feeds from the MTA. Public API endpoints (no API k
 ### Hosting
 
 - **Platform:** Cloudflare Workers
-- **Storage:** Cloudflare KV (for OAuth client registration)
+- **Storage:**
+  - Cloudflare KV `OAUTH_CLIENTS` — registered OAuth clients
+  - Cloudflare KV `RATE_LIMIT_KV` — rate-limit counters
+  - Durable Object `MCP_SESSION` (class `MetroMcpAgent`) — per-session MCP state, transport, and event log
 - **Runtime:** V8 isolates with global edge deployment
 
 ### Source Structure

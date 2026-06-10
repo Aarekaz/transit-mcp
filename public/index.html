@@ -1,1951 +1,1082 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Metro-MCP — Live transit data for AI agents</title>
-    <meta name="description" content="Connect LLMs and AI agents to live NYC Subway and DC Metro data. Current arrivals, train positions, and service alerts through the Model Context Protocol.">
-    <link rel="icon" href="/favicon.ico" type="image/x-icon">
-    
-    <!-- Open Graph / Facebook -->
-    <meta property="og:type" content="website">
-    <meta property="og:url" content="https://metro-mcp.anuragd.me/">
-    <meta property="og:title" content="Metro-MCP — Live transit data for AI agents">
-    <meta property="og:description" content="Connect LLMs and AI agents to live NYC Subway and DC Metro data. Current arrivals, train positions, and service alerts through MCP.">
-    <meta property="og:image" content="https://metro-mcp.anuragd.me/og-image.png">
-
-    <!-- Twitter -->
-    <meta property="twitter:card" content="summary_large_image">
-    <meta property="twitter:url" content="https://metro-mcp.anuragd.me/">
-    <meta property="twitter:title" content="Metro-MCP — Live transit data for AI agents">
-    <meta property="twitter:description" content="Connect LLMs and AI agents to live NYC Subway and DC Metro data through MCP.">
-    <meta property="twitter:image" content="https://metro-mcp.anuragd.me/og-image.png">
-    
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&family=Space+Grotesk:wght@400;600&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --font-display: 'JetBrains Mono', monospace;
-            --font-body: 'Space Grotesk', sans-serif;
-            --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
-            --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
-        }
-
-        /* Dark mode (default) */
-        :root, [data-theme="dark"] {
-            --color-bg: #0d0f14;
-            --color-bg-alt: #151820;
-            --color-text: #e8f4f8;
-            --color-muted: #7d8894;
-            --color-accent: #00ff9f;
-            --color-accent-alt: #00d4ff;
-            --color-glow: rgba(0, 255, 159, 0.3);
-            --color-glow-alt: rgba(0, 212, 255, 0.3);
-            --color-border: rgba(0, 255, 159, 0.2);
-            --color-shadow: rgba(0, 255, 159, 0.1);
-            --scanline-opacity: 0.15;
-            --grid-opacity: 0.03;
-        }
-
-        /* Light mode */
-        [data-theme="light"] {
-            --color-bg: #f8fafb;
-            --color-bg-alt: #ffffff;
-            --color-text: #1a2332;
-            --color-muted: #5f6c7b;
-            --color-accent: #00a86b;
-            --color-accent-alt: #0088bb;
-            --color-glow: rgba(0, 168, 107, 0.2);
-            --color-glow-alt: rgba(0, 136, 187, 0.2);
-            --color-border: rgba(0, 0, 0, 0.1);
-            --color-shadow: rgba(0, 0, 0, 0.08);
-            --scanline-opacity: 0;
-            --grid-opacity: 0.015;
-        }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: var(--font-body);
-            background: var(--color-bg);
-            color: var(--color-text);
-            line-height: 1.6;
-            overflow-x: hidden;
-            position: relative;
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-
-        /* CRT Scanline Effect */
-        body::before {
-            content: '';
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: repeating-linear-gradient(
-                0deg,
-                rgba(0, 0, 0, var(--scanline-opacity)),
-                rgba(0, 0, 0, var(--scanline-opacity)) 1px,
-                transparent 1px,
-                transparent 2px
-            );
-            pointer-events: none;
-            z-index: 9999;
-            animation: scanline 8s linear infinite;
-            transition: background 0.3s ease;
-        }
-
-        @keyframes scanline {
-            0% { transform: translateY(0); }
-            100% { transform: translateY(10px); }
-        }
-
-        /* Grid Background */
-        body::after {
-            content: '';
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-image:
-                linear-gradient(rgba(0, 0, 0, var(--grid-opacity)) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(0, 0, 0, var(--grid-opacity)) 1px, transparent 1px);
-            background-size: 50px 50px;
-            pointer-events: none;
-            z-index: 0;
-            transition: background-image 0.3s ease;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 2rem;
-            position: relative;
-            z-index: 1;
-        }
-
-        /* Theme Toggle */
-        .theme-toggle {
-            background: transparent;
-            border: 2px solid var(--color-border);
-            width: 44px;
-            height: 44px;
-            border-radius: 50%;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.3s var(--ease-out-expo);
-            color: var(--color-accent);
-            margin-left: 1rem;
-            box-shadow: none;
-        }
-
-        .theme-toggle:hover {
-            border-color: var(--color-accent);
-            box-shadow: 0 0 20px var(--color-glow);
-            transform: scale(1.1);
-        }
-
-        .theme-toggle svg {
-            width: 20px;
-            height: 20px;
-        }
-
-        /* Header */
-        header {
-            padding: 2rem 0;
-            border-bottom: 1px solid var(--color-border);
-            animation: slideDown 0.8s var(--ease-out-expo);
-        }
-
-        @keyframes slideDown {
-            from {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        nav {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .hamburger {
-            display: none;
-            flex-direction: column;
-            gap: 5px;
-            cursor: pointer;
-            padding: 0.5rem;
-            z-index: 1001;
-        }
-
-        .hamburger span {
-            width: 25px;
-            height: 2px;
-            background: var(--color-accent);
-            transition: all 0.3s var(--ease-out-expo);
-            box-shadow: 0 0 8px var(--color-glow);
-        }
-
-        .hamburger.active span:nth-child(1) {
-            transform: rotate(45deg) translate(7px, 7px);
-        }
-
-        .hamburger.active span:nth-child(2) {
-            opacity: 0;
-        }
-
-        .hamburger.active span:nth-child(3) {
-            transform: rotate(-45deg) translate(7px, -7px);
-        }
-
-        .mobile-menu {
-            position: fixed;
-            top: 0;
-            right: -100%;
-            width: 80%;
-            max-width: 300px;
-            height: 100vh;
-            background: var(--color-bg-alt);
-            border-left: 1px solid var(--color-accent);
-            padding: 6rem 2rem 2rem;
-            z-index: 1000;
-            transition: right 0.4s var(--ease-out-expo);
-            box-shadow: -10px 0 50px rgba(0, 0, 0, 0.5);
-        }
-
-        .mobile-menu.active {
-            right: 0;
-        }
-
-        .mobile-menu .nav-links {
-            flex-direction: column;
-            gap: 1.5rem;
-        }
-
-        .mobile-menu .nav-links a {
-            font-size: 1.1rem;
-        }
-
-        .mobile-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.7);
-            z-index: 999;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 0.3s ease;
-        }
-
-        .mobile-overlay.active {
-            opacity: 1;
-            pointer-events: auto;
-        }
-
-        .logo {
-            font-family: var(--font-display);
-            font-size: 1.5rem;
-            font-weight: 800;
-            color: var(--color-accent);
-            text-shadow: 0 0 20px var(--color-glow);
-            letter-spacing: -0.02em;
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-        }
-
-        .logo-img {
-            width: 40px;
-            height: 40px;
-            filter: drop-shadow(0 0 10px var(--color-glow));
-        }
-
-        .nav-links {
-            display: flex;
-            gap: 2rem;
-            list-style: none;
-        }
-
-        .nav-links a {
-            font-family: var(--font-display);
-            font-size: 0.9rem;
-            color: var(--color-muted);
-            text-decoration: none;
-            transition: all 0.3s var(--ease-out-expo);
-            position: relative;
-        }
-
-        .nav-links a:hover {
-            color: var(--color-accent);
-            text-shadow: 0 0 10px var(--color-glow);
-        }
-
-        .nav-links a::after {
-            content: '';
-            position: absolute;
-            bottom: -2px;
-            left: 0;
-            width: 0;
-            height: 2px;
-            background: var(--color-accent);
-            transition: width 0.3s var(--ease-out-expo);
-            box-shadow: 0 0 8px var(--color-glow);
-        }
-
-        .nav-links a:hover::after {
-            width: 100%;
-        }
-
-        /* Hero Section */
-        .hero {
-            padding: 6rem 0 8rem;
-            text-align: center;
-            animation: fadeIn 1s var(--ease-out-expo) 0.2s both;
-        }
-
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(30px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .hero-tags {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.75rem;
-            flex-wrap: wrap;
-            margin-bottom: 2rem;
-        }
-
-        .hero-tag {
-            display: inline-block;
-            font-family: var(--font-display);
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            color: var(--color-accent);
-            background: var(--color-shadow);
-            padding: 0.5rem 1rem;
-            border: 1px solid var(--color-glow);
-            box-shadow: 0 0 20px var(--color-glow);
-            animation: pulse 2s ease-in-out infinite;
-        }
-
-        .version-tag {
-            display: inline-block;
-            font-family: var(--font-display);
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            color: var(--color-accent-alt);
-            border: 1px dashed var(--color-border);
-            padding: 0.45rem 0.9rem;
-            background: transparent;
-        }
-
-        @keyframes pulse {
-            0%, 100% { box-shadow: 0 0 20px var(--color-glow); }
-            50% { box-shadow: 0 0 30px var(--color-glow); }
-        }
-
-        .hero h1 {
-            font-family: var(--font-display);
-            font-size: clamp(2.5rem, 6vw, 5rem);
-            font-weight: 800;
-            line-height: 1.1;
-            margin-bottom: 1.5rem;
-            letter-spacing: -0.03em;
-        }
-
-        .hero h1 .accent {
-            color: var(--color-accent);
-            text-shadow: 0 0 40px var(--color-glow);
-        }
-
-        .hero h1 .accent-alt {
-            color: var(--color-accent-alt);
-            text-shadow: 0 0 40px var(--color-glow-alt);
-        }
-
-        .hero-subtitle {
-            font-size: clamp(1.1rem, 2vw, 1.3rem);
-            color: var(--color-muted);
-            max-width: 700px;
-            margin: 0 auto 3rem;
-            line-height: 1.8;
-        }
-
-        /* Terminal Display */
-        .terminal-display {
-            max-width: 900px;
-            margin: 3rem auto;
-            background: var(--color-bg-alt);
-            border: 1px solid var(--color-glow);
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 
-                0 0 40px var(--color-border),
-                inset 0 0 60px var(--color-shadow);
-            animation: slideUp 1s var(--ease-out-expo) 0.4s both;
-        }
-
-        .terminal-tabs {
-            display: flex;
-            background: var(--color-shadow);
-            border-bottom: 1px solid var(--color-border);
-        }
-
-        .terminal-tab {
-            flex: 1;
-            font-family: var(--font-display);
-            font-size: 0.9rem;
-            padding: 1rem;
-            background: transparent;
-            border: none;
-            color: var(--color-muted);
-            cursor: pointer;
-            transition: all 0.3s var(--ease-out-expo);
-            border-right: 1px solid var(--color-border);
-        }
-
-        .terminal-tab:last-child {
-            border-right: none;
-        }
-
-        .terminal-tab:hover {
-            background: var(--color-shadow);
-            color: var(--color-text);
-        }
-
-        .terminal-tab.active {
-            background: var(--color-shadow);
-            color: var(--color-accent);
-            border-bottom: 2px solid var(--color-accent);
-        }
-
-        .terminal-panel {
-            display: none;
-        }
-
-        .terminal-panel.active {
-            display: block;
-        }
-
-        .copy-btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 24px;
-            height: 24px;
-            margin-left: 0.5rem;
-            padding: 0.25rem;
-            background: var(--color-shadow);
-            border: 1px solid var(--color-glow);
-            border-radius: 4px;
-            color: var(--color-accent);
-            cursor: pointer;
-            transition: all 0.3s var(--ease-out-expo);
-            vertical-align: middle;
-        }
-
-        .copy-btn:hover {
-            background: var(--color-border);
-            box-shadow: 0 0 15px var(--color-glow);
-            transform: scale(1.1);
-        }
-
-        .copy-btn.copied {
-            background: var(--color-accent);
-            color: var(--color-bg);
-        }
-
-        .copy-btn svg {
-            width: 14px;
-            height: 14px;
-        }
-
-        .url-to-copy {
-            position: relative;
-        }
-
-        @keyframes slideUp {
-            from {
-                opacity: 0;
-                transform: translateY(40px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .terminal-header {
-            background: var(--color-shadow);
-            padding: 1rem 1.5rem;
-            border-bottom: 1px solid var(--color-glow);
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .terminal-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            background: var(--color-accent);
-            box-shadow: 0 0 10px var(--color-glow);
-            animation: blink 2s ease-in-out infinite;
-        }
-
-        @keyframes blink {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.3; }
-        }
-
-        .terminal-dot:nth-child(2) {
-            background: var(--color-accent-alt);
-            box-shadow: 0 0 10px var(--color-glow-alt);
-            animation-delay: 0.3s;
-        }
-
-        .terminal-dot:nth-child(3) {
-            background: var(--color-muted);
-            animation-delay: 0.6s;
-        }
-
-        .terminal-body {
-            padding: 2rem;
-            font-family: var(--font-display);
-            font-size: 0.9rem;
-            line-height: 1.8;
-            text-align: left;
-        }
-
-        .terminal-line {
-            margin-bottom: 0.5rem;
-            opacity: 0;
-            animation: typeLine 0.5s var(--ease-out-expo) forwards;
-        }
-
-        .terminal-line:nth-child(1) { animation-delay: 0.6s; }
-        .terminal-line:nth-child(2) { animation-delay: 0.8s; }
-        .terminal-line:nth-child(3) { animation-delay: 1s; }
-        .terminal-line:nth-child(4) { animation-delay: 1.2s; }
-        .terminal-line:nth-child(5) { animation-delay: 1.4s; }
-        .terminal-line:nth-child(6) { animation-delay: 1.6s; }
-        .terminal-line:nth-child(7) { animation-delay: 1.8s; }
-        .terminal-line:nth-child(8) { animation-delay: 2s; }
-        .terminal-line:nth-child(9) { animation-delay: 2.2s; }
-
-        @keyframes typeLine {
-            from {
-                opacity: 0;
-                transform: translateX(-10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateX(0);
-            }
-        }
-
-        .terminal-prompt {
-            color: var(--color-accent);
-        }
-
-        .terminal-comment {
-            color: var(--color-muted);
-        }
-
-        .terminal-string {
-            color: var(--color-accent-alt);
-        }
-
-        .cta-group {
-            display: flex;
-            gap: 1rem;
-            justify-content: center;
-            flex-wrap: wrap;
-            margin-top: 3rem;
-        }
-
-        .btn {
-            font-family: var(--font-display);
-            font-size: 1rem;
-            padding: 1rem 2rem;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            text-decoration: none;
-            transition: all 0.3s var(--ease-out-expo);
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            font-weight: 600;
-        }
-
-        .btn-primary {
-            background: var(--color-accent);
-            color: var(--color-bg);
-            box-shadow: 0 0 30px var(--color-glow);
-        }
-
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 0 50px var(--color-glow);
-        }
-
-        .btn-secondary {
-            background: transparent;
-            color: var(--color-accent);
-            border: 1px solid var(--color-accent);
-        }
-
-        .btn-secondary:hover {
-            background: var(--color-shadow);
-            transform: translateY(-2px);
-            box-shadow: 0 0 30px var(--color-glow);
-        }
-
-        /* Stats Bar */
-        .stats-bar {
-            padding: 4rem 0;
-            border-top: 1px solid var(--color-border);
-            background: var(--color-bg-alt);
-        }
-
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 3rem;
-            text-align: center;
-        }
-
-        .stat-item {
-            opacity: 0;
-            transform: scale(0.9);
-            transition: all 0.6s var(--ease-out-expo);
-        }
-
-        .stat-item.visible {
-            opacity: 1;
-            transform: scale(1);
-        }
-
-        .stat-item .stat-number {
-            font-family: var(--font-display);
-            font-size: 3.5rem;
-            font-weight: 800;
-            color: var(--color-accent);
-            text-shadow: 0 0 30px var(--color-glow);
-            line-height: 1;
-            margin-bottom: 0.5rem;
-        }
-
-        .stat-percent {
-            font-size: 2rem;
-        }
-
-        .stat-item .stat-label {
-            font-size: 0.9rem;
-            color: var(--color-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-        }
-
-        /* Features Section - Consolidated */
-        .features {
-            padding: 6rem 0;
-            border-top: 1px solid var(--color-border);
-        }
-
-        .section-title {
-            font-family: var(--font-display);
-            font-size: clamp(2rem, 4vw, 3rem);
-            font-weight: 800;
-            text-align: center;
-            margin-bottom: 1rem;
-            letter-spacing: -0.02em;
-        }
-
-        .section-subtitle {
-            text-align: center;
-            color: var(--color-muted);
-            max-width: 700px;
-            margin: 0 auto 4rem;
-            font-size: 1.1rem;
-            line-height: 1.7;
-        }
-
-        .features-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-            gap: 2rem;
-        }
-
-        .feature-card {
-            background: var(--color-bg-alt);
-            border: 1px solid var(--color-border);
-            padding: 2rem;
-            border-radius: 8px;
-            transition: all 0.4s var(--ease-out-expo);
-            opacity: 0;
-            transform: translateY(40px);
-        }
-
-        .feature-card.visible {
-            opacity: 1;
-            transform: translateY(0);
-        }
-
-        .feature-card:hover {
-            border-color: var(--color-accent);
-            box-shadow: 0 0 40px var(--color-border);
-            transform: translateY(-5px);
-        }
-
-        .feature-icon {
-            font-size: 2.5rem;
-            margin-bottom: 1.5rem;
-            filter: drop-shadow(0 0 10px var(--color-glow));
-        }
-
-        .feature-card h3 {
-            font-family: var(--font-display);
-            font-size: 1.3rem;
-            margin-bottom: 1rem;
-            color: var(--color-accent);
-        }
-
-        .feature-card p {
-            color: var(--color-muted);
-            line-height: 1.8;
-            margin-bottom: 1rem;
-        }
-
-        .feature-card ul {
-            list-style: none;
-            padding-left: 0;
-        }
-
-        .feature-card ul li {
-            color: var(--color-text);
-            margin-bottom: 0.5rem;
-            position: relative;
-            padding-left: 1.5rem;
-            line-height: 1.6;
-            font-size: 0.95rem;
-        }
-
-        .feature-card ul li::before {
-            content: '→';
-            position: absolute;
-            left: 0;
-            color: var(--color-accent);
-        }
-
-        /* Coverage Section with Comparison Table */
-        .coverage {
-            padding: 6rem 0;
-            border-top: 1px solid var(--color-border);
-        }
-
-        .comparison-table-wrapper {
-            max-width: 900px;
-            margin: 3rem auto;
-            background: var(--color-bg-alt);
-            border: 1px solid var(--color-border);
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 0 40px var(--color-border);
-        }
-
-        .comparison-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-family: var(--font-display);
-        }
-
-        .comparison-table thead {
-            background: var(--color-shadow);
-            border-bottom: 2px solid var(--color-accent);
-        }
-
-        .comparison-table th {
-            padding: 1.5rem 1rem;
-            text-align: left;
-            font-weight: 800;
-            color: var(--color-accent);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            font-size: 0.9rem;
-        }
-
-        .comparison-table th:first-child {
-            color: var(--color-text);
-        }
-
-        .comparison-table td {
-            padding: 1.25rem 1rem;
-            border-bottom: 1px solid var(--color-shadow);
-            color: var(--color-muted);
-        }
-
-        .comparison-table td:first-child {
-            font-weight: 600;
-            color: var(--color-text);
-        }
-
-        .comparison-table tr:hover {
-            background: var(--color-shadow);
-        }
-
-        .comparison-table tr:last-child td {
-            border-bottom: none;
-        }
-
-        .table-check {
-            color: var(--color-accent);
-            font-size: 1.2rem;
-        }
-
-        .table-cross {
-            color: var(--color-muted);
-            font-size: 1.2rem;
-        }
-
-        /* Collapsible Examples */
-        .examples {
-            padding: 6rem 0;
-            border-top: 1px solid var(--color-border);
-        }
-
-        .examples-grid {
-            display: grid;
-            gap: 1.5rem;
-            margin-top: 4rem;
-        }
-
-        .example-card {
-            background: var(--color-bg-alt);
-            border: 1px solid var(--color-border);
-            border-radius: 8px;
-            overflow: hidden;
-            opacity: 0;
-            transform: translateY(40px);
-            transition: all 0.5s var(--ease-out-expo);
-        }
-
-        .example-card.visible {
-            opacity: 1;
-            transform: translateY(0);
-        }
-
-        .example-header {
-            padding: 1.5rem 2rem;
-            background: var(--color-shadow);
-            border-bottom: 1px solid var(--color-border);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            cursor: pointer;
-            transition: all 0.3s var(--ease-out-expo);
-        }
-
-        .example-header:hover {
-            background: var(--color-border);
-        }
-
-        .example-title {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
-
-        .query-icon {
-            font-size: 1.5rem;
-            filter: drop-shadow(0 0 10px var(--color-glow));
-        }
-
-        .example-header h3 {
-            font-family: var(--font-display);
-            font-size: 1.1rem;
-            color: var(--color-accent);
-            margin: 0;
-        }
-
-        .expand-icon {
-            font-size: 1.2rem;
-            color: var(--color-accent);
-            transition: transform 0.3s var(--ease-out-expo);
-        }
-
-        .example-card.expanded .expand-icon {
-            transform: rotate(180deg);
-        }
-
-        .example-content {
-            max-height: 0;
-            overflow: hidden;
-            transition: max-height 0.4s var(--ease-out-expo);
-        }
-
-        .example-card.expanded .example-content {
-            max-height: 1000px;
-        }
-
-        .example-response {
-            padding: 2rem;
-        }
-
-        .response-header {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            margin-bottom: 1rem;
-        }
-
-        .response-indicator {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: var(--color-accent);
-            box-shadow: 0 0 10px var(--color-glow);
-            animation: blink 2s ease-in-out infinite;
-        }
-
-        .response-label {
-            font-family: var(--font-display);
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            color: var(--color-muted);
-        }
-
-        .example-response p {
-            color: var(--color-text);
-            margin-bottom: 1rem;
-            line-height: 1.8;
-        }
-
-        .example-response ul {
-            list-style: none;
-            padding-left: 1.5rem;
-        }
-
-        .example-response ul li {
-            color: var(--color-muted);
-            margin-bottom: 0.5rem;
-            position: relative;
-            line-height: 1.6;
-        }
-
-        .example-response ul li::before {
-            content: '▸';
-            position: absolute;
-            left: -1.5rem;
-            color: var(--color-accent);
-        }
-
-        .example-response ul li strong {
-            color: var(--color-accent-alt);
-        }
-
-        /* Streamlined Tools Section */
-        .tools-section {
-            padding: 6rem 0;
-            border-top: 1px solid var(--color-border);
-        }
-
-        .tools-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 2rem;
-            margin-top: 4rem;
-        }
-
-        .tool-card {
-            background: var(--color-bg-alt);
-            border: 1px solid var(--color-border);
-            border-left: 3px solid var(--color-accent);
-            padding: 2rem;
-            border-radius: 6px;
-            transition: all 0.4s var(--ease-out-expo);
-            opacity: 0;
-            transform: translateY(20px);
-        }
-
-        .tool-card.visible {
-            opacity: 1;
-            transform: translateY(0);
-        }
-
-        .tool-card:hover {
-            border-color: var(--color-accent);
-            box-shadow: 0 0 30px var(--color-border);
-            transform: translateY(-3px);
-        }
-
-        .tool-header {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            margin-bottom: 1rem;
-        }
-
-        .tool-icon {
-            font-size: 1.8rem;
-            filter: drop-shadow(0 0 8px var(--color-glow));
-        }
-
-        .tool-card h3 {
-            font-family: var(--font-display);
-            font-size: 1.1rem;
-            color: var(--color-accent);
-            margin: 0;
-        }
-
-        .tool-card p {
-            color: var(--color-muted);
-            font-size: 0.95rem;
-            line-height: 1.7;
-            margin: 0;
-        }
-
-        /* CTA Section */
-        .cta-section {
-            padding: 8rem 0;
-            border-top: 1px solid var(--color-border);
-            text-align: center;
-        }
-
-        .cta-box {
-            max-width: 800px;
-            margin: 0 auto;
-            background: var(--color-bg-alt);
-            border: 2px solid var(--color-accent);
-            padding: 4rem 3rem;
-            border-radius: 12px;
-            box-shadow: 0 0 60px var(--color-glow);
-        }
-
-        .cta-box h2 {
-            font-family: var(--font-display);
-            font-size: clamp(1.8rem, 4vw, 2.5rem);
-            margin-bottom: 1.5rem;
-            line-height: 1.2;
-        }
-
-        .cta-box p {
-            font-size: 1.1rem;
-            color: var(--color-muted);
-            margin-bottom: 2.5rem;
-        }
-
-        /* Tech Stack */
-        .tech-stack {
-            padding: 4rem 0 3rem;
-            border-top: 1px solid var(--color-border);
-            text-align: center;
-        }
-
-        .tech-stack-title {
-            font-family: var(--font-display);
-            font-size: 0.85rem;
-            text-transform: uppercase;
-            letter-spacing: 0.15em;
-            color: var(--color-muted);
-            margin-bottom: 2rem;
-        }
-
-        .tech-badges {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 1.5rem;
-            flex-wrap: wrap;
-        }
-
-        .tech-badge {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            font-family: var(--font-display);
-            font-size: 0.9rem;
-            padding: 0.75rem 1.25rem;
-            background: var(--color-bg-alt);
-            border: 1px solid var(--color-glow);
-            border-radius: 6px;
-            color: var(--color-accent);
-            transition: all 0.3s var(--ease-out-expo);
-        }
-
-        .tech-badge svg {
-            color: var(--color-accent);
-            filter: drop-shadow(0 0 8px var(--color-glow));
-        }
-
-        .tech-badge:hover {
-            border-color: var(--color-accent);
-            box-shadow: 0 0 20px var(--color-glow);
-            transform: translateY(-2px);
-        }
-
-        /* Footer */
-        footer {
-            padding: 4rem 0 2rem;
-            border-top: 1px solid var(--color-border);
-        }
-
-        .footer-content {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 2rem;
-        }
-
-        .footer-logo {
-            font-family: var(--font-display);
-            font-size: 1.5rem;
-            font-weight: 800;
-            color: var(--color-accent);
-            text-shadow: 0 0 20px var(--color-glow);
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-        }
-
-        .footer-logo img {
-            width: 40px;
-            height: 40px;
-            filter: drop-shadow(0 0 10px var(--color-glow));
-        }
-
-        .footer-links {
-            display: flex;
-            gap: 2rem;
-            list-style: none;
-        }
-
-        .footer-links a {
-            font-family: var(--font-display);
-            color: var(--color-muted);
-            text-decoration: none;
-            transition: all 0.3s var(--ease-out-expo);
-            font-size: 0.9rem;
-        }
-
-        .footer-links a:hover {
-            color: var(--color-accent);
-            text-shadow: 0 0 10px var(--color-glow);
-        }
-
-        .footer-copy {
-            font-family: var(--font-display);
-            font-size: 0.85rem;
-            color: var(--color-muted);
-            text-align: center;
-            margin-top: 3rem;
-            padding-top: 2rem;
-            border-top: 1px solid var(--color-shadow);
-        }
-
-        /* Responsive */
-        @media (max-width: 768px) {
-            .nav-links {
-                display: none;
-            }
-
-            .hamburger {
-                display: flex;
-            }
-
-            .hero {
-                padding: 4rem 0 6rem;
-            }
-
-            .terminal-body {
-                font-size: 0.75rem;
-                padding: 1.5rem;
-            }
-
-            .features-grid,
-            .tools-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .tech-badges {
-                gap: 1rem;
-            }
-
-            .tech-badge {
-                font-size: 0.8rem;
-                padding: 0.6rem 1rem;
-            }
-
-            .stats-grid {
-                grid-template-columns: repeat(2, 1fr);
-                gap: 2rem;
-            }
-
-            .stat-item .stat-number {
-                font-size: 2.5rem;
-            }
-
-            .cta-box {
-                padding: 3rem 2rem;
-            }
-
-            .comparison-table {
-                font-size: 0.85rem;
-            }
-
-            .comparison-table th,
-            .comparison-table td {
-                padding: 1rem 0.75rem;
-            }
-
-            .footer-content {
-                flex-direction: column;
-                text-align: center;
-            }
-
-            .footer-links {
-                flex-direction: column;
-                gap: 1rem;
-            }
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>metro-mcp · Plug your LLM into the subway</title>
+  <meta name="description" content="Connect any MCP client to live DC Metro and NYC Subway data. Real-time arrivals, incidents, and 594 stations via the Model Context Protocol.">
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
+
+  <!-- Open Graph / Twitter -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://metro-mcp.anuragd.me/">
+  <meta property="og:title" content="metro-mcp · Plug your LLM into the subway">
+  <meta property="og:description" content="Connect any MCP client to live DC Metro and NYC Subway data via the Model Context Protocol.">
+  <meta property="og:image" content="https://metro-mcp.anuragd.me/og-image.png">
+  <meta property="twitter:card" content="summary_large_image">
+  <meta property="twitter:url" content="https://metro-mcp.anuragd.me/">
+  <meta property="twitter:title" content="metro-mcp · Plug your LLM into the subway">
+  <meta property="twitter:description" content="Connect any MCP client to live DC Metro and NYC Subway data via the Model Context Protocol.">
+  <meta property="twitter:image" content="https://metro-mcp.anuragd.me/og-image.png">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+  <style>
+    /* ─── Design tokens ─────────────────────────────────────── */
+    :root {
+      --bg: #fafbfc;
+      --ink: #0a2540;
+      --ink-2: #5b6470;
+      --ink-3: #8a93a0;
+      --border: #e6e8eb;
+      --accent: #ff6b1a;
+      --surface: #ffffff;
+
+      --radius-pill: 999px;
+      --radius-card: 12px;
+      --radius-input: 8px;
+
+      --shadow-modal: 0 24px 60px rgba(10, 37, 64, 0.18);
+
+      --font-ui: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    }
+
+    /* ─── Reset + base typography ───────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font-ui);
+      font-size: 15px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    button {
+      font-family: inherit;
+      font-size: inherit;
+      line-height: inherit;
+      background: none;
+      border: 0;
+      color: inherit;
+      cursor: pointer;
+    }
+
+    :focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    /* ─── Nav ───────────────────────────────────────────────── */
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 24px;
+      height: 64px;
+      flex-shrink: 0;
+    }
+    @media (min-width: 720px) {
+      nav { padding: 18px 48px; }
+    }
+
+    nav .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    nav .wordmark { font-size: 15px; }
+
+    nav .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      font-size: 14px;
+      color: var(--ink-2);
+    }
+    nav .nav-links a:hover { color: var(--ink); }
+
+    nav .cta-pill {
+      background: var(--ink);
+      color: #fff;
+      padding: 7px 14px;
+      border-radius: var(--radius-pill);
+      font-size: 13px;
+      font-weight: 500;
+      transition: filter 120ms ease;
+    }
+    nav .cta-pill:hover { filter: brightness(1.15); }
+
+    /* ─── Main + sections ───────────────────────────────────── */
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Hero — fills most of the first viewport; chat panel sits below. */
+    .hero-section {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 24px 56px;
+      overflow: hidden;
+      min-height: calc(100vh - 64px - 40px - 480px);
+    }
+
+    .halftone {
+      position: absolute;
+      top: 38%;
+      left: -120px;
+      right: -120px;
+      height: 220px;
+      background: radial-gradient(var(--ink) 1.5px, transparent 1.5px) 0 0 / 12px 12px;
+      -webkit-mask:
+        radial-gradient(ellipse 70% 32% at 22% 50%, black, transparent 70%),
+        radial-gradient(ellipse 65% 28% at 78% 50%, black, transparent 70%);
+              mask:
+        radial-gradient(ellipse 70% 32% at 22% 50%, black, transparent 70%),
+        radial-gradient(ellipse 65% 28% at 78% 50%, black, transparent 70%);
+      -webkit-mask-composite: source-over;
+              mask-composite: add;
+      opacity: 0.4;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .hero {
+      position: relative;
+      z-index: 1;
+      max-width: 680px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+
+    /* ─── Chat demo section ─────────────────────────────────── */
+    .chat-section {
+      padding: 0 24px 80px;
+      max-width: 760px;
+      margin: 0 auto;
+      width: 100%;
+    }
+    @media (min-width: 720px) { .chat-section { padding: 0 48px 96px; } }
+
+    .chat-label {
+      text-align: center;
+      font-size: 11px;
+      color: var(--ink-3);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin: 0 0 14px;
+      font-weight: 600;
+    }
+
+    .chat-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow:
+        0 24px 50px rgba(10, 37, 64, 0.08),
+        0 2px 6px rgba(10, 37, 64, 0.03);
+    }
+
+    .chat-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+    }
+    .dot-live {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18); }
+      50%      { box-shadow: 0 0 0 5px rgba(34, 197, 94, 0.06); }
+    }
+    .chat-title { font-weight: 600; }
+    .chat-meta { color: var(--ink-3); }
+    .chat-spacer { flex: 1; }
+    .chat-replay {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      color: var(--ink-3);
+      font-size: 14px;
+      line-height: 1;
+    }
+    .chat-replay:hover { background: var(--surface); color: var(--ink); }
+
+    .chat-body {
+      padding: 20px 22px;
+      font-size: 14px;
+      line-height: 1.55;
+      color: var(--ink);
+      min-height: 320px;
+    }
+
+    .msg {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 16px;
+      opacity: 0;
+      transform: translateY(4px);
+      animation: msg-in 220ms ease-out forwards;
+    }
+    @keyframes msg-in {
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .msg .avatar {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .msg .avatar.user      { background: var(--border); color: var(--ink-2); }
+    .msg .avatar.assistant { background: var(--accent); color: #fff; }
+    .msg .content { flex: 1; min-width: 0; padding-top: 2px; }
+    .msg .role {
+      font-size: 10px;
+      color: var(--ink-3);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .msg .body { color: var(--ink); }
+    .msg .body ul {
+      margin: 6px 0 0 18px;
+      padding: 0;
+      font-size: 13.5px;
+      line-height: 1.7;
+    }
+
+    /* Inline line badge — reused inside chat responses. */
+    .line-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 20px;
+      height: 20px;
+      padding: 0 6px;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      vertical-align: -3px;
+    }
+
+    /* Typewriter caret for the user message. */
+    .caret::after {
+      content: "▎";
+      color: var(--accent);
+      animation: blink 1s steps(1) infinite;
+      margin-left: 1px;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* Tool call card. */
+    .tool-card {
+      margin-top: 8px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      overflow: hidden;
+    }
+    .tool-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px;
+      font-size: 12px;
+      color: var(--ink-2);
+    }
+    .tool-head .arrow { color: var(--ink-3); font-family: var(--font-mono); }
+    .tool-name {
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      color: var(--ink);
+      font-weight: 600;
+    }
+    .tool-tag {
+      margin-left: auto;
+      font-size: 9px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      transition: all 200ms ease;
+    }
+    .tool-tag.pending { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
+    .tool-tag.ok      { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+    .tool-body {
+      padding: 10px 14px 12px;
+      background: #0c1320;
+      color: #cde2ff;
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      line-height: 1.55;
+      border-top: 1px solid var(--border);
+      overflow-x: auto;
+    }
+    .json-key { color: #67e8f9; }
+    .json-str { color: #fca573; }
+    .json-num { color: #b1f0d1; }
+
+    /* Carousel dots */
+    .chat-dots {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      padding: 0 0 18px;
+      background: var(--surface);
+    }
+    .chat-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--border);
+      transition: background 150ms ease, transform 150ms ease;
+    }
+    .chat-dot:hover { background: var(--ink-3); }
+    .chat-dot.active {
+      background: var(--ink);
+      transform: scale(1.15);
+    }
+
+    /* Reduced motion — skip animations, show final state. */
+    @media (prefers-reduced-motion: reduce) {
+      .msg { animation: none; opacity: 1; transform: none; }
+      .dot-live { animation: none; }
+      .caret::after { animation: none; }
+      .tool-tag { transition: none; }
+    }
+
+    @media (max-width: 560px) {
+      .chat-body { padding: 16px 16px; font-size: 13px; }
+      .tool-body { font-size: 10.5px; }
+    }
+
+    .hero h1 {
+      font-size: clamp(36px, 5.5vw, 56px);
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      line-height: 1.05;
+    }
+    .hero h1 .accent { color: var(--accent); }
+
+    .hero .subtitle {
+      max-width: 560px;
+      font-size: clamp(15px, 1.4vw, 17px);
+      line-height: 1.55;
+      color: var(--ink-2);
+    }
+
+    .hero .footnote {
+      font-size: 13px;
+      color: var(--ink-3);
+      margin-top: 4px;
+    }
+
+    /* ─── CTA row ───────────────────────────────────────────── */
+    .cta-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .url-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 10px 16px;
+      border-radius: var(--radius-pill);
+      font-family: var(--font-mono);
+      font-size: 14px;
+      color: var(--ink);
+      transition: border-color 120ms ease, transform 120ms ease;
+    }
+    .url-pill:hover { border-color: var(--ink-2); }
+    .url-pill:active { transform: translateY(1px); }
+    .url-pill .url-status {
+      font-family: var(--font-ui);
+      font-size: 12px;
+      color: var(--ink-3);
+      padding-left: 12px;
+      border-left: 1px solid var(--border);
+    }
+    .url-pill[data-copied="true"] .url-status { color: var(--accent); }
+
+    .cta-button {
+      background: var(--ink);
+      color: #fff;
+      padding: 10px 18px;
+      border-radius: var(--radius-pill);
+      font-size: 14px;
+      font-weight: 500;
+      transition: filter 120ms ease, transform 120ms ease;
+    }
+    .cta-button:hover { filter: brightness(1.15); }
+    .cta-button:active { transform: translateY(1px); }
+
+    /* ─── Footer ────────────────────────────────────────────── */
+    footer {
+      flex-shrink: 0;
+      padding: 14px 24px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--ink-3);
+    }
+    @media (min-width: 720px) {
+      footer { padding: 14px 48px; }
+    }
+    footer .dot-sep { color: var(--border); }
+
+    /* ─── Modal ─────────────────────────────────────────────── */
+    dialog#install-dialog {
+      border: 0;
+      padding: 0;
+      background: transparent;
+      max-width: 560px;
+      width: calc(100% - 32px);
+    }
+    dialog#install-dialog::backdrop {
+      background: rgba(10, 37, 64, 0.45);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+    dialog#install-dialog[open] {
+      animation: dialog-in 150ms ease-out;
+    }
+    @keyframes dialog-in {
+      from { opacity: 0; transform: translateY(8px) scale(0.985); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .dialog-inner {
+      background: var(--surface);
+      border-radius: var(--radius-card);
+      box-shadow: var(--shadow-modal);
+      padding: 24px;
+    }
+    .dialog-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .dialog-header h2 {
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .dialog-close {
+      font-size: 22px;
+      line-height: 1;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      color: var(--ink-3);
+    }
+    .dialog-close:hover { background: var(--bg); color: var(--ink); }
+    .dialog-subtitle {
+      font-size: 13px;
+      color: var(--ink-3);
+      margin-top: 4px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin: 20px 0 12px;
+      padding: 4px;
+      background: var(--bg);
+      border-radius: var(--radius-input);
+      border: 1px solid var(--border);
+      overflow-x: auto;
+    }
+    .tabs button[role="tab"] {
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      color: var(--ink-2);
+      white-space: nowrap;
+    }
+    .tabs button[role="tab"][aria-selected="true"] {
+      background: var(--surface);
+      color: var(--ink);
+      box-shadow: 0 1px 3px rgba(10, 37, 64, 0.08);
+    }
+
+    [role="tabpanel"] .tab-help {
+      font-size: 12px;
+      color: var(--ink-3);
+      margin-bottom: 8px;
+    }
+    [role="tabpanel"] .tab-help code {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      background: var(--bg);
+      padding: 2px 5px;
+      border-radius: 4px;
+    }
+
+    [role="tabpanel"] pre {
+      background: #0c1320;
+      color: #e8eef5;
+      border-radius: var(--radius-input);
+      padding: 16px;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    [role="tabpanel"] code { font-family: inherit; }
+
+    [role="tabpanel"] .copy-snippet {
+      margin-top: 10px;
+      width: 100%;
+      padding: 9px 14px;
+      background: var(--ink);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 500;
+      border-radius: var(--radius-input);
+      transition: filter 120ms ease;
+    }
+    [role="tabpanel"] .copy-snippet:hover { filter: brightness(1.15); }
+
+    /* ─── Toast ─────────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--ink);
+      color: #fff;
+      padding: 8px 16px;
+      border-radius: var(--radius-pill);
+      font-size: 13px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 150ms ease;
+      z-index: 100;
+    }
+    #toast[data-show="true"] { opacity: 1; }
+
+    /* ─── Reduced motion ────────────────────────────────────── */
+    @media (prefers-reduced-motion: reduce) {
+      dialog#install-dialog[open] { animation: none; }
+      #toast { transition: none; }
+    }
+  </style>
 </head>
 <body>
-    <header>
-        <div class="container">
-            <nav>
-                <div class="logo">
-                    <img src="/metro-mcp-slick.svg" alt="Metro-MCP Logo" class="logo-img">
-                    metro-mcp
-                </div>
-                <div style="display: flex; align-items: center; gap: 1rem;">
-                    <ul class="nav-links">
-                        <li><a href="#features">Features</a></li>
-                        <li><a href="#coverage">Coverage</a></li>
-                        <li><a href="#tools">Tools</a></li>
-                        <li><a href="#examples">Examples</a></li>
-                        <li><a href="https://github.com/Aarekaz/metro-mcp">GitHub</a></li>
-                    </ul>
-                    <button class="theme-toggle" aria-label="Toggle theme">
-                        <svg class="sun-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
-                        </svg>
-                        <svg class="moon-icon" style="display: none;" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-                        </svg>
-                    </button>
-                    <div class="hamburger">
-                        <span></span>
-                        <span></span>
-                        <span></span>
-                    </div>
-                </div>
-            </nav>
-        </div>
-    </header>
-
-    <div class="mobile-overlay"></div>
-    <div class="mobile-menu">
-        <ul class="nav-links">
-            <li><a href="#features">Features</a></li>
-            <li><a href="#coverage">Coverage</a></li>
-            <li><a href="#tools">Tools</a></li>
-            <li><a href="#examples">Examples</a></li>
-            <li><a href="https://github.com/Aarekaz/metro-mcp">GitHub</a></li>
-        </ul>
+  <nav aria-label="Primary">
+    <a class="brand" href="/">
+      <svg class="mark" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+        <rect width="20" height="20" rx="5" fill="#0a2540"/>
+        <path d="M4.5 14V6h1.8l2.7 5 2.7-5h1.8v8h-1.5V8.6L9.7 13h-1.4L5.9 8.6V14z" fill="#fff"/>
+      </svg>
+      <span class="wordmark">metro-mcp</span>
+    </a>
+    <div class="nav-links">
+      <a href="https://github.com/Aarekaz/metro-mcp#mcp-client-integration">Docs</a>
+      <a href="https://github.com/Aarekaz/metro-mcp">GitHub</a>
+      <button type="button" class="cta-pill" data-open-install>Add to LLM</button>
     </div>
+  </nav>
 
-    <main>
-        <section class="hero">
-            <div class="container">
-                <div class="hero-tags">
-                    <div class="hero-tag">Model Context Protocol Server</div>
-                    <div class="version-tag">v3.1.3</div>
-                </div>
-                <h1>
-                    Give your AI agent<br>
-                    <span class="accent">live</span> <span class="accent-alt">transit</span> vision
-                </h1>
-                <p class="hero-subtitle">
-                    Metro-MCP connects LLMs and AI agents to current transit data from NYC Subway and DC Metro. 
-                    Train positions, arrivals, delays—all streaming through MCP with instant updates.
-                </p>
+  <main>
+    <section class="hero-section">
+      <div class="halftone" aria-hidden="true"></div>
 
-                <div class="terminal-display">
-                    <div class="terminal-header">
-                        <div class="terminal-dot"></div>
-                        <div class="terminal-dot"></div>
-                        <div class="terminal-dot"></div>
-                    </div>
-                    <div class="terminal-tabs">
-                        <button class="terminal-tab active" data-tab="quickstart">Quick Start</button>
-                        <button class="terminal-tab" data-tab="selfhost">Self-Host</button>
-                    </div>
-                    <div class="terminal-content">
-                        <div class="terminal-panel active" id="quickstart">
-                            <div class="terminal-body">
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">1.</span> Open Your Client's MCP/Connector settings
-                                </div>
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">2.</span> Add this URL: <span class="terminal-string url-to-copy">https://metro-mcp.anuragd.me/mcp</span>
-                                    <button class="copy-btn" data-copy="https://metro-mcp.anuragd.me/mcp">
-                                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                                            <rect x="5" y="5" width="9" height="9" stroke="currentColor" stroke-width="1.5"/>
-                                            <path d="M3 11V3C3 2.44772 3.44772 2 4 2H10" stroke="currentColor" stroke-width="1.5"/>
-                                        </svg>
-                                    </button>
-                                </div>
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">3.</span> Click <span class="terminal-string">"Connect"</span> and authorize via GitHub
-                                </div>
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">4.</span> Start asking questions about the Metro!
-                                </div>
-                            </div>
-                        </div>
-                        <div class="terminal-panel" id="selfhost">
-                            <div class="terminal-body">
-                                <div class="terminal-line">
-                                    <span class="terminal-comment"># Deploy your own Cloudflare Workers instance:</span>
-                                </div>
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">$</span> git clone https://github.com/Aarekaz/metro-mcp.git
-                                </div>
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">$</span> cd metro-mcp && bun install
-                                </div>
-                                <div class="terminal-line">
-                                    <span class="terminal-comment"># Get WMATA API key & setup GitHub OAuth</span>
-                                </div>
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">$</span> bunx wrangler kv namespace create "OAUTH_CLIENTS"
-                                </div>
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">$</span> bunx wrangler secret put WMATA_API_KEY
-                                </div>
-                                <div class="terminal-line">
-                                    <span class="terminal-prompt">$</span> bunx wrangler deploy
-                                </div>
-                                <div class="terminal-line">
-                                    <span class="terminal-comment"># Full guide: github.com/Aarekaz/metro-mcp#deployment</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="cta-group">
-                    <a href="https://github.com/Aarekaz/metro-mcp" class="btn btn-primary">
-                        View on GitHub →
-                    </a>
-                    <a href="#features" class="btn btn-secondary">
-                        Explore Features
-                    </a>
-                </div>
-            </div>
-        </section>
-
-        <!-- Stats Bar -->
-        <section class="stats-bar">
-            <div class="container">
-                <div class="stats-grid">
-                    <div class="stat-item">
-                        <div class="stat-number" data-target="594">0</div>
-                        <div class="stat-label">Total Stations</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-number" data-target="7">0</div>
-                        <div class="stat-label">Second Updates</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-number" data-target="35">0</div>
-                        <div class="stat-label">Transit Lines</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-number" data-target="13">0</div>
-                        <div class="stat-label">MCP Tools</div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Consolidated Features Section -->
-        <section id="features" class="features">
-            <div class="container">
-                <h2 class="section-title">Powering transit-aware AI applications</h2>
-                <p class="section-subtitle">
-                    From commuter assistants to analytics platforms, Metro-MCP provides the foundation for intelligent transit applications with up-to-date data and comprehensive coverage.
-                </p>
-
-                <div class="features-grid">
-                    <div class="feature-card">
-                        <div class="feature-icon">🚇</div>
-                        <h3>Live Arrival Predictions</h3>
-                        <p>
-                            Get current arrival times for any station. AI agents can answer "when's the next train?" 
-                            with actual data, not guesses.
-                        </p>
-                        <ul>
-                            <li>Smart commute planning</li>
-                            <li>Travel assistants</li>
-                            <li>Delay notifications</li>
-                        </ul>
-                    </div>
-
-                    <div class="feature-card">
-                        <div class="feature-icon">📍</div>
-                        <h3>Train Position Tracking</h3>
-                        <p>
-                            Track every train in the system. See exactly where trains are, which direction they're heading, 
-                            and train composition.
-                        </p>
-                        <ul>
-                            <li>System monitoring</li>
-                            <li>Crowding insights</li>
-                            <li>Route optimization</li>
-                        </ul>
-                    </div>
-
-                    <div class="feature-card">
-                        <div class="feature-icon">🚌</div>
-                        <h3>Multimodal Integration</h3>
-                        <p>
-                            Complete DC Metro bus support with instant positions, predictions, routes, and stops. 
-                            Build comprehensive transit assistants.
-                        </p>
-                        <ul>
-                            <li>Bus + rail coordination</li>
-                            <li>Transfer planning</li>
-                            <li>Last-mile solutions</li>
-                        </ul>
-                    </div>
-
-                    <div class="feature-card">
-                        <div class="feature-icon">⚠️</div>
-                        <h3>Service Disruption Alerts</h3>
-                        <p>
-                            Stay ahead of disruptions. Get instant incident reports, elevator outages, 
-                            and service advisories as they happen.
-                        </p>
-                        <ul>
-                            <li>Proactive route changes</li>
-                            <li>Accessibility updates</li>
-                            <li>Emergency notifications</li>
-                        </ul>
-                    </div>
-
-                    <div class="feature-card">
-                        <div class="feature-icon">🗺️</div>
-                        <h3>Rich Station Metadata</h3>
-                        <p>
-                            Complete station info with coordinates, transfer connections, and line information. 
-                            Build spatial reasoning into your AI.
-                        </p>
-                        <ul>
-                            <li>Geographic queries</li>
-                            <li>Transfer optimization</li>
-                            <li>Accessibility info</li>
-                        </ul>
-                    </div>
-
-                    <div class="feature-card">
-                        <div class="feature-icon">🔄</div>
-                        <h3>Auto-Refresh Data Streams</h3>
-                        <p>
-                            Data updates every 7-10 seconds. Your AI always has the freshest information 
-                            without manual polling.
-                        </p>
-                        <ul>
-                            <li>SSE event streams</li>
-                            <li>Efficient bandwidth</li>
-                            <li>Always up-to-date</li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Coverage with Comparison Table -->
-        <section id="coverage" class="coverage">
-            <div class="container">
-                <h2 class="section-title">Two major transit systems, one unified API</h2>
-                <p class="section-subtitle">
-                    Comprehensive coverage of NYC Subway and DC Metro with different strengths and capabilities
-                </p>
-
-                <div class="comparison-table-wrapper">
-                    <table class="comparison-table">
-                        <thead>
-                            <tr>
-                                <th>Feature</th>
-                                <th>DC Metro (WMATA)</th>
-                                <th>NYC Subway (MTA)</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td>Train Arrivals</td>
-                                <td><span class="table-check">✓</span> Live predictions</td>
-                                <td><span class="table-check">✓</span> Live predictions</td>
-                            </tr>
-                            <tr>
-                                <td>Train Positions</td>
-                                <td><span class="table-check">✓</span> GPS tracking</td>
-                                <td><span class="table-check">✓</span> GPS tracking</td>
-                            </tr>
-                            <tr>
-                                <td>Service Alerts</td>
-                                <td><span class="table-check">✓</span> Incidents & advisories</td>
-                                <td><span class="table-check">✓</span> System-wide alerts</td>
-                            </tr>
-                            <tr>
-                                <td>Bus Integration</td>
-                                <td><span class="table-check">✓</span> Full support</td>
-                                <td><span class="table-cross">–</span> Rail only</td>
-                            </tr>
-                            <tr>
-                                <td>Stations</td>
-                                <td>98 stations</td>
-                                <td>496 stations</td>
-                            </tr>
-                            <tr>
-                                <td>Lines</td>
-                                <td>6 lines (Red, Orange, Silver, Blue, Yellow, Green)</td>
-                                <td>29 lines (A, C, E, 1, 2, 3, etc.)</td>
-                            </tr>
-                            <tr>
-                                <td>Geographic Coverage</td>
-                                <td>DC, MD, VA metro area</td>
-                                <td>NYC 5 boroughs</td>
-                            </tr>
-                            <tr>
-                                <td>Update Frequency</td>
-                                <td>7-10 seconds</td>
-                                <td>7-10 seconds</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </section>
-
-        <!-- Streamlined Tools Section -->
-        <section id="tools" class="tools-section">
-            <div class="container">
-                <h2 class="section-title">Core MCP Tools</h2>
-                <p class="section-subtitle">
-                    Essential tools that enable AI agents to access and query transit data effectively
-                </p>
-
-                <div class="tools-grid">
-                    <div class="tool-card">
-                        <div class="tool-header">
-                            <span class="tool-icon">🔍</span>
-                            <h3>get_next_trains</h3>
-                        </div>
-                        <p>
-                            Retrieve upcoming train arrivals at any station with estimated times, destinations, and line information. The foundation for commute planning and travel assistance.
-                        </p>
-                    </div>
-
-                    <div class="tool-card">
-                        <div class="tool-header">
-                            <span class="tool-icon">📡</span>
-                            <h3>get_train_positions</h3>
-                        </div>
-                        <p>
-                            Real-time location data for all active trains including direction, line, and car count. Essential for system monitoring and crowding analysis.
-                        </p>
-                    </div>
-
-                    <div class="tool-card">
-                        <div class="tool-header">
-                            <span class="tool-icon">🚌</span>
-                            <h3>get_bus_predictions</h3>
-                        </div>
-                        <p>
-                            Bus arrival predictions with route information and stop details. Enables multimodal trip planning and last-mile connectivity (DC Metro only).
-                        </p>
-                    </div>
-
-                    <div class="tool-card">
-                        <div class="tool-header">
-                            <span class="tool-icon">⚠️</span>
-                            <h3>get_alerts</h3>
-                        </div>
-                        <p>
-                            Service disruptions, elevator outages, and system advisories. Critical for proactive route adjustments and accessibility planning.
-                        </p>
-                    </div>
-
-                    <div class="tool-card">
-                        <div class="tool-header">
-                            <span class="tool-icon">🗺️</span>
-                            <h3>get_stations</h3>
-                        </div>
-                        <p>
-                            Complete station metadata including coordinates, lines served, and transfer information. Enables geographic queries and spatial reasoning.
-                        </p>
-                    </div>
-
-                    <div class="tool-card">
-                        <div class="tool-header">
-                            <span class="tool-icon">🔄</span>
-                            <h3>get_lines</h3>
-                        </div>
-                        <p>
-                            Line information and service patterns. Helps agents understand the transit network structure and routing possibilities.
-                        </p>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Collapsible Examples Section -->
-        <section id="examples" class="examples">
-            <div class="container">
-                <h2 class="section-title">Example queries</h2>
-                <p class="section-subtitle">
-                    See how AI agents can answer transit questions naturally using Metro-MCP
-                </p>
-
-                <div class="examples-grid">
-                    <div class="example-card">
-                        <div class="example-header">
-                            <div class="example-title">
-                                <span class="query-icon">💬</span>
-                                <h3>"When's the next Red Line train to Shady Grove?"</h3>
-                            </div>
-                            <span class="expand-icon">▼</span>
-                        </div>
-                        <div class="example-content">
-                            <div class="example-response">
-                                <div class="response-header">
-                                    <div class="response-indicator"></div>
-                                    <span class="response-label">AI Response</span>
-                                </div>
-                                <p>The next Red Line train to Shady Grove arrives in 4 minutes at Metro Center. After that:</p>
-                                <ul>
-                                    <li><strong>8 minutes</strong> — Second train</li>
-                                    <li><strong>14 minutes</strong> — Third train</li>
-                                    <li>Trains running on normal schedule, no reported delays</li>
-                                </ul>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="example-card">
-                        <div class="example-header">
-                            <div class="example-title">
-                                <span class="query-icon">💬</span>
-                                <h3>"Are there any service disruptions on my commute?"</h3>
-                            </div>
-                            <span class="expand-icon">▼</span>
-                        </div>
-                        <div class="example-content">
-                            <div class="example-response">
-                                <div class="response-header">
-                                    <div class="response-indicator"></div>
-                                    <span class="response-label">AI Response</span>
-                                </div>
-                                <p>Current alerts affecting your route:</p>
-                                <ul>
-                                    <li><strong>Orange Line:</strong> Single tracking between Stadium-Armory and Minnesota Ave, expect 10-15 min delays</li>
-                                    <li><strong>Metro Center:</strong> Elevator to Red Line platform out of service, use escalator</li>
-                                    <li>Consider: Blue Line alternative with 8-min transfer at L'Enfant Plaza</li>
-                                </ul>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="example-card">
-                        <div class="example-header">
-                            <div class="example-title">
-                                <span class="query-icon">💬</span>
-                                <h3>"Best way from Union Station to Reagan Airport?"</h3>
-                            </div>
-                            <span class="expand-icon">▼</span>
-                        </div>
-                        <div class="example-content">
-                            <div class="example-response">
-                                <div class="response-header">
-                                    <div class="response-indicator"></div>
-                                    <span class="response-label">AI Response</span>
-                                </div>
-                                <p>Fastest route (38 minutes total):</p>
-                                <ul>
-                                    <li><strong>Red Line</strong> to Metro Center (3 stops, 6 min)</li>
-                                    <li><strong>Transfer</strong> to Orange/Silver Line (2 min walk)</li>
-                                    <li><strong>Silver Line</strong> to Reagan National (6 stops, 28 min)</li>
-                                    <li>Next departure in 5 minutes, arrive by 3:45 PM</li>
-                                </ul>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- CTA Section -->
-        <section class="cta-section">
-            <div class="container">
-                <div class="cta-box">
-                    <h2>Start building transit-aware AI</h2>
-                    <p>
-                        Deploy in minutes, scale infinitely. Metro-MCP runs on Cloudflare Workers with 
-                        enterprise-grade reliability.
-                    </p>
-                    <div class="cta-group">
-                        <a href="https://github.com/Aarekaz/metro-mcp" class="btn btn-primary">
-                            View Documentation →
-                        </a>
-                        <a href="https://github.com/Aarekaz/metro-mcp#quick-start" class="btn btn-secondary">
-                            Quick Start Guide
-                        </a>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Tech Stack -->
-        <section class="tech-stack">
-            <div class="container">
-                <div class="tech-stack-title">Built with modern technologies</div>
-                <div class="tech-badges">
-                    <div class="tech-badge">
-                        <span>TypeScript</span>
-                    </div>
-                    <div class="tech-badge">
-                        <span>Cloudflare Workers</span>
-                    </div>
-                    <div class="tech-badge">
-                        <span>MCP Protocol</span>
-                    </div>
-                    <div class="tech-badge">
-                        <span>WMATA API</span>
-                    </div>
-                    <div class="tech-badge">
-                        <span>MTA API</span>
-                    </div>
-                </div>
-            </div>
-        </section>
-    </main>
-
-    <footer>
-        <div class="container">
-            <div class="footer-content">
-                <div class="footer-logo">
-                    <img src="/metro-mcp-slick.svg" alt="Metro-MCP Logo">
-                    metro-mcp
-                </div>
-                <ul class="footer-links">
-                    <li><a href="https://github.com/Aarekaz/metro-mcp">GitHub</a></li>
-                    <li><a href="https://github.com/Aarekaz/metro-mcp#documentation">Documentation</a></li>
-                    <li><a href="https://github.com/Aarekaz/metro-mcp/issues">Support</a></li>
-                    <li><a href="https://github.com/Aarekaz/metro-mcp/blob/main/LICENSE">License</a></li>
-                </ul>
-            </div>
-            <div class="footer-copy">
-                © 2026 Metro-MCP • Built by <a href="https://github.com/Aarekaz" style="color: var(--color-accent); text-decoration: none;">Anurag Dhungana</a> • MIT License
-            </div>
+      <div class="hero">
+        <h1>Plug your LLM into the <span class="accent">subway</span>.</h1>
+        <p class="subtitle">DC Metro and NYC Subway via the Model Context Protocol. Connect any MCP client to live arrivals, incidents, and 594 stations.</p>
+        <div class="cta-row">
+          <button type="button" class="url-pill" data-copy-url="https://metro-mcp.anuragd.me/mcp" aria-label="Copy MCP server URL">
+            <span class="url-text">metro-mcp.anuragd.me/mcp</span>
+            <span class="url-status" aria-hidden="true">Copy</span>
+          </button>
+          <button type="button" class="cta-button" data-open-install>Add to LLM</button>
         </div>
-    </footer>
+        <p class="footnote">Works with Claude · Cursor · Codex · Gemini</p>
+      </div>
+    </section>
 
-    <script>
-        // Theme Toggle
-        const themeToggle = document.querySelector('.theme-toggle');
-        const sunIcon = document.querySelector('.sun-icon');
-        const moonIcon = document.querySelector('.moon-icon');
-        const html = document.documentElement;
+    <section class="chat-section" aria-hidden="true">
+      <p class="chat-label">See it in action</p>
+      <div class="chat-panel">
+        <div class="chat-head">
+          <span class="dot-live"></span>
+          <span class="chat-title">metro-mcp</span>
+          <span class="chat-meta">&middot; connected to your LLM</span>
+          <span class="chat-spacer"></span>
+          <button type="button" class="chat-replay" data-replay aria-label="Replay current demo">&#8635;</button>
+        </div>
+        <div class="chat-body" data-chat-body></div>
+        <div class="chat-dots" role="tablist">
+          <button type="button" class="chat-dot active" data-scene="0" aria-label="Demo 1: on-time check"></button>
+          <button type="button" class="chat-dot" data-scene="1" aria-label="Demo 2: delays"></button>
+          <button type="button" class="chat-dot" data-scene="2" aria-label="Demo 3: weekend service"></button>
+          <button type="button" class="chat-dot" data-scene="3" aria-label="Demo 4: accessibility"></button>
+          <button type="button" class="chat-dot" data-scene="4" aria-label="Demo 5: train arrivals"></button>
+          <button type="button" class="chat-dot" data-scene="5" aria-label="Demo 6: bus tracking"></button>
+        </div>
+      </div>
+    </section>
+  </main>
 
-        // Check for saved theme preference or default to 'dark'
-        const currentTheme = localStorage.getItem('theme') || 'dark';
-        html.setAttribute('data-theme', currentTheme);
-        
-        if (currentTheme === 'light') {
-            sunIcon.style.display = 'none';
-            moonIcon.style.display = 'block';
+  <footer>
+    <span>© 2026 Anurag Dhungana</span>
+    <span class="dot-sep">·</span>
+    <span>MIT</span>
+  </footer>
+
+  <dialog id="install-dialog" aria-labelledby="install-title">
+    <div class="dialog-inner">
+      <header class="dialog-header">
+        <h2 id="install-title">Add metro-mcp to your MCP client</h2>
+        <button type="button" class="dialog-close" data-close-install aria-label="Close">×</button>
+      </header>
+      <p class="dialog-subtitle">Paste the snippet for your client.</p>
+
+      <div role="tablist" aria-label="Client" class="tabs">
+        <button role="tab" aria-selected="true" aria-controls="tab-claude" id="tab-btn-claude" data-tab="claude" tabindex="0">Claude Desktop</button>
+        <button role="tab" aria-selected="false" aria-controls="tab-cursor" id="tab-btn-cursor" data-tab="cursor" tabindex="-1">Cursor</button>
+        <button role="tab" aria-selected="false" aria-controls="tab-codex" id="tab-btn-codex" data-tab="codex" tabindex="-1">Codex CLI</button>
+        <button role="tab" aria-selected="false" aria-controls="tab-generic" id="tab-btn-generic" data-tab="generic" tabindex="-1">Generic JSON</button>
+      </div>
+
+      <div role="tabpanel" id="tab-claude" aria-labelledby="tab-btn-claude">
+        <p class="tab-help">Add to <code>~/Library/Application Support/Claude/claude_desktop_config.json</code></p>
+        <pre><code>{
+  "mcpServers": {
+    "metro-mcp": {
+      "url": "https://metro-mcp.anuragd.me/mcp"
+    }
+  }
+}</code></pre>
+        <button type="button" class="copy-snippet">Copy</button>
+      </div>
+
+      <div role="tabpanel" id="tab-cursor" aria-labelledby="tab-btn-cursor" hidden>
+        <p class="tab-help">Add to <code>~/.cursor/mcp.json</code></p>
+        <pre><code>{
+  "mcpServers": {
+    "metro-mcp": {
+      "url": "https://metro-mcp.anuragd.me/mcp"
+    }
+  }
+}</code></pre>
+        <button type="button" class="copy-snippet">Copy</button>
+      </div>
+
+      <div role="tabpanel" id="tab-codex" aria-labelledby="tab-btn-codex" hidden>
+        <p class="tab-help">Run in your terminal</p>
+        <pre><code>codex mcp add metro-mcp https://metro-mcp.anuragd.me/mcp</code></pre>
+        <button type="button" class="copy-snippet">Copy</button>
+      </div>
+
+      <div role="tabpanel" id="tab-generic" aria-labelledby="tab-btn-generic" hidden>
+        <p class="tab-help">For any MCP client following the Streamable HTTP convention</p>
+        <pre><code>{
+  "name": "metro-mcp",
+  "url": "https://metro-mcp.anuragd.me/mcp",
+  "transport": "streamable-http"
+}</code></pre>
+        <button type="button" class="copy-snippet">Copy</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const toast = document.getElementById('toast');
+      let toastTimer = null;
+      const showToast = (msg) => {
+        toast.textContent = msg;
+        toast.dataset.show = 'true';
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { toast.dataset.show = 'false'; }, 1500);
+      };
+
+      const copy = async (text) => {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch {
+          // Fallback for non-secure contexts (rare; the prod site is HTTPS).
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); return true; }
+          catch { return false; }
+          finally { document.body.removeChild(ta); }
         }
+      };
 
-        themeToggle.addEventListener('click', () => {
-            const theme = html.getAttribute('data-theme');
-            const newTheme = theme === 'dark' ? 'light' : 'dark';
-            
-            html.setAttribute('data-theme', newTheme);
-            localStorage.setItem('theme', newTheme);
-            
-            if (newTheme === 'light') {
-                sunIcon.style.display = 'none';
-                moonIcon.style.display = 'block';
-            } else {
-                sunIcon.style.display = 'block';
-                moonIcon.style.display = 'none';
+      // URL pill: click anywhere copies the configured URL.
+      document.querySelectorAll('[data-copy-url]').forEach((el) => {
+        el.addEventListener('click', async () => {
+          const url = el.getAttribute('data-copy-url');
+          const ok = await copy(url);
+          if (!ok) { showToast('Copy failed'); return; }
+          el.dataset.copied = 'true';
+          const status = el.querySelector('.url-status');
+          if (status) status.textContent = 'Copied';
+          showToast('Copied · paste into your MCP client');
+          setTimeout(() => {
+            delete el.dataset.copied;
+            if (status) status.textContent = 'Copy';
+          }, 1500);
+        });
+      });
+
+      // ── Modal open/close ──────────────────────────────────
+      const dialog = document.getElementById('install-dialog');
+      const openModal = () => {
+        dialog.showModal();
+        const selected = dialog.querySelector('[role="tab"][aria-selected="true"]');
+        if (selected) selected.focus();
+      };
+      const closeModal = () => dialog.close();
+
+      document.querySelectorAll('[data-open-install]').forEach((btn) => {
+        btn.addEventListener('click', openModal);
+      });
+      document.querySelectorAll('[data-close-install]').forEach((btn) => {
+        btn.addEventListener('click', closeModal);
+      });
+      // <dialog> handles Esc natively. Backdrop click → close.
+      dialog.addEventListener('click', (e) => {
+        if (e.target === dialog) closeModal();
+      });
+
+      // ── Tab switching with arrow-key support ──────────────
+      const tabs = Array.from(dialog.querySelectorAll('[role="tab"]'));
+      const panels = Array.from(dialog.querySelectorAll('[role="tabpanel"]'));
+      const selectTab = (idx) => {
+        tabs.forEach((t, i) => {
+          const selected = i === idx;
+          t.setAttribute('aria-selected', selected ? 'true' : 'false');
+          t.tabIndex = selected ? 0 : -1;
+          if (selected) t.focus();
+        });
+        panels.forEach((p, i) => { p.hidden = i !== idx; });
+      };
+      tabs.forEach((tab, i) => {
+        tab.addEventListener('click', () => selectTab(i));
+        tab.addEventListener('keydown', (e) => {
+          if (e.key === 'ArrowRight') { e.preventDefault(); selectTab((i + 1) % tabs.length); }
+          if (e.key === 'ArrowLeft')  { e.preventDefault(); selectTab((i - 1 + tabs.length) % tabs.length); }
+          if (e.key === 'Home')        { e.preventDefault(); selectTab(0); }
+          if (e.key === 'End')         { e.preventDefault(); selectTab(tabs.length - 1); }
+        });
+      });
+
+      // ── Snippet copy buttons inside each tabpanel ─────────
+      document.querySelectorAll('.copy-snippet').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const code = btn.parentElement.querySelector('pre code');
+          if (!code) return;
+          const ok = await copy(code.textContent.trim());
+          const original = btn.textContent;
+          btn.textContent = ok ? 'Copied' : 'Copy failed';
+          setTimeout(() => { btn.textContent = original; }, 1500);
+        });
+      });
+
+      // ── Chat demo carousel ────────────────────────────────
+      // SCENES is a hardcoded marketing-content array. It is NEVER mutated at
+      // runtime, NEVER reads from user input / URL params / fetched data, and
+      // is the only source threaded into the innerHTML writes below. If you
+      // ever want to populate the demo from a live source, switch to
+      // createElement + textContent or sanitize with DOMPurify first.
+      const SCENES = [
+        // 1 — Real-life "can I make it?" (most natural opener — LLM has to reason)
+        {
+          user: "I'm at Union Square. Can I make it to Grand Central in 20 min?",
+          tool: {
+            name: 'get_station_predictions',
+            args: '{ <span class="json-key">"city"</span>: <span class="json-str">"nyc"</span>, <span class="json-key">"stationName"</span>: <span class="json-str">"Union Square"</span> }',
+            ms: 280
+          },
+          response:
+            'Yes &mdash; the next ' +
+            '<span class="line-badge" style="background:#00933C">4</span>' +
+            '<span class="line-badge" style="background:#00933C">5</span>' +
+            '<span class="line-badge" style="background:#00933C">6</span> trains uptown are in ' +
+            '<strong>2 min</strong>, <strong>5 min</strong>, and <strong>8 min</strong>. ' +
+            'With a 6-minute ride to Grand Central, you\'ll arrive in 8&ndash;14 min.'
+        },
+        // 2 — Common worry: "any delays?"
+        {
+          user: 'Are there delays on the Blue Line right now?',
+          tool: {
+            name: 'get_incidents',
+            args: '{ <span class="json-key">"city"</span>: <span class="json-str">"dc"</span> }',
+            ms: 180
+          },
+          response:
+            'Yes &mdash; there\'s an active delay at <strong>L\'Enfant Plaza</strong> affecting ' +
+            '<span class="line-badge" style="background:#009CDE">BL</span> and ' +
+            '<span class="line-badge" style="background:#FCD000;color:#0a2540">YL</span>. ' +
+            'Expect about <strong>+5 min</strong> on your trip through evening rush.'
+        },
+        // 3 — Friday afternoon: "any weekend service changes?"
+        {
+          user: 'Any service changes on the L train this weekend?',
+          tool: {
+            name: 'get_incidents',
+            args: '{ <span class="json-key">"city"</span>: <span class="json-str">"nyc"</span> }',
+            ms: 200
+          },
+          response:
+            'Yes &mdash; the <span class="line-badge" style="background:#A7A9AC;color:#0a2540">L</span> is running every 8 min between 8th Ave and Bedford Ave ' +
+            '(vs the usual 5). Limited service to Canarsie all weekend.'
+        },
+        // 4 — Accessibility: "are the elevators working?"
+        {
+          user: 'Are all elevators working at Union Station?',
+          tool: {
+            name: 'get_elevator_incidents',
+            args: '{ <span class="json-key">"city"</span>: <span class="json-str">"dc"</span> }',
+            ms: 150
+          },
+          response:
+            'All 4 elevators at <strong>Union Station</strong> are operational. No reported outages.'
+        },
+        // 5 — Specific: "when's the next 1 train?"
+        {
+          user: "When's the next 1 train at Times Square?",
+          tool: {
+            name: 'get_station_predictions',
+            args: '{ <span class="json-key">"city"</span>: <span class="json-str">"nyc"</span>, <span class="json-key">"stationName"</span>: <span class="json-str">"Times Square"</span> }',
+            ms: 240
+          },
+          response:
+            'The next <span class="line-badge" style="background:#EE352E">1</span> trains at <strong>Times Square &mdash; 42 St</strong>:' +
+            '<ul>' +
+              '<li><strong>3 min</strong> &nbsp;&middot;&nbsp; downtown to South Ferry</li>' +
+              '<li><strong>8 min</strong> &nbsp;&middot;&nbsp; uptown to Van Cortlandt Park</li>' +
+              '<li><strong>11 min</strong> &nbsp;&middot;&nbsp; downtown to South Ferry</li>' +
+            '</ul>'
+        },
+        // 6 — API-feeling: "where are the 30N buses?"
+        {
+          user: 'Where are the 30N buses right now?',
+          tool: {
+            name: 'get_bus_positions',
+            args: '{ <span class="json-key">"routeId"</span>: <span class="json-str">"30N"</span> }',
+            ms: 320
+          },
+          response:
+            'Three <span class="line-badge" style="background:#0a2540">30N</span> buses are in service:' +
+            '<ul>' +
+              '<li>One at <strong>16th &amp; K</strong> &mdash; northbound, 0.4 mi away</li>' +
+              '<li>One near <strong>Lincoln Memorial</strong></li>' +
+              '<li>One near <strong>Pentagon</strong></li>' +
+            '</ul>' +
+            'Closest northbound arrives in ~6 min.'
+        }
+      ];
+
+      const TIMING = {
+        type: 26,         // ms per char (user typing)
+        afterType: 350,
+        toolMin: 600,
+        afterTool: 380,
+        afterResponse: 4200
+      };
+
+      const chatBody = document.querySelector('[data-chat-body]');
+      const dots = Array.from(document.querySelectorAll('.chat-dot'));
+      const replayBtn = document.querySelector('[data-replay]');
+      const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      let currentScene = 0;
+      let runToken = 0;             // bumps to cancel in-flight scenes
+      let isPaused = !chatBody;     // pause if chat panel missing
+
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      const setActiveDot = (idx) => {
+        dots.forEach((d, i) => d.classList.toggle('active', i === idx));
+      };
+
+      const renderUserMsg = (text, withCaret) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'msg';
+        wrap.innerHTML =
+          '<span class="avatar user">U</span>' +
+          '<div class="content">' +
+            '<div class="role">You</div>' +
+            '<div class="body' + (withCaret ? ' caret' : '') + '">' + text + '</div>' +
+          '</div>';
+        chatBody.appendChild(wrap);
+        return wrap;
+      };
+
+      const renderToolMsg = (tool) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'msg';
+        wrap.innerHTML =
+          '<span class="avatar assistant">M</span>' +
+          '<div class="content">' +
+            '<div class="role">Your LLM &middot; using metro-mcp</div>' +
+            '<div class="tool-card">' +
+              '<div class="tool-head">' +
+                '<span class="arrow">&rarr;</span>' +
+                '<span class="tool-name">' + tool.name + '</span>' +
+                '<span class="tool-tag pending" data-tag>PENDING</span>' +
+              '</div>' +
+              '<div class="tool-body">' + tool.args + '</div>' +
+            '</div>' +
+          '</div>';
+        chatBody.appendChild(wrap);
+        return wrap;
+      };
+
+      const renderAssistantMsg = (html) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'msg';
+        wrap.innerHTML =
+          '<span class="avatar assistant">M</span>' +
+          '<div class="content">' +
+            '<div class="role">Your LLM</div>' +
+            '<div class="body">' + html + '</div>' +
+          '</div>';
+        chatBody.appendChild(wrap);
+        return wrap;
+      };
+
+      // Cancellable type-out — yields control every char so a token bump halts it.
+      const typeOut = async (el, text, token) => {
+        if (prefersReducedMotion) {
+          el.textContent = text;
+          return;
+        }
+        for (let i = 0; i <= text.length; i++) {
+          if (token !== runToken) return;
+          el.textContent = text.slice(0, i);
+          await wait(TIMING.type);
+        }
+      };
+
+      const playScene = async (idx) => {
+        runToken++;
+        const token = runToken;
+        const scene = SCENES[idx];
+        chatBody.innerHTML = '';
+        setActiveDot(idx);
+
+        // 1. User message — types in
+        const userEl = renderUserMsg('', true);
+        const userBody = userEl.querySelector('.body');
+        await typeOut(userBody, scene.user, token);
+        if (token !== runToken) return;
+        userBody.classList.remove('caret');
+        await wait(TIMING.afterType);
+        if (token !== runToken) return;
+
+        // 2. Tool call appears (PENDING), then flips to DONE
+        const toolEl = renderToolMsg(scene.tool);
+        await wait(Math.max(scene.tool.ms, TIMING.toolMin));
+        if (token !== runToken) return;
+        const tag = toolEl.querySelector('[data-tag]');
+        tag.classList.remove('pending');
+        tag.classList.add('ok');
+        tag.textContent = 'DONE · ' + scene.tool.ms + ' ms';
+        await wait(TIMING.afterTool);
+        if (token !== runToken) return;
+
+        // 3. Assistant response — inserted, fades in via .msg animation
+        renderAssistantMsg(scene.response);
+        await wait(TIMING.afterResponse);
+        if (token !== runToken) return;
+
+        // 4. Advance unless paused (e.g. user clicked a dot during the wait)
+        const next = (idx + 1) % SCENES.length;
+        currentScene = next;
+        if (!isPaused) playScene(next);
+      };
+
+      // Dot clicks — jump to scene
+      dots.forEach((dot, i) => {
+        dot.addEventListener('click', () => {
+          currentScene = i;
+          playScene(i);
+        });
+      });
+      // Replay current scene
+      if (replayBtn) {
+        replayBtn.addEventListener('click', () => playScene(currentScene));
+      }
+
+      // Pause when out of viewport (saves CPU on long-running pages)
+      if ('IntersectionObserver' in window && chatBody) {
+        const io = new IntersectionObserver((entries) => {
+          for (const entry of entries) {
+            const wasPaused = isPaused;
+            isPaused = !entry.isIntersecting;
+            if (wasPaused && !isPaused) {
+              // Resume — replay from current scene
+              playScene(currentScene);
             }
-        });
+          }
+        }, { threshold: 0.2 });
+        io.observe(chatBody);
+      }
 
-        // Mobile Menu
-        const hamburger = document.querySelector('.hamburger');
-        const mobileMenu = document.querySelector('.mobile-menu');
-        const mobileOverlay = document.querySelector('.mobile-overlay');
-        const mobileLinks = document.querySelectorAll('.mobile-menu a');
-
-        hamburger.addEventListener('click', () => {
-            hamburger.classList.toggle('active');
-            mobileMenu.classList.toggle('active');
-            mobileOverlay.classList.toggle('active');
-        });
-
-        mobileOverlay.addEventListener('click', () => {
-            hamburger.classList.remove('active');
-            mobileMenu.classList.remove('active');
-            mobileOverlay.classList.remove('active');
-        });
-
-        mobileLinks.forEach(link => {
-            link.addEventListener('click', () => {
-                hamburger.classList.remove('active');
-                mobileMenu.classList.remove('active');
-                mobileOverlay.classList.remove('active');
-            });
-        });
-
-        // Terminal Tabs
-        const terminalTabs = document.querySelectorAll('.terminal-tab');
-        const terminalPanels = document.querySelectorAll('.terminal-panel');
-
-        terminalTabs.forEach(tab => {
-            tab.addEventListener('click', () => {
-                const targetTab = tab.getAttribute('data-tab');
-                
-                terminalTabs.forEach(t => t.classList.remove('active'));
-                terminalPanels.forEach(p => p.classList.remove('active'));
-                
-                tab.classList.add('active');
-                document.getElementById(targetTab).classList.add('active');
-            });
-        });
-
-        // Copy Button
-        document.querySelectorAll('.copy-btn').forEach(btn => {
-            btn.addEventListener('click', async () => {
-                const textToCopy = btn.getAttribute('data-copy');
-                
-                try {
-                    await navigator.clipboard.writeText(textToCopy);
-                    btn.classList.add('copied');
-                    
-                    setTimeout(() => {
-                        btn.classList.remove('copied');
-                    }, 2000);
-                } catch (err) {
-                    console.error('Failed to copy text:', err);
-                }
-            });
-        });
-
-        // Intersection Observer for Animations
-        const observerOptions = {
-            threshold: 0.1,
-            rootMargin: '0px 0px -50px 0px'
-        };
-
-        const observer = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    entry.target.classList.add('visible');
-                }
-            });
-        }, observerOptions);
-
-        document.querySelectorAll('.stat-item, .feature-card, .tool-card, .example-card').forEach(el => {
-            observer.observe(el);
-        });
-
-        // Animated Counters
-        const animateCounter = (element, target) => {
-            const duration = 2000;
-            const start = 0;
-            const increment = target / (duration / 16);
-            let current = start;
-
-            const timer = setInterval(() => {
-                current += increment;
-                if (current >= target) {
-                    element.textContent = target;
-                    clearInterval(timer);
-                } else {
-                    element.textContent = Math.floor(current);
-                }
-            }, 16);
-        };
-
-        const statObserver = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    const numberElement = entry.target.querySelector('.stat-number');
-                    const target = parseInt(numberElement.getAttribute('data-target'));
-                    animateCounter(numberElement, target);
-                    statObserver.unobserve(entry.target);
-                }
-            });
-        }, observerOptions);
-
-        document.querySelectorAll('.stat-item').forEach(item => {
-            statObserver.observe(item);
-        });
-
-        // Collapsible Examples
-        document.querySelectorAll('.example-header').forEach(header => {
-            header.addEventListener('click', () => {
-                const card = header.closest('.example-card');
-                card.classList.toggle('expanded');
-            });
-        });
-
-        // Smooth Scroll
-        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-            anchor.addEventListener('click', function (e) {
-                e.preventDefault();
-                const target = document.querySelector(this.getAttribute('href'));
-                if (target) {
-                    target.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'start'
-                    });
-                }
-            });
-        });
-    </script>
+      // Kick off
+      if (chatBody) playScene(0);
+    })();
+  </script>
 </body>
 </html>

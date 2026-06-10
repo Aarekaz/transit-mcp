@@ -1,30 +1,34 @@
 {
   "name": "metro-mcp",
-  "version": "3.1.1",
+  "version": "4.0.0",
   "description": "MCP server for US transit systems (DC Metro, NYC Subway) on Cloudflare Workers",
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "build": "tsc",
+    "build": "echo 'no build step needed: wrangler bundles src/index.ts directly via esbuild. Type-check runs via `bun run type-check` locally or in a separate CI job.'",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
-    "lint": "tsc --noEmit",
-    "type-check": "tsc --noEmit"
+    "lint": "NODE_OPTIONS=--max-old-space-size=12288 tsc --noEmit",
+    "type-check": "NODE_OPTIONS=--max-old-space-size=12288 tsc --noEmit"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^0.0.6",
-    "gtfs-realtime-bindings": "^1.1.1"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "agents": "0.13.3",
+    "gtfs-realtime-bindings": "^1.1.1",
+    "zod": "3.25.76"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.16.10",
     "@cloudflare/workers-types": "^4.20241218.0",
     "@vitest/coverage-v8": "^2.1.8",
     "@vitest/ui": "^2.1.8",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8",
-    "wrangler": "^4.28.1"
+    "wrangler": "^4.99.0"
   },
   "keywords": [
     "mcp",

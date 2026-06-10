@@ -5,6 +5,203 @@ All notable changes to Metro MCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] - Durable Objects rearchitect via cloudflare/agents McpAgent
+
+A foundational rewrite of how Metro MCP serves sessions. The MCP API
+surface stays additive (clients keep working unchanged), but the
+infrastructure underneath the `/mcp` and `/sse` endpoints is replaced.
+
+### Why a major bump
+
+The KV-backed, request-per-message session model from 3.x is replaced
+by a Durable Object that holds the session for its lifetime. This
+unlocks capabilities the MCP 2025-06-18 spec assumes a server can do
+but the old infra couldn't: server-initiated push, resumability,
+elicitations, subscribable resources.
+
+### Added
+
+#### Durable Object-backed sessions (cloudflare/agents `McpAgent`)
+- New `MetroMcpAgent` class extends `agents/mcp`'s `McpAgent`, which
+  itself extends `Agent → DurableObject`. One DO instance per
+  `Mcp-Session-Id`.
+- Hibernatable WebSocket transport — DO evicts while idle, no
+  billing during quiet periods. Wakes on incoming messages.
+- `DurableObjectEventStore` — built into McpAgent — handles
+  `Last-Event-ID` replay for resumable streams.
+- `MCP_SESSION` DO binding in `wrangler.jsonc` with first-time
+  migration `tag: "v1", new_sqlite_classes: ["MetroMcpAgent"]`.
+
+#### New MCP capabilities (resources, prompts, elicitations, progress)
+- **Resources** — three `transit://` URI templates:
+  - `transit://stations/{city}/{id}` — station metadata
+  - `transit://routes/{city}/{id}` — route info
+  - `transit://incidents/{city}` — live service advisories
+  - `resources/list` for the incidents template; stations/routes
+    omit list because the catalog is large (use tools to discover).
+  - `resources/subscribe` is declared at the SDK level but the
+    incident poller that fans out `notifications/resources/updated`
+    arrives with Phase 2.5.
+
+- **Prompts** — three canned templates:
+  - `service-briefing(city, lineCode?)` — 3-sentence status briefing
+  - `commute-planner(city, from, to)` — multi-step real-time plan
+  - `accessibility-check(stationNames)` — DC elevator outage scan
+
+- **Elicitations** — `elicitation/create` is now used in
+  `get_station_predictions`. When a station name resolves to multiple
+  matches (e.g., "Times Square" → 127, R16, 725), the server asks the
+  user which one instead of silently picking the first. Clients that
+  don't declare elicitation capability fall back to the legacy
+  first-match behavior automatically.
+
+- **Progress notifications** — `notifications/progress` for
+  `get_all_stations` when the client opts in via
+  `params._meta.progressToken`. Two checkpoints: "Fetching…" and
+  "Normalizing…". The NYC catalog is ~600 stations so the visibility
+  matters for long-running clients.
+
+#### Honesty in transport advertisement
+- `supportsServerPush: true` (was `false` — hibernatable WS push works)
+- `supportsResumability: true` (was `false` — DurableObjectEventStore)
+- `note` tightened to reflect actual DO-backed transport
+
+### Changed
+
+#### Infrastructure
+- `wrangler.toml` → `wrangler.jsonc`. IDE schema validation,
+  inline comments, no nested-table indent sensitivity.
+- `compatibility_date: "2025-12-25"` → `"2026-04-07"` for the
+  hibernatable WebSocket auto-Close-reply runtime behavior.
+- `MCP_SESSIONS` KV namespace deprecated. Sessions live in the DO.
+  KV binding kept as optional during the drain window
+  (existing 24h-TTL entries are harmless); remove in 4.1.
+
+#### Tool implementation
+- All 13 tools migrated from the hand-rolled `MCP_TOOLS` array +
+  `MCPHandler.handleToolCall` switch to `server.registerTool(...)`
+  calls inside `MetroMcpAgent.init()`.
+- Schemas now expressed in Zod (the SDK's idiomatic path), which
+  derives JSON Schema automatically.
+- Tool result shape preserved exactly from 3.2.0:
+  `{ content: [...], structuredContent: {...} }`.
+
+#### Build / DX
+- Node `--max-old-space-size=12288` baked into `build`, `lint`,
+  `type-check` scripts. Zod's deep generic inference for the SDK's
+  `registerTool` signature OOMs at the default 4GB heap once you
+  have 14+ typed tool handlers. GitHub Actions default runners
+  default to 7GB — bump there if you use CI. Long-term fix is
+  project references or switching to AnySchema.
+- `package.json` 3.2.0 → 4.0.0.
+
+### Removed
+
+- `src/mcp-handler.ts` — replaced by `MetroMcpAgent.init()` handlers
+- `src/mcp-tools.ts` — tools registered inline now
+- `src/mcp-types.ts` — no longer used (SDK provides equivalents)
+- `src/utils/sse-formatter.ts` — SDK handles SSE framing
+- `src/utils/` — empty after the above
+- `tests/unit/mcp-tools.test.ts` — 16 tests against the deleted array;
+  type-check now enforces tool shape via the SDK's registerTool generics
+- The POST `/` MCP alias. Clients use `/mcp` (recommended) or `/sse`.
+
+### Deferred to Phase 2.5
+
+- **DO-runtime tests** via `@cloudflare/vitest-pool-workers`. The
+  dependency is installed and ready; integration tests against a
+  miniflare workers runtime land in a follow-up PR so they can be
+  exercised against a real staging deploy. The existing 103 unit
+  tests (auth, RFC 8707 audience binding, middleware, config) cover
+  the highest-risk non-MCP code paths.
+- **Incident poller** that publishes `notifications/resources/updated`
+  to subscribers of `transit://incidents/{city}`. Needs a Cron-triggered
+  DO that polls upstream feeds and fans out — non-trivial design.
+  Until then, incident resources are read-on-request.
+
+### Backwards compatibility
+
+- MCP API surface: every tool keeps its name, inputs, outputs, and the
+  `content + structuredContent` result shape. Phase 1's tool annotations
+  and outputSchema declarations are preserved (now via the SDK's typed
+  API rather than the static array).
+- OAuth flow: unchanged. RFC 8707 audience binding from 3.2.0 continues
+  to work; the verified user identity flows into the DO via `ctx.props`.
+- JWT tokens issued under 3.x stay valid for their remaining 90-day TTL.
+- Existing client integrations (Claude Desktop, mcp-cli, etc.) need no
+  changes.
+
+### Migration steps for self-hosters
+
+1. `bun install` (or `npm install`) to pick up the new deps.
+2. `cp wrangler.jsonc.example wrangler.jsonc` if running fresh; the
+   existing config is straightforward to translate.
+3. Set `compatibility_date: "2026-04-07"`.
+4. Add the `durable_objects` and `migrations` blocks (see
+   `wrangler.jsonc.example`).
+5. `bunx wrangler deploy` — the migration runs automatically and
+   creates the `MetroMcpAgent` namespace.
+6. The `MCP_SESSIONS` KV namespace is no longer referenced and can be
+   deleted in a follow-up once any in-flight sessions have drained.
+
+---
+
+## [3.2.0] - MCP 2025-06-18 alignment + RFC 8707 audience binding
+
+### Added
+
+#### MCP 2025-06-18 surface
+- Tool `title` (human-readable display name, separate from machine `name`)
+- Tool `annotations`: `readOnlyHint`, `idempotentHint`, `openWorldHint` declared on
+  every tool. All Metro MCP tools are read-only live-data queries.
+- Tool `outputSchema` declared for every tool. Clients can validate responses
+  and integrate typed data without re-parsing.
+- Tool results now emit `structuredContent` alongside `content`. The text
+  payload is the JSON serialization of `structuredContent`, per spec SHOULD.
+- Normalized prediction shape: `minutesAway: integer | null` +
+  `arrivalStatus: 'ARRIVING' | 'BOARDING' | 'DELAYED' | 'SCHEDULED'` instead
+  of the mixed `"3 min" | "ARR"` string. Clients can now sort/compare and
+  render however they want.
+
+#### RFC 8707 — Resource Indicators (audience binding)
+- `/authorize` accepts an optional `resource` parameter (must be an absolute URI)
+- Tokens issued from such flows carry a JWT `aud` claim bound to the canonical
+  MCP resource URI (`{scheme}://{host}/mcp`).
+- Each authenticated request verifies that the token's audience matches the
+  request's canonical resource. Mismatch → 401.
+- `/.well-known/oauth-authorization-server` now advertises
+  `resource_indicators_supported: true`.
+
+#### Honesty in the transport advertisement
+- Server-info now distinguishes:
+  - `supportsSSEResponses: true` — POST → SSE response format works
+  - `supportsServerPush: false` — persistent GET-stream push is not implemented
+  - `supportsResumability: false` — Last-Event-ID replay is not implemented
+
+### Changed
+
+- Single source of truth for `SERVER_VERSION` and `MCP_PROTOCOL_VERSION` in
+  `src/config.ts`. Removed hardcoded `'3.1.3'` and `'2025-06-18'` strings from
+  `router.ts` and `mcp-handler.ts`.
+- `package.json` version bumped 3.1.1 → 3.2.0.
+
+### Deprecation timeline
+
+- **Legacy tokens (no `aud` claim) are grandfathered.** They continue to work
+  with a `console.warn` deprecation log until their natural 90-day TTL expires.
+  Re-authenticate with a `resource` parameter to bind future tokens.
+- Clients SHOULD send `resource={mcp_endpoint}` on `/authorize`. Future major
+  versions may require it.
+
+### Backwards compatibility
+
+- All new tool fields (`title`, `annotations`, `outputSchema`, `structuredContent`)
+  are additive. Clients that only know MCP 2025-03-26 keep reading `content[0].text`
+  unchanged.
+- The text payload is now the serialization of `structuredContent` (per spec).
+  It is no longer pretty-printed with 2-space indentation — clients that parse
+  it as JSON are unaffected; clients that displayed it raw will see compact JSON.
+
 ## [Unreleased] - Security and Testing Improvements
 
 ### Added

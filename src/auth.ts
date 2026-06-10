@@ -104,12 +104,18 @@ export class AuthManager {
       typ: 'JWT'
     };
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       userId: session.userId,
       userLogin: session.userLogin,
       exp: session.expiresAt,
       iat: Math.floor(Date.now() / 1000)
     };
+    // RFC 8707 audience binding — only set when the token was issued with
+    // a `resource` parameter. Legacy tokens omit this and are accepted as
+    // un-audienced (with a deprecation warning at verify time).
+    if (session.audience) {
+      payload.aud = session.audience;
+    }
 
     const encoder = new TextEncoder();
     const headerB64 = btoa(JSON.stringify(header)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
@@ -176,8 +182,46 @@ export class AuthManager {
     return {
       userId: payload.userId,
       userLogin: payload.userLogin,
-      expiresAt: payload.exp
+      expiresAt: payload.exp,
+      audience: typeof payload.aud === 'string' ? payload.aud : undefined
     };
+  }
+
+  /**
+   * Canonicalize a resource URI for audience comparison (RFC 8707).
+   * Lowercases host, strips trailing slashes, drops query/fragment.
+   */
+  static canonicalizeResource(uri: string): string {
+    try {
+      const u = new URL(uri);
+      const path = u.pathname.replace(/\/+$/, '') || '/';
+      return `${u.protocol}//${u.host.toLowerCase()}${path}`;
+    } catch {
+      return uri;
+    }
+  }
+
+  /**
+   * Derive the canonical MCP resource URI for an incoming request.
+   * All MCP-protected endpoints (/mcp, /sse, root POST) collapse to /mcp.
+   */
+  static expectedAudience(requestUrl: string): string {
+    const url = new URL(requestUrl);
+    return `${url.protocol}//${url.host.toLowerCase()}/mcp`;
+  }
+
+  /**
+   * Verify that a session's audience (if present) matches the request's
+   * canonical resource. Returns true if audience is absent (legacy token,
+   * grandfathered) or matches. Returns false on mismatch.
+   */
+  verifyAudience(session: AuthSession, requestUrl: string): boolean {
+    if (!session.audience) {
+      // Legacy token — accept, caller may log a deprecation warning.
+      return true;
+    }
+    const expected = AuthManager.expectedAudience(requestUrl);
+    return AuthManager.canonicalizeResource(session.audience) === expected;
   }
 
   // Extract token from request

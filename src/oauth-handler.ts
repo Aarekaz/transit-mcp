@@ -109,6 +109,9 @@ export class OAuthHandler {
       const codeChallenge = url.searchParams.get('code_challenge');
       const codeChallengeMethod = url.searchParams.get('code_challenge_method');
       const state = url.searchParams.get('state') || '';
+      // RFC 8707 — optional resource indicator. When provided, the issued
+      // token will be audience-bound to this URI.
+      const resourceParam = url.searchParams.get('resource');
 
       // Validate required parameters
       if (!clientId) {
@@ -167,6 +170,24 @@ export class OAuthHandler {
         });
       }
 
+      // Validate `resource` param shape — must be an absolute URI per RFC 8707.
+      // If malformed, treat as if not provided (legacy un-audienced flow).
+      let validatedResource: string | undefined;
+      if (resourceParam) {
+        try {
+          new URL(resourceParam);
+          validatedResource = AuthManager.canonicalizeResource(resourceParam);
+        } catch {
+          return new Response(JSON.stringify({
+            error: 'invalid_request',
+            error_description: 'resource parameter must be an absolute URI (RFC 8707)'
+          }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+      }
+
       const authManager = new AuthManager(env);
 
       // Generate OAuth state that includes MCP client info and PKCE challenge
@@ -176,6 +197,7 @@ export class OAuthHandler {
         codeChallenge,
         codeChallengeMethod,
         mcpState: state,
+        resource: validatedResource,
         exp: Date.now() + (5 * 60 * 1000)
       };
       const oauthState = await this.signStateData(pkcePayload, env);
@@ -282,12 +304,14 @@ export class OAuthHandler {
         });
       }
 
-      // Create session (expires in 90 days)
+      // Create session (expires in 90 days). Carries `audience` only when
+      // the original /authorize request included a `resource` parameter.
       const expiresAt = Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60);
       const session: AuthSession = {
         userId: authCodeData.userId,
         userLogin: authCodeData.userLogin,
-        expiresAt
+        expiresAt,
+        audience: authCodeData.resource
       };
 
       // Generate JWT token
@@ -464,6 +488,7 @@ export class OAuthHandler {
         clientId: pkceData.clientId,
         redirectUri: pkceData.redirectUri,
         codeChallenge: pkceData.codeChallenge,
+        resource: pkceData.resource,
         createdAt: Date.now()
       }), { expirationTtl: 600 });
 

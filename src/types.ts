@@ -63,18 +63,33 @@ export interface Env {
   RATE_LIMIT_KV?: KVNamespace;     // Optional for backward compatibility
 
   /**
-   * MCP session storage
+   * MCP session storage (legacy KV path).
    *
-   * WHY MCP SESSIONS:
-   * - Tracks active MCP connections with Mcp-Session-Id header
-   * - Stores session state for SSE event resumability
-   * - Automatic cleanup via TTL (24 hours)
-   *
-   * USAGE:
-   * await env.MCP_SESSIONS.put(`session:${sessionId}`, JSON.stringify(session), { expirationTtl: 86400 });
-   * const sessionData = await env.MCP_SESSIONS.get(`session:${sessionId}`);
+   * Sessions now live in the MetroMcpAgent Durable Object via the
+   * MCP_SESSION binding below. This KV binding is kept as optional so
+   * any existing values can drain (24h TTL) without a deploy-time
+   * binding error. Remove from wrangler.jsonc and this interface in a
+   * follow-up once observation confirms no live sessions remain.
    */
-  MCP_SESSIONS?: KVNamespace;      // Optional for backward compatibility
+  MCP_SESSIONS?: KVNamespace;
+
+  /**
+   * MCP session Durable Object namespace.
+   *
+   * Each MetroMcpAgent instance is one MCP session, addressed by the
+   * Mcp-Session-Id header. The DO holds the transport, event log, and
+   * any subscribed resources. cloudflare/agents' McpAgent base class
+   * wires this binding automatically when MetroMcpAgent.serve() is
+   * invoked with `{ binding: "MCP_SESSION" }`.
+   */
+  MCP_SESSION: DurableObjectNamespace;
+
+  /**
+   * Static assets fetcher (public/index.html landing page).
+   * The worker delegates unmatched GETs here so the landing page renders
+   * instead of 404ing.
+   */
+  ASSETS: Fetcher;
 
   // Optional Configuration
   ENVIRONMENT?: string;            // Environment name (development/staging/production)
@@ -114,6 +129,13 @@ export interface AuthSession {
   userId: string;        // GitHub user ID
   userLogin: string;     // GitHub username
   expiresAt: number;     // Unix timestamp (seconds)
+  /**
+   * Resource indicator (RFC 8707) bound to this token.
+   * When present, the request URL's canonical MCP resource MUST match this value.
+   * Absent on legacy tokens issued before audience binding was introduced —
+   * those are accepted with a deprecation warning until they expire.
+   */
+  audience?: string;
 }
 
 /**

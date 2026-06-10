@@ -1,24 +1,21 @@
 import { Env, AuthSession } from './types';
-import { MCPRequest, MCPResponse, MCPSession } from './mcp-types';
-import { MCPHandler } from './mcp-handler';
 import { OAuthHandler } from './oauth-handler';
 import { AuthManager, AuthError } from './auth';
-import { createSSEResponse } from './utils/sse-formatter';
+import { SERVER_VERSION, MCP_PROTOCOL_VERSION } from './config';
+import { MetroMcpAgent, Props } from './mcp-agent';
 
 export class Router {
-  private mcpHandler = new MCPHandler();
   private oauthHandler = new OAuthHandler();
 
 
   private getServerInfoResponse(): Response {
     return new Response(JSON.stringify({
       name: 'Metro MCP',
-      version: '3.1.3',
+      version: SERVER_VERSION,
       description: 'MCP server for US transit systems (DC Metro, NYC Subway)',
-      protocolVersion: '2025-06-18',
+      protocolVersion: MCP_PROTOCOL_VERSION,
       status: 'operational',
       timestamp: new Date().toISOString(),
-      lastUpdated: '2025-12-27',
       author: 'Anurag Dhungana',
       links: {
         author: 'https://anuragd.me',
@@ -69,9 +66,13 @@ export class Router {
       },
       transport: {
         type: 'streamable-http',  // MCP Streamable HTTP (2025-06-18)
-        note: 'NOT the deprecated SSE transport',
+        note: 'MCP Streamable HTTP transport. Sessions live in a Durable Object via cloudflare/agents McpAgent.',
         supportsJSON: true,
-        supportsSSE: true
+        supportsSSEResponses: true,
+        // Persistent server push: hibernatable WebSockets on the DO transport.
+        supportsServerPush: true,
+        // Last-Event-ID replay via DurableObjectEventStore.
+        supportsResumability: true
       },
       authentication: {
         type: 'OAuth 2.1',
@@ -101,7 +102,7 @@ export class Router {
     });
   }
 
-  async handleRequest(request: Request, env: Env): Promise<Response> {
+  async handleRequest(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     
     // Rate limiting check
@@ -164,7 +165,13 @@ export class Router {
         response_types_supported: ['code'],
         code_challenge_methods_supported: ['S256'],
         token_endpoint_auth_methods_supported: ['none', 'client_secret_post', 'client_secret_basic'],
-        scopes_supported: ['profile']
+        scopes_supported: ['profile'],
+        // RFC 8707 — declare that this server understands the `resource` parameter
+        // and issues audience-bound tokens when it is provided.
+        resource_indicators_supported: true
+        // RFC 9207 (iss on authorization response) intentionally NOT advertised:
+        // handleCallback only sets `code` + `state` on the redirect today.
+        // Re-enable once the callback also writes the `iss` parameter.
       }, null, 2), {
         headers: {
           'Content-Type': 'application/json',
@@ -190,417 +197,96 @@ export class Router {
       return this.oauthHandler.handleCallback(request, env);
     }
 
-    // Root path - return server info for GET, handle MCP for POST
-    if (url.pathname === '/') {
-      if (request.method === 'GET') {
-        // Return unauthenticated server info for validation and discovery
-        return this.getServerInfoResponse();
-      }
-      // POST requests to / are MCP protocol requests (require auth)
-      return this.handleMCPRequest(request, env);
-    }
-
-    // MCP Streamable HTTP endpoint (protected)
-    // Supports both /mcp (recommended) and /sse (legacy name)
-    // Note: This implements Streamable HTTP (2025-06-18), NOT the deprecated SSE transport
-    if (url.pathname === '/sse' || url.pathname === '/mcp') {
-      return this.handleSSE(request, env);
-    }
-
-    // Legacy compatibility - return server info for GET requests to other paths
-    if (request.method === 'GET') {
+    // JSON server-info — moved off `/` in 4.0 so the assets binding can
+    // serve the landing page (public/index.html). Discovery clients that
+    // want the structured payload hit /info; MCP clients use /mcp.
+    if (url.pathname === '/info' && request.method === 'GET') {
       return this.getServerInfoResponse();
     }
 
+    // MCP endpoint (protected). Both /mcp and /sse delegate to the same
+    // MetroMcpAgent with transport: "auto", which serves Streamable HTTP
+    // (POST <pathname>) and legacy SSE (GET <pathname> + POST <pathname>/message)
+    // from the same mount. The /sse alias is kept so clients that hardcoded
+    // the historical endpoint keep working.
+    const isMcp = url.pathname === '/mcp';
+    const isSse = url.pathname === '/sse' || url.pathname.startsWith('/sse/');
+    if (isMcp || isSse) {
+      return this.serveAgent(request, env, ctx, isSse ? '/sse' : '/mcp');
+    }
+
+    // Unmatched GETs → delegate to the static assets binding (landing page).
+    // Unmatched non-GET → 404.
+    if (request.method === 'GET') {
+      return env.ASSETS.fetch(request);
+    }
     return new Response('Not Found', { status: 404 });
   }
 
-  async handleMCPRequest(request: Request, env: Env): Promise<Response> {
-    // Validate Origin header to prevent DNS rebinding attacks
-    const origin = request.headers.get('Origin');
-    if (origin && !this.isValidOrigin(origin)) {
-      return this.createMCPErrorResponse(null, -32001, 'Forbidden', 'Invalid origin', 403);
-    }
-
-    // Check authentication for MCP endpoints
-    const authResult = await this.authenticateRequest(request, env);
-    if (!authResult.authenticated) {
-      const baseUrl = `${new URL(request.url).protocol}//${new URL(request.url).host}`;
-      return this.oauthHandler.addSecurityHeaders(new Response(
-        JSON.stringify({
-          jsonrpc: '2.0',
-          id: null,
-          error: {
-            code: -32001,
-            message: 'Unauthorized',
-            data: authResult.error || 'Authentication required'
-          }
-        }),
-        {
-          status: 401,
-          headers: {
-            'Content-Type': 'application/json',
-            'WWW-Authenticate': `Bearer realm="Metro MCP", authorization_uri="${baseUrl}/authorize", error="invalid_token"`
-          }
-        }
-      ));
-    }
-
-    if (request.method === 'POST') {
-      try {
-        const body = await request.json() as MCPRequest;
-
-        if (!body.jsonrpc || body.jsonrpc !== '2.0') {
-          return this.createMCPErrorResponse(body.id || 0, -32600, 'Invalid Request: Missing or invalid jsonrpc field');
-        }
-
-        const response = await this.mcpHandler.processMCPMethod(body, env);
-
-        // Per JSON-RPC 2.0 spec, notifications (methods starting with 'notifications/')
-        // should not receive responses. Return 204 No Content for notifications.
-        if (body.method?.startsWith('notifications/')) {
-          return this.oauthHandler.addSecurityHeaders(new Response(null, { status: 204 }));
-        }
-
-        const jsonResponse = new Response(JSON.stringify(response), {
-          headers: {
-            'Content-Type': 'application/json'
-          },
-        });
-        return this.oauthHandler.addSecurityHeaders(jsonResponse);
-      } catch (error) {
-        const errorResponse: MCPResponse = {
-          jsonrpc: '2.0',
-          id: 0,
-          error: {
-            code: -32700,
-            message: 'Parse error',
-            data: error instanceof Error ? error.message : 'Unknown error'
-          }
-        };
-        
-        const errorJsonResponse = new Response(JSON.stringify(errorResponse), {
-          status: 400,
-          headers: {
-            'Content-Type': 'application/json'
-          },
-        });
-        return this.oauthHandler.addSecurityHeaders(errorJsonResponse);
-      }
-    }
-
-    return this.createMCPErrorResponse(null, -32600, 'Method not allowed', null, 405);
-  }
-
   /**
-   * Handle SSE endpoint according to MCP Streamable HTTP spec (2025-06-18)
+   * Verify the bearer token, propagate the authenticated user as Props on
+   * the execution context, and hand the request off to the McpAgent's
+   * fetch handler.
    *
-   * POST requests:
-   * - Check Accept header to determine response format (JSON vs SSE)
-   * - Validate session ID (except for initialize)
-   * - Return responses either as JSON or SSE based on client preference
-   *
-   * GET requests:
-   * - Establish persistent SSE connection for server-to-client messages
-   * - Support resumability via Last-Event-ID header
+   * The McpAgent SDK reads `ctx.props` to populate the DO's `props` field —
+   * this is the workers-oauth-provider convention. Our JWT layer plays the
+   * role of that OAuth provider.
    */
-  async handleSSE(request: Request, env: Env): Promise<Response> {
-    // Validate Origin header to prevent DNS rebinding attacks
-    const origin = request.headers.get('Origin');
-    if (origin && !this.isValidOrigin(origin)) {
-      return this.createMCPErrorResponse(null, -32001, 'Forbidden', 'Invalid origin', 403);
-    }
-
-    // Check protocol version (default to 2025-06-18 if omitted)
-    const protocolVersion = request.headers.get('Mcp-Protocol-Version') || '2025-06-18';
-    const supportedVersions = ['2025-03-26', '2025-06-18'];
-
-    if (!supportedVersions.includes(protocolVersion)) {
-      return new Response(
-        JSON.stringify({
-          jsonrpc: '2.0',
-          id: null,
-          error: {
-            code: -32600,
-            message: 'Unsupported protocol version',
-            data: `Supported versions: ${supportedVersions.join(', ')}`
-          }
-        }),
-        {
-          status: 400,
-          headers: { 'Content-Type': 'application/json' }
-        }
-      );
-    }
-
-    const sessionKV = env.MCP_SESSIONS;
-    if (!sessionKV) {
-      return this.createMCPErrorResponse(
-        null,
-        -32603,
-        'Server configuration error',
-        'MCP_SESSIONS KV binding missing',
-        500
-      );
-    }
-
-    // Check authentication for all SSE endpoints
-    const authResult = await this.authenticateRequest(request, env);
-    if (!authResult.authenticated) {
-      const baseUrl = `${new URL(request.url).protocol}//${new URL(request.url).host}`;
-      return this.oauthHandler.addSecurityHeaders(new Response(
-        JSON.stringify({
-          jsonrpc: '2.0',
-          id: null,
-          error: {
-            code: -32001,
-            message: 'Unauthorized',
-            data: authResult.error || 'Authentication required'
-          }
-        }),
-        {
-          status: 401,
-          headers: {
-            'Content-Type': 'application/json',
-            'WWW-Authenticate': `Bearer realm="Metro MCP", authorization_uri="${baseUrl}/authorize", error="invalid_token"`
-          }
-        }
-      ));
-    }
-
-    // Handle GET requests for SSE stream (Server → Client messages)
-    if (request.method === 'GET') {
-      return this.handleGETSSE(request, sessionKV);
-    }
-
-    // Handle POST requests (Client → Server requests)
-    if (request.method === 'POST') {
-      return this.handlePOSTSSE(request, env, sessionKV, authResult.session!);
-    }
-
-    return this.createMCPErrorResponse(null, -32600, 'Method not allowed', null, 405);
-  }
-
-  /**
-   * Handle GET /sse - Persistent SSE connection for server-to-client messages
-   */
-  private async handleGETSSE(request: Request, sessionKV: KVNamespace): Promise<Response> {
-    // Validate session ID
-    const sessionId = request.headers.get('Mcp-Session-Id');
-    if (!sessionId) {
-      return this.createMCPErrorResponse(
-        null,
-        -32001,
-        'Session required',
-        'Mcp-Session-Id header required',
-        400
-      );
-    }
-
-    // Validate session exists
-    const sessionData = await sessionKV.get(`session:${sessionId}`);
-    if (!sessionData) {
-      return this.createMCPErrorResponse(
-        null,
-        -32001,
-        'Session not found',
-        'Session expired or not found',
-        404
-      );
-    }
-
-    // Support resumability via Last-Event-ID
-    // In a full implementation, we would:
-    // 1. Parse the session: const session: MCPSession = JSON.parse(sessionData);
-    // 2. Get Last-Event-ID header and calculate startEventId
-    // 3. Replay missed events from a message queue starting from startEventId
-
-    // Create persistent SSE stream
-    // Note: Cloudflare Workers have connection time limits (~100 seconds)
-    const lastEventId = request.headers.get('Last-Event-ID');
-    const stream = new ReadableStream({
-      start(controller) {
-        // Send initial comment to establish connection
-        controller.enqueue(
-          new TextEncoder().encode(': Connected to Metro MCP\n\n')
-        );
-
-        if (lastEventId) {
-          controller.enqueue(
-            new TextEncoder().encode('event: warning\ndata: Event replay not supported\n\n')
-          );
-        }
-
-        // In a full implementation, this would:
-        // 1. Listen for server-initiated notifications from a message queue
-        // 2. Send them as SSE events with incrementing IDs
-        // 3. Handle connection lifecycle and cleanup
-
-        // For now, keep connection open until client closes
-        // Production would use Durable Objects for persistent connections
-      },
-      cancel() {
-        // Cleanup when client closes connection
-        console.log('SSE connection closed');
-      }
-    });
-
-    const sseResponse = new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no'
-      }
-    });
-
-    return this.oauthHandler.addSecurityHeaders(sseResponse);
-  }
-
-  /**
-   * Handle POST /sse - Client requests with optional SSE response
-   */
-  private async handlePOSTSSE(
+  private async serveAgent(
     request: Request,
     env: Env,
-    sessionKV: KVNamespace,
-    authSession: AuthSession
+    ctx: ExecutionContext,
+    pathname: string
   ): Promise<Response> {
-    // Parse request body
-    let body: MCPRequest;
-    try {
-      body = await request.json() as MCPRequest;
-    } catch (error) {
-      const errorResponse: MCPResponse = {
-        jsonrpc: '2.0',
-        id: 0,
-        error: {
-          code: -32700,
-          message: 'Parse error',
-          data: error instanceof Error ? error.message : 'Unknown error'
+    const origin = request.headers.get('Origin');
+    if (origin && !this.isValidOrigin(origin)) {
+      return this.createMCPErrorResponse(null, -32001, 'Forbidden', 'Invalid origin', 403);
+    }
+
+    const authResult = await this.authenticateRequest(request, env);
+    if (!authResult.authenticated) {
+      const baseUrl = `${new URL(request.url).protocol}//${new URL(request.url).host}`;
+      return this.oauthHandler.addSecurityHeaders(new Response(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: null,
+          error: {
+            code: -32001,
+            message: 'Unauthorized',
+            data: authResult.error || 'Authentication required'
+          }
+        }),
+        {
+          status: 401,
+          headers: {
+            'Content-Type': 'application/json',
+            'WWW-Authenticate': `Bearer realm="Metro MCP", authorization_uri="${baseUrl}/authorize", error="invalid_token"`
+          }
         }
-      };
-
-      return this.oauthHandler.addSecurityHeaders(new Response(JSON.stringify(errorResponse), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
-      }));
+      ));
     }
 
-    // Validate JSON-RPC 2.0 format
-    if (!body.jsonrpc || body.jsonrpc !== '2.0') {
-      return this.createMCPErrorResponse(
-        body.id || 0,
-        -32600,
-        'Invalid Request: Missing or invalid jsonrpc field'
-      );
-    }
+    const props: Props = {
+      userId: authResult.session!.userId,
+      userLogin: authResult.session!.userLogin,
+      audience: authResult.session!.audience
+    };
+    // ExecutionContext does not formally type `.props` — the workers-oauth-provider
+    // convention attaches it at runtime and McpAgent.serve reads it from there.
+    (ctx as ExecutionContext & { props?: Props }).props = props;
 
-    // Extract and validate session ID (except for initialize)
-    const sessionId = request.headers.get('Mcp-Session-Id');
-    const isInitialize = body.method === 'initialize';
+    // Both /mcp and /sse use transport: "auto" — the agent's auto transport
+    // serves Streamable HTTP (POST <pathname>) AND legacy SSE (GET <pathname>
+    // + POST <pathname>/message) from the same mount, so legacy clients that
+    // hardcode /sse keep working alongside modern Streamable HTTP clients.
+    const handler = MetroMcpAgent.serve(pathname, {
+      binding: 'MCP_SESSION',
+      transport: 'auto'
+    });
 
-    if (!isInitialize) {
-      if (!sessionId) {
-        return this.createMCPErrorResponse(
-          body.id,
-          -32001,
-          'Session required',
-          'Mcp-Session-Id header missing for non-initialize request',
-          400
-        );
-      }
-
-      // Validate session exists
-      const sessionData = await sessionKV.get(`session:${sessionId}`);
-      if (!sessionData) {
-        // Session expired or doesn't exist - client should re-initialize
-        return this.createMCPErrorResponse(
-          body.id,
-          -32001,
-          'Session expired or not found',
-          'Please send an initialize request to create a new session',
-          404
-        );
-      }
-    }
-
-    // Process MCP method
-    let response: MCPResponse;
-    let newSessionId: string | undefined;
-
-    if (isInitialize) {
-      // Handle initialize with session creation
-      const result = await this.mcpHandler.handleInitialize(
-        body.id,
-        env,
-        authSession.userId,
-        sessionKV
-      );
-      response = result.response;
-      newSessionId = result.sessionId;
-    } else {
-      // Handle other methods
-      response = await this.mcpHandler.processMCPMethod(body, env);
-    }
-
-    // Handle notifications - return 202 Accepted with no body
-    if (body.method?.startsWith('notifications/')) {
-      return this.oauthHandler.addSecurityHeaders(new Response(null, { status: 202 }));
-    }
-
-    // Parse Accept header to determine response format
-    const acceptHeader = request.headers.get('Accept') || 'application/json';
-    const wantsSSE = acceptHeader.includes('text/event-stream');
-
-    if (wantsSSE) {
-      // Client wants SSE format
-      const session = newSessionId
-        ? await this.getSession(newSessionId, sessionKV)
-        : await this.getSession(sessionId!, sessionKV);
-
-      const eventId = `${Date.now()}-${crypto.randomUUID()}`;
-
-      // Update lastEventId as a best-effort timestamp (no replay yet)
-      session.lastEventId = Date.now();
-      await sessionKV.put(`session:${session.sessionId}`, JSON.stringify(session), {
-        expirationTtl: 86400
-      });
-
-      const sseResponse = createSSEResponse(response, eventId);
-
-      // Add session ID header for initialize
-      if (newSessionId) {
-        sseResponse.headers.set('Mcp-Session-Id', newSessionId);
-      }
-
-      return this.oauthHandler.addSecurityHeaders(sseResponse);
-    } else {
-      // Client wants JSON format (default behavior)
-      const jsonResponse = new Response(JSON.stringify(response), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-
-      // Add session ID header for initialize
-      if (newSessionId) {
-        jsonResponse.headers.set('Mcp-Session-Id', newSessionId);
-      }
-
-      return this.oauthHandler.addSecurityHeaders(jsonResponse);
-    }
+    const response = await handler.fetch(request, env, ctx);
+    return this.oauthHandler.addSecurityHeaders(response);
   }
-
-  /**
-   * Retrieve session from KV storage
-   */
-  private async getSession(sessionId: string, sessionKV: KVNamespace): Promise<MCPSession> {
-    const sessionData = await sessionKV.get(`session:${sessionId}`);
-    if (!sessionData) {
-      throw new Error('Session not found');
-    }
-    return JSON.parse(sessionData);
-  }
-
   isValidOrigin(origin: string): boolean {
     try {
       const originUrl = new URL(origin);
@@ -617,8 +303,8 @@ export class Router {
     data?: any,
     status: number = 400
   ): Response {
-    const errorResponse: MCPResponse = {
-      jsonrpc: '2.0',
+    const errorResponse = {
+      jsonrpc: '2.0' as const,
       id: id || 0,
       error: { code, message, data }
     };
@@ -650,12 +336,27 @@ export class Router {
     try {
       const authManager = new AuthManager(env);
       const token = authManager.extractTokenFromRequest(request);
-      
+
       if (!token) {
         return { authenticated: false, error: 'No authentication token provided' };
       }
 
       const session = await authManager.verifyJWT(token);
+
+      // RFC 8707 audience enforcement.
+      // - Token with aud → must match the request's canonical MCP resource
+      // - Token without aud → grandfathered (legacy), accept with a console warning.
+      //   Old tokens drain naturally as their 90-day TTL expires.
+      if (!authManager.verifyAudience(session, request.url)) {
+        return { authenticated: false, error: 'Token audience does not match this resource (RFC 8707)' };
+      }
+      if (!session.audience) {
+        console.warn(
+          `[deprecation] Legacy token without 'aud' claim accepted for user ${session.userLogin}. ` +
+          `Re-authenticate with a 'resource' parameter to bind future tokens.`
+        );
+      }
+
       return { authenticated: true, session };
     } catch (error) {
       if (error instanceof AuthError) {
