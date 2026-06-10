@@ -7,7 +7,7 @@
 [![OAuth 2.1](https://img.shields.io/badge/OAuth-2.1%20%2B%20PKCE-green)](https://oauth.net/2.1/)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
-A unified remote Model Context Protocol (MCP) server supporting multiple US transit systems. Currently supports Washington DC Metro (WMATA) and New York City Subway (MTA). Built for seamless integration with MCP-compatible clients like Claude Desktop.
+A unified remote Model Context Protocol (MCP) server supporting multiple US transit systems. Currently supports Washington DC Metro (WMATA) and New York City Subway (MTA). Built for seamless integration with MCP-compatible clients like Claude Desktop, Cursor, Codex, and any client that supports Streamable HTTP MCP servers.
 
 **Quick Links:** [Quick Start](#quick-start) • [What You Can Do](#what-you-can-do) • [Deployment](#deployment) • [Client Integration](#mcp-client-integration)
 
@@ -91,9 +91,9 @@ Ask natural language questions about DC Metro or NYC Subway in Claude Desktop or
 The fastest way to get started is to use the hosted instance:
 
 1. Open your MCP Client
-2. Add this URL: `https://metro-mcp.anuragd.me/sse`
+2. Add this URL: `https://metro-mcp.anuragd.me/mcp`
 3. Click "Connect" and authorize via GitHub
-4. Start asking questions about DC Metro!
+4. Start asking questions about DC Metro or NYC Subway
 
 ### Deploy Your Own
 
@@ -189,7 +189,7 @@ bunx wrangler deploy
 Just add the server URL to Claude Desktop:
 
 ```text
-https://metro-mcp.anuragd.me/sse
+https://metro-mcp.anuragd.me/mcp
 ```
 
 Claude Desktop will automatically:
@@ -209,7 +209,7 @@ For MCP clients that support OAuth 2.1 with automatic discovery:
 **Server URL:**
 
 ```text
-https://metro-mcp.anuragd.me/sse
+https://metro-mcp.anuragd.me/mcp
 ```
 
 The client will handle authentication automatically via the OAuth flow.
@@ -222,7 +222,7 @@ If your MCP client doesn't support OAuth, you can still authenticate manually:
 2. Authorize via GitHub
 3. Copy the JWT token displayed
 4. Configure your client with:
-   - Server URL: `https://metro-mcp.anuragd.me/sse`
+   - Server URL: `https://metro-mcp.anuragd.me/mcp`
    - Authorization Header: `Bearer your-jwt-token-here`
 
 ## OAuth Endpoints
@@ -314,6 +314,7 @@ The server uses GTFS-Realtime feeds from the MTA. Public API endpoints (no API k
 ### Hosting
 
 - **Platform:** Cloudflare Workers
+- **Static assets:** `public/` is deployed through Cloudflare Workers Static Assets and bound as `env.ASSETS`; the Worker serves API/OAuth/MCP routes first, then delegates landing-page, docs, image, and icon requests to the assets binding.
 - **Storage:**
   - Cloudflare KV `OAUTH_CLIENTS` — registered OAuth clients
   - Cloudflare KV `RATE_LIMIT_KV` — rate-limit counters
@@ -326,8 +327,10 @@ The codebase is organized for multi-city transit support with a clean separation
 
 ```text
 src/
-├── index.ts              # Cloudflare Worker entry point
-├── router.ts             # Request routing (OAuth, MCP, API endpoints)
+├── index.ts              # Cloudflare Worker entry point and DO export
+├── router.ts             # Request routing (OAuth, MCP, info, static assets)
+├── server-info.ts        # Public /info capability summary
+├── config.ts             # Runtime config, caching, and rate-limit defaults
 ├── types.ts              # Shared TypeScript type definitions
 │
 ├── OAuth & Authentication
@@ -335,18 +338,21 @@ src/
 │   └── oauth-handler.ts  # OAuth 2.1 flow implementation with PKCE
 │
 ├── MCP Protocol
-│   ├── mcp-handler.ts    # MCP request processing and tool routing
-│   ├── mcp-tools.ts      # MCP tool definitions (11 tools)
-│   └── mcp-types.ts      # MCP protocol type definitions
+│   ├── mcp-agent.ts      # McpAgent tools, resources, prompts, sessions
+│   └── mcp/              # MCP response format helpers
 │
-├── Error Handling
-│   └── error-handler.ts  # Multi-city validation and error handling
+├── Middleware
+│   ├── input-validator.ts
+│   ├── rate-limiter.ts
+│   └── security-headers.ts
 │
 └── Transit Abstraction Layer
     ├── base.ts           # Abstract TransitAPIClient class
     ├── registry.ts       # Transit client factory (city routing)
     ├── wmata-client.ts   # DC Metro client (WMATA REST APIs)
-    └── mta-client.ts     # NYC Subway client (GTFS-Realtime)
+    ├── mta-client.ts     # NYC Subway client (GTFS-Realtime)
+    ├── nyc-routes.ts     # Bundled NYC route metadata
+    └── nyc-stations.ts   # Bundled NYC station metadata
 ```
 
 **Key Architecture Decisions:**
@@ -360,7 +366,7 @@ src/
 
 Contributions are welcome! Feel free to:
 
-- Report bugs or request features via [GitHub Issues](https://github.com/yourusername/metro-mcp/issues)
+- Report bugs or request features via [GitHub Issues](https://github.com/Aarekaz/metro-mcp/issues)
 - Submit pull requests with improvements
 - Share feedback on the MCP implementation
 
