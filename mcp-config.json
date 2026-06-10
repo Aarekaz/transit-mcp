@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "mcp-remote", 
-        "https://metro-mcp.noyd.app/sse"
+        "https://metro-mcp.anuragd.me/mcp"
       ],
       "env": {}
     }
