@@ -7,6 +7,7 @@ import { getTransitClient } from './transit/registry';
 import { SupportedCity } from './transit/base';
 import { WMATAClient } from './transit/wmata-client';
 import { handleWMATAError } from './error-handler';
+import { formatStationPredictionsForMcp } from './mcp/prediction-format';
 
 /**
  * Per-session authentication context, propagated from the JWT verified
@@ -249,6 +250,7 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
               line: z.string(),
               destination: z.string(),
               minutesAway: z.number().int().nullable(),
+              arrivalTime: z.string().nullable(),
               arrivalStatus: z.enum(['ARRIVING', 'BOARDING', 'DELAYED', 'SCHEDULED']),
               cars: z.string().nullable(),
               direction: z.string().nullable(),
@@ -306,31 +308,10 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
             }
           }
 
-          const predictions = await client.getStationPredictions(stationId);
-          const statusMap: Record<string, 'ARRIVING' | 'BOARDING' | 'DELAYED'> = {
-            ARR: 'ARRIVING',
-            BRD: 'BOARDING',
-            DLY: 'DELAYED'
-          };
-
           const structured = {
             city,
             station: stationId,
-            predictions: predictions.map(p => {
-              const isNumeric = typeof p.minutesAway === 'number';
-              const sentinel = typeof p.minutesAway === 'string' ? p.minutesAway.toUpperCase() : '';
-              return {
-                line: p.line,
-                destination: p.destination,
-                minutesAway: isNumeric ? (p.minutesAway as number) : null,
-                arrivalStatus: isNumeric
-                  ? ('SCHEDULED' as const)
-                  : (statusMap[sentinel] ?? 'SCHEDULED'),
-                cars: p.cars ?? null,
-                direction: p.direction ?? null,
-                track: p.track ?? null
-              };
-            })
+            predictions: formatStationPredictionsForMcp(await client.getStationPredictions(stationId))
           };
           return {
             content: [{ type: 'text' as const, text: JSON.stringify(structured) }],
