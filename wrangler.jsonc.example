@@ -15,6 +15,9 @@
   "name": "metro-mcp",
   "main": "src/index.ts",
   "compatibility_date": "2026-04-07",
+  // Required: cloudflare/agents pulls node:async_hooks + node:diagnostics_channel;
+  // a transitive mimetext dep needs node:path/os.
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "keep_vars": true,
   "minify": true,
@@ -52,6 +55,13 @@
   "vars": {
     "GITHUB_CLIENT_ID": "your-github-oauth-app-client-id",
     "OAUTH_REDIRECT_URI": "https://your-subdomain.workers.dev/callback"
+  },
+
+  "assets": {
+    "directory": "./public",
+    // Required: the worker delegates unmatched GETs to env.ASSETS so the
+    // landing page renders. Without this binding the worker throws on /.
+    "binding": "ASSETS"
   },
 
   "observability": {

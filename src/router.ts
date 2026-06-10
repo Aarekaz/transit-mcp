@@ -168,8 +168,10 @@ export class Router {
         scopes_supported: ['profile'],
         // RFC 8707 — declare that this server understands the `resource` parameter
         // and issues audience-bound tokens when it is provided.
-        resource_indicators_supported: true,
-        authorization_response_iss_parameter_supported: true
+        resource_indicators_supported: true
+        // RFC 9207 (iss on authorization response) intentionally NOT advertised:
+        // handleCallback only sets `code` + `state` on the redirect today.
+        // Re-enable once the callback also writes the `iss` parameter.
       }, null, 2), {
         headers: {
           'Content-Type': 'application/json',
@@ -202,12 +204,15 @@ export class Router {
       return this.getServerInfoResponse();
     }
 
-    // MCP Streamable HTTP endpoint (protected). Both /mcp and /sse delegate
-    // to the same MetroMcpAgent — /sse selects the legacy SSE transport so
-    // existing clients keep working; /mcp uses transport: "auto" (Streamable
-    // HTTP with SSE response fallback based on Accept header).
-    if (url.pathname === '/sse' || url.pathname === '/mcp') {
-      return this.serveAgent(request, env, ctx, url.pathname);
+    // MCP endpoint (protected). Both /mcp and /sse delegate to the same
+    // MetroMcpAgent with transport: "auto", which serves Streamable HTTP
+    // (POST <pathname>) and legacy SSE (GET <pathname> + POST <pathname>/message)
+    // from the same mount. The /sse alias is kept so clients that hardcoded
+    // the historical endpoint keep working.
+    const isMcp = url.pathname === '/mcp';
+    const isSse = url.pathname === '/sse' || url.pathname.startsWith('/sse/');
+    if (isMcp || isSse) {
+      return this.serveAgent(request, env, ctx, isSse ? '/sse' : '/mcp');
     }
 
     // Unmatched GETs → delegate to the static assets binding (landing page).
@@ -270,12 +275,13 @@ export class Router {
     // convention attaches it at runtime and McpAgent.serve reads it from there.
     (ctx as ExecutionContext & { props?: Props }).props = props;
 
-    // /sse uses the legacy SSE transport (one stream per request).
-    // /mcp uses transport: "auto" — Streamable HTTP with SSE response fallback.
-    const transport = pathname === '/sse' ? 'sse' : 'auto';
+    // Both /mcp and /sse use transport: "auto" — the agent's auto transport
+    // serves Streamable HTTP (POST <pathname>) AND legacy SSE (GET <pathname>
+    // + POST <pathname>/message) from the same mount, so legacy clients that
+    // hardcode /sse keep working alongside modern Streamable HTTP clients.
     const handler = MetroMcpAgent.serve(pathname, {
       binding: 'MCP_SESSION',
-      transport
+      transport: 'auto'
     });
 
     const response = await handler.fetch(request, env, ctx);
