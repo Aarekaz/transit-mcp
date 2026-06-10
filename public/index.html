@@ -216,28 +216,35 @@
     }
 
     /* ─── Chat demo section ─────────────────────────────────── */
-    .chat-section {
+    .action-band {
       position: relative;
       z-index: 2;
-      padding: 130px 24px 8px;
+      padding: 110px 24px 10px;
       max-width: none;
       margin: -96px auto 0;
       width: 100%;
       overflow: visible;
     }
-    .chat-section::before {
+    .action-band::before {
       content: "";
       position: absolute;
-      inset: -220px 0 -60px;
+      inset: -190px 0 0;
       background:
-        linear-gradient(180deg, rgba(250, 251, 252, 0.92) 0%, rgba(250, 251, 252, 0.68) 35%, rgba(250, 251, 252, 0.48) 58%, rgba(250, 251, 252, 0.76) 100%),
+        linear-gradient(180deg, rgba(250, 251, 252, 0.96) 0%, rgba(250, 251, 252, 0.72) 30%, rgba(250, 251, 252, 0.5) 58%, rgba(250, 251, 252, 0.48) 100%),
         url("/action-bg.jpg") center 52% / cover no-repeat;
-      opacity: 0.84;
-      -webkit-mask-image: linear-gradient(180deg, transparent 0, rgba(0, 0, 0, 0.03) 120px, rgba(0, 0, 0, 0.18) 210px, rgba(0, 0, 0, 0.72) 330px, #000 420px, #000 calc(100% - 62px), rgba(0, 0, 0, 0.72) 100%);
-      mask-image: linear-gradient(180deg, transparent 0, rgba(0, 0, 0, 0.03) 120px, rgba(0, 0, 0, 0.18) 210px, rgba(0, 0, 0, 0.72) 330px, #000 420px, #000 calc(100% - 62px), rgba(0, 0, 0, 0.72) 100%);
+      opacity: 0.92;
+      -webkit-mask-image: linear-gradient(180deg, transparent 0, rgba(0, 0, 0, 0.12) 95px, rgba(0, 0, 0, 0.82) 220px, #000 330px, #000 100%);
+      mask-image: linear-gradient(180deg, transparent 0, rgba(0, 0, 0, 0.12) 95px, rgba(0, 0, 0, 0.82) 220px, #000 330px, #000 100%);
       z-index: 0;
     }
-    @media (min-width: 720px) { .chat-section { padding: 130px 48px 10px; } }
+    @media (min-width: 720px) { .action-band { padding: 120px 48px 12px; } }
+
+    .chat-section {
+      position: relative;
+      z-index: 1;
+      max-width: none;
+      width: 100%;
+    }
 
     .chat-label {
       position: relative;
@@ -459,8 +466,23 @@
     }
 
     @media (max-width: 560px) {
-      .chat-body { padding: 16px 16px; font-size: 13px; }
-      .tool-body { font-size: 10.5px; }
+      .chat-body {
+        padding: 15px 14px;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+      .msg {
+        gap: 9px;
+        margin-bottom: 13px;
+      }
+      .tool-card { margin-top: 6px; }
+      .tool-head { padding: 8px 10px; }
+      .tool-body {
+        padding: 9px 11px 10px;
+        font-size: 10.5px;
+        line-height: 1.45;
+      }
+      .chat-dots { padding-bottom: 14px; }
     }
 
     .hero h1 {
@@ -626,7 +648,7 @@
       position: relative;
       z-index: 1;
       flex-shrink: 0;
-      padding: 4px 24px 10px;
+      padding: 10px 24px 4px;
       min-height: 32px;
       display: flex;
       align-items: center;
@@ -636,30 +658,27 @@
       font-size: 13px;
       color: var(--ink);
       font-weight: 700;
-      text-shadow: 0 1px 1px rgba(255, 255, 255, 0.92);
+      text-shadow: 0 1px 1px rgba(255, 255, 255, 0.86);
     }
     @media (min-width: 720px) {
-      footer { padding: 4px 48px 10px; }
+      footer { padding: 12px 48px 4px; }
     }
     footer .dot-sep { color: rgba(10, 37, 64, 0.58); }
-    footer > span:not(.dot-sep),
-    .footer-link,
+    .footer-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--ink);
+      text-decoration: none;
+    }
+    .footer-link:hover { color: var(--ink); }
     .footer-action {
       display: inline-flex;
       align-items: center;
       gap: 6px;
       color: var(--ink);
-      min-height: 26px;
-      padding: 3px 8px;
-      border: 1px solid rgba(10, 37, 64, 0.12);
-      border-radius: var(--radius-pill);
-      background: rgba(255, 255, 255, 0.94);
-      box-shadow: 0 1px 4px rgba(10, 37, 64, 0.06);
-      transition: color 120ms ease, border-color 120ms ease;
-    }
-    .footer-link:hover,
-    .footer-action:hover {
-      color: var(--ink);
+      text-decoration: none;
+      transition: color 120ms ease, border-color 120ms ease, transform 120ms ease;
     }
     .footer-favicon {
       width: 14px;
@@ -668,10 +687,32 @@
       display: block;
     }
     .footer-action {
-      background: rgba(255, 255, 255, 0.96);
-      font-weight: 700;
+      min-height: 30px;
+      padding: 5px 11px;
+      border: 1px solid rgba(10, 37, 64, 0.22);
+      border-radius: var(--radius-pill);
+      background: rgba(255, 255, 255, 0.98);
+      box-shadow: 0 5px 14px rgba(10, 37, 64, 0.11), 0 1px 0 rgba(255, 255, 255, 0.92) inset;
+      font-weight: 800;
     }
-    .footer-action:hover { border-color: rgba(10, 37, 64, 0.18); }
+    .footer-action:hover {
+      border-color: rgba(10, 37, 64, 0.34);
+      transform: translateY(-1px);
+    }
+
+    @media (max-width: 560px) {
+      .action-band { padding: 96px 18px 8px; }
+      footer {
+        padding: 10px 10px 0;
+        gap: 7px;
+        font-size: 12px;
+      }
+      .footer-action {
+        min-height: 32px;
+        padding: 6px 12px;
+        background: #fff;
+      }
+    }
 
     /* ─── Modal ─────────────────────────────────────────────── */
     dialog#install-dialog {
@@ -878,41 +919,43 @@
       </div>
     </section>
 
-    <section class="chat-section" aria-hidden="true">
-      <p class="chat-label">See it in action</p>
-      <div class="chat-panel">
-        <div class="chat-head">
-          <span class="dot-live"></span>
-          <span class="chat-title">metro-mcp</span>
-          <span class="chat-meta">&middot; connected to your LLM</span>
-          <span class="chat-spacer"></span>
-          <button type="button" class="chat-replay" data-replay aria-label="Replay current demo">&#8635;</button>
+    <div class="action-band">
+      <section class="chat-section" aria-hidden="true">
+        <p class="chat-label">See it in action</p>
+        <div class="chat-panel">
+          <div class="chat-head">
+            <span class="dot-live"></span>
+            <span class="chat-title">metro-mcp</span>
+            <span class="chat-meta">&middot; connected to your LLM</span>
+            <span class="chat-spacer"></span>
+            <button type="button" class="chat-replay" data-replay aria-label="Replay current demo">&#8635;</button>
+          </div>
+          <div class="chat-body" data-chat-body></div>
+          <div class="chat-dots" role="tablist">
+            <button type="button" class="chat-dot active" data-scene="0" aria-label="Demo 1: on-time check"></button>
+            <button type="button" class="chat-dot" data-scene="1" aria-label="Demo 2: delays"></button>
+            <button type="button" class="chat-dot" data-scene="2" aria-label="Demo 3: weekend service"></button>
+            <button type="button" class="chat-dot" data-scene="3" aria-label="Demo 4: accessibility"></button>
+            <button type="button" class="chat-dot" data-scene="4" aria-label="Demo 5: train arrivals"></button>
+            <button type="button" class="chat-dot" data-scene="5" aria-label="Demo 6: bus tracking"></button>
+          </div>
         </div>
-        <div class="chat-body" data-chat-body></div>
-        <div class="chat-dots" role="tablist">
-          <button type="button" class="chat-dot active" data-scene="0" aria-label="Demo 1: on-time check"></button>
-          <button type="button" class="chat-dot" data-scene="1" aria-label="Demo 2: delays"></button>
-          <button type="button" class="chat-dot" data-scene="2" aria-label="Demo 3: weekend service"></button>
-          <button type="button" class="chat-dot" data-scene="3" aria-label="Demo 4: accessibility"></button>
-          <button type="button" class="chat-dot" data-scene="4" aria-label="Demo 5: train arrivals"></button>
-          <button type="button" class="chat-dot" data-scene="5" aria-label="Demo 6: bus tracking"></button>
-        </div>
-      </div>
-    </section>
-  </main>
+      </section>
 
-  <footer>
-    <a class="footer-link" href="https://www.anuragd.me" target="_blank" rel="noreferrer">
-      <span>© 2026</span>
-      <img class="footer-favicon" src="https://www.anuragd.me/favicon.ico" alt="" width="14" height="14">
-      <span>Anurag Dhungana</span>
-    </a>
-    <span class="dot-sep">·</span>
-    <span>MIT</span>
-    <span class="dot-sep">·</span>
-    <a class="footer-action" href="https://github.com/Aarekaz/metro-mcp/issues/new?labels=enhancement&amp;title=Feature%20request%3A%20" target="_blank" rel="noreferrer">Suggest a feature</a>
-    <a class="footer-action" href="https://github.com/Aarekaz/metro-mcp/issues/new?labels=bug&amp;title=Bug%20report%3A%20" target="_blank" rel="noreferrer">Report issue</a>
-  </footer>
+      <footer>
+        <a class="footer-link" href="https://www.anuragd.me" target="_blank" rel="noreferrer">
+          <span>© 2026</span>
+          <img class="footer-favicon" src="https://www.anuragd.me/favicon.ico" alt="" width="14" height="14">
+          <span>Anurag Dhungana</span>
+        </a>
+        <span class="dot-sep">·</span>
+        <span>MIT</span>
+        <span class="dot-sep">·</span>
+        <a class="footer-action" href="https://github.com/Aarekaz/metro-mcp/issues/new?labels=enhancement&amp;title=Feature%20request%3A%20" target="_blank" rel="noreferrer">Suggest a feature</a>
+        <a class="footer-action" href="https://github.com/Aarekaz/metro-mcp/issues/new?labels=bug&amp;title=Bug%20report%3A%20" target="_blank" rel="noreferrer">Report issue</a>
+      </footer>
+    </div>
+  </main>
 
   <dialog id="install-dialog" aria-labelledby="install-title">
     <div class="dialog-inner">
@@ -1092,9 +1135,9 @@
             'Yes &mdash; the next ' +
             '<span class="line-badge" style="background:#00933C">4</span>' +
             '<span class="line-badge" style="background:#00933C">5</span>' +
-            '<span class="line-badge" style="background:#00933C">6</span> trains uptown are in ' +
+            '<span class="line-badge" style="background:#00933C">6</span> uptown trains: ' +
             '<strong>2 min</strong>, <strong>5 min</strong>, and <strong>8 min</strong>. ' +
-            'With a 6-minute ride to Grand Central, you\'ll arrive in 8&ndash;14 min.'
+            'Ride is ~6 min, so you should arrive in 8&ndash;14 min.'
         },
         // 2 — Common worry: "any delays?"
         {
