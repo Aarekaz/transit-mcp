@@ -54,7 +54,21 @@ export class WMATAClient extends TransitAPIClient {
       });
 
       if (!response.ok) {
-        const errorText = await response.text().catch(() => 'Unknown error');
+        let errorText: string;
+        try {
+          errorText = await response.text();
+        } catch (error) {
+          if (
+            signal?.aborted ||
+            (typeof error === 'object' &&
+              error !== null &&
+              'name' in error &&
+              error.name === 'AbortError')
+          ) {
+            throw error;
+          }
+          errorText = 'Unknown error';
+        }
         throw new WMATAError(`API request failed: ${errorText}`, response.status);
       }
 

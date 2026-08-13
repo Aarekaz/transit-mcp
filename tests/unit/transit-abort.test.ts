@@ -22,6 +22,22 @@ describe('transit request cancellation', () => {
     );
   });
 
+  it('preserves caller abort identity when a WMATA error body read aborts', async () => {
+    const controller = new AbortController();
+    const abortReason = new DOMException('body read cancelled', 'AbortError');
+    const response = new Response(null, { status: 503 });
+    vi.spyOn(response, 'text').mockImplementation(async () => {
+      controller.abort(abortReason);
+      throw controller.signal.reason;
+    });
+    fetchMock.mockResolvedValueOnce(response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      new WMATAClient('key').getStations(controller.signal)
+    ).rejects.toBe(abortReason);
+  });
+
   it('stops the MTA multi-feed loop after the caller aborts', async () => {
     const controller = new AbortController();
     fetchMock.mockImplementation(async (_url, init) => {
