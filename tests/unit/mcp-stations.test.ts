@@ -535,6 +535,68 @@ describe('station tool contracts', () => {
       params: expect.objectContaining({ progress: 0 }),
     }));
   });
+
+  it('does not fetch stations when cancellation occurs during 0/2 progress', async () => {
+    const controller = new AbortController();
+    const reason = new Error('request closed during initial progress');
+    reason.name = 'RequestClosed';
+    const client = clientWith({
+      getStations: vi.fn().mockResolvedValue([dcA01]),
+    });
+    getTransitClientMock.mockReturnValue(client);
+    const { registrations } = captureStationTools();
+    const notify = vi.fn().mockImplementation(async notification => {
+      if (notification.params.progress === 0) controller.abort(reason);
+    });
+
+    await expect(invoke(
+      tool(registrations, 'get_all_stations'),
+      { city: 'dc' },
+      requestContext({
+        signal: controller.signal,
+        progressToken: 'progress-0-abort',
+        notify,
+      }),
+    )).rejects.toBe(reason);
+
+    expect(controller.signal.reason).toBe(reason);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(client.getStations).not.toHaveBeenCalled();
+  });
+
+  it('does not return a final result when cancellation occurs during 1/2 progress', async () => {
+    const controller = new AbortController();
+    const reason = new Error('request closed during final progress');
+    reason.name = 'RequestClosed';
+    const events: string[] = [];
+    const client = clientWith({
+      getStations: vi.fn().mockResolvedValue([dcA01]),
+    });
+    getTransitClientMock.mockReturnValue(client);
+    const { registrations } = captureStationTools();
+    const notify = vi.fn().mockImplementation(async notification => {
+      events.push(`progress:${notification.params.progress}`);
+      if (notification.params.progress === 1) controller.abort(reason);
+    });
+
+    const result = invoke(
+      tool(registrations, 'get_all_stations'),
+      { city: 'dc' },
+      requestContext({
+        signal: controller.signal,
+        progressToken: 'progress-1-abort',
+        notify,
+      }),
+    ).then(value => {
+      events.push('result');
+      return value;
+    });
+
+    await expect(result).rejects.toBe(reason);
+    expect(controller.signal.reason).toBe(reason);
+    expect(client.getStations).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(['progress:0', 'progress:1']);
+  });
 });
 
 describe('station MRTR state machine', () => {

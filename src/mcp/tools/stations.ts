@@ -280,12 +280,14 @@ export function registerStationTools(
 
       signal.throwIfAborted();
       await reportProgress(0, `Fetching ${city.toUpperCase()} stations…`);
+      signal.throwIfAborted();
       const all = await getTransitClient(
         city as SupportedCity,
         context.env,
       ).getStations(signal);
       signal.throwIfAborted();
       await reportProgress(1, `Normalizing ${all.length} stations…`);
+      signal.throwIfAborted();
 
       return complete({
         city,
