@@ -107,4 +107,15 @@ describe('shared MCP contracts', () => {
       throw abort;
     })).rejects.toBe(abort);
   });
+
+  it('preserves a caller-owned cancellation reason with a nonstandard name', async () => {
+    const controller = new AbortController();
+    const callerReason = new Error('caller cancelled');
+    callerReason.name = 'RequestClosed';
+    controller.abort(callerReason);
+
+    await expect(withTransitErrors(async () => {
+      throw controller.signal.reason;
+    }, controller.signal)).rejects.toBe(controller.signal.reason);
+  });
 });

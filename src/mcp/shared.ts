@@ -61,11 +61,18 @@ export function toolError(message: string) {
 }
 
 /** Normalize upstream transit failures without destroying cancellation or protocol errors. */
-export async function withTransitErrors<T>(operation: () => Promise<T>): Promise<T> {
+export async function withTransitErrors<T>(
+  operation: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
   try {
     return await operation();
   } catch (error) {
-    if (ProtocolError.isInstance(error) || isAbortError(error)) {
+    if (
+      ProtocolError.isInstance(error)
+      || (signal?.aborted === true && error === signal.reason)
+      || isAbortError(error)
+    ) {
       throw error;
     }
     throw new Error(handleWMATAError(error));

@@ -1,5 +1,9 @@
+import {
+  createRequestStateCodec,
+  type ServerContext,
+} from '@modelcontextprotocol/server';
 import { describe, expect, it } from 'vitest';
-import type { MetroMcpContext } from '../../src/mcp/context';
+import type { MetroMcpContext, MetroRequestState } from '../../src/mcp/context';
 import { createMetroMcpServer } from '../../src/mcp/server';
 import { createMockEnv } from '../setup';
 
@@ -15,6 +19,18 @@ function testContext(overrides: Partial<MetroMcpContext> = {}): MetroMcpContext 
     },
     ...overrides,
   };
+}
+
+function untrustedContext(props: unknown, shortKey = false): MetroMcpContext {
+  return {
+    env: createMockEnv(shortKey ? { MCP_REQUEST_STATE_KEY: 'short' } : {}),
+    era: 'modern',
+    props,
+  } as MetroMcpContext;
+}
+
+function stateContext(method = 'tools/call'): ServerContext {
+  return { mcpReq: { method } } as ServerContext;
 }
 
 describe('createMetroMcpServer', () => {
@@ -40,6 +56,72 @@ describe('createMetroMcpServer', () => {
     } as unknown as MetroMcpContext;
 
     expect(() => createMetroMcpServer(invalidContext)).toThrow('insufficient_scope');
+  });
+
+  it.each([
+    ['a missing scope tuple', undefined],
+    ['an empty scope tuple', []],
+    ['an extra scope', ['transit:read', 'transit:write']],
+  ])('rejects %s before any other factory validation', (_description, scopes) => {
+    expect(() => createMetroMcpServer(untrustedContext({
+      userId: '42',
+      userLogin: 'anurag',
+      clientId: 'claude',
+      ...(scopes === undefined ? {} : { scopes }),
+    }, true))).toThrow('insufficient_scope');
+  });
+
+  it.each([
+    ['a blank user ID', {
+      userId: ' ', userLogin: 'anurag', clientId: 'claude', scopes: ['transit:read'],
+    }],
+    ['a blank user login', {
+      userId: '42', userLogin: ' ', clientId: 'claude', scopes: ['transit:read'],
+    }],
+    ['a blank client ID', {
+      userId: '42', userLogin: 'anurag', clientId: ' ', scopes: ['transit:read'],
+    }],
+    ['a missing identity field', {
+      userId: '42', clientId: 'claude', scopes: ['transit:read'],
+    }],
+    ['an extra identity field', {
+      userId: '42',
+      userLogin: 'anurag',
+      clientId: 'claude',
+      scopes: ['transit:read'],
+      displayName: 'Anurag',
+    }],
+  ])('rejects %s before constructing request state', (_description, props) => {
+    expect(() => createMetroMcpServer(untrustedContext(props, true))).toThrow('Invalid OAuth props');
+  });
+
+  it('normalizes direct factory props before binding request state', async () => {
+    const key = 'test-mrtr-request-state-key-32-bytes-minimum';
+    const highLevelServer = createMetroMcpServer(untrustedContext({
+      userId: ' 42 ',
+      userLogin: ' anurag ',
+      clientId: ' claude ',
+      scopes: ['transit:read'],
+    }));
+    const configured = highLevelServer.server as unknown as {
+      _requestStateVerify: (state: string, context: ServerContext) => Promise<MetroRequestState>;
+    };
+    const referenceCodec = createRequestStateCodec<MetroRequestState>({
+      key,
+      ttlSeconds: 300,
+      bind: context => ['42', context.mcpReq.method].join('\u0000'),
+    });
+    const context = stateContext();
+    const payload: MetroRequestState = {
+      phase: 'station-selection',
+      tool: 'get_station_predictions',
+      city: 'dc',
+      query: 'metro center',
+      candidateIds: ['A01'],
+    };
+    const state = await referenceCodec.mint(payload, context);
+
+    await expect(configured._requestStateVerify(state, context)).resolves.toEqual(payload);
   });
 
   it('configures the documented cache and input-required policies', () => {

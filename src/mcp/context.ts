@@ -36,10 +36,6 @@ export type MetroRequestState = {
   candidateIds: string[];
 };
 
-type ScopeBearingProps = Omit<MetroMcpProps, 'scopes'> & {
-  scopes: readonly string[];
-};
-
 /** Parse OAuth application props into the only shape accepted by Metro MCP. */
 export function parseMetroMcpProps(value: unknown): MetroMcpProps {
   const result = metroMcpPropsSchema.safeParse(value);
@@ -51,8 +47,15 @@ export function parseMetroMcpProps(value: unknown): MetroMcpProps {
 }
 
 /** Enforce Metro MCP's single application permission before building a server. */
-export function requireTransitRead(props: ScopeBearingProps): MetroMcpProps {
-  if (props.scopes.length !== 1 || props.scopes[0] !== 'transit:read') {
+export function requireTransitRead(props: unknown): MetroMcpProps {
+  const scopes = typeof props === 'object'
+    && props !== null
+    && !Array.isArray(props)
+    && 'scopes' in props
+    ? props.scopes
+    : undefined;
+
+  if (!Array.isArray(scopes) || scopes.length !== 1 || scopes[0] !== 'transit:read') {
     throw new OAuthError(OAuthErrorCode.InsufficientScope, 'insufficient_scope');
   }
 
