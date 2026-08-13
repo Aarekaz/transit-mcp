@@ -8,7 +8,7 @@
  * - Self-documenting code through types
  */
 
-import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
+import type { AuthRequest, OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 
 /**
  * Cloudflare Workers Environment
@@ -206,6 +206,21 @@ export interface OAuthTokenResponse {
   token_type: 'Bearer';           // Always "Bearer" for JWT
   expires_in: number;             // Seconds until expiration
   scope?: string;                 // Granted scopes
+}
+
+/** Application-owned state between Provider validation and GitHub identity. */
+export interface PendingGitHubLogin {
+  authRequest: AuthRequest;
+  clientName: string;
+  createdAt: number;
+}
+
+/** Application-owned state between GitHub identity and explicit MCP consent. */
+export interface PendingConsent extends PendingGitHubLogin {
+  user: {
+    id: string;
+    login: string;
+  };
 }
 
 /**

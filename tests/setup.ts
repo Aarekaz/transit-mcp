@@ -15,6 +15,7 @@
  */
 
 import { vi } from 'vitest';
+import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import type { Env, OAuthClient, TransitStation } from '../src/types';
 
 /**
@@ -94,9 +95,14 @@ function createMockDONamespace(): DurableObjectNamespace {
   }) as unknown as DurableObjectNamespace;
 }
 
-function createMockOAuthHelpers(): Env['OAUTH_PROVIDER'] {
-  return new Proxy({}, {
-    get() {
+export function createMockOAuthHelpers(
+  overrides: Partial<OAuthHelpers> = {},
+): Env['OAUTH_PROVIDER'] {
+  return new Proxy(overrides, {
+    get(target, property, receiver) {
+      if (Reflect.has(target, property)) {
+        return Reflect.get(target, property, receiver);
+      }
       throw new Error('OAUTH_PROVIDER helpers accessed without an explicit test mock.');
     }
   }) as Env['OAUTH_PROVIDER'];
