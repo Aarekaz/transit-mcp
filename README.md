@@ -108,7 +108,7 @@ Want to run your own instance? See the [Deployment](#deployment) section below.
 - [WMATA API Key](https://developer.wmata.com/) (required)
 - [Cloudflare Account](https://dash.cloudflare.com/) (free tier works)
 - [Bun](https://bun.sh/) for package management
-- [Node.js](https://nodejs.org/) for Wrangler
+- [Node.js](https://nodejs.org/) for Wrangler and the Workerd Vitest pool; Bun remains the sole package manager and lockfile owner
 - [GitHub OAuth App](https://github.com/settings/developers) (for authentication)
 
 ### Setup Steps

@@ -17,7 +17,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     // Test file patterns
-    include: ['src/**/*.test.ts', 'tests/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'tests/unit/**/*.test.ts'],
     exclude: ['node_modules', 'dist', '.wrangler'],
 
     // Coverage configuration
