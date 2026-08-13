@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
   parseMetroMcpProps,
   requireTransitRead,
+  type MetroMcpProps,
 } from '../../src/mcp/context';
 import {
   PRIVATE_NO_CACHE,
@@ -67,6 +68,15 @@ describe('Metro MCP authentication context', () => {
     });
 
     expect(requireTransitRead(props)).toBe(props);
+  });
+
+  it('preserves the static and runtime identity of scope-only input', () => {
+    const scopeOnly = { scopes: ['transit:read'] as const };
+    const authorized = requireTransitRead(scopeOnly);
+
+    expect(authorized).toBe(scopeOnly);
+    expectTypeOf(authorized).toEqualTypeOf<typeof scopeOnly>();
+    expectTypeOf(authorized).not.toMatchTypeOf<MetroMcpProps>();
   });
 });
 

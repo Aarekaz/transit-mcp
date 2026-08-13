@@ -47,7 +47,7 @@ export function parseMetroMcpProps(value: unknown): MetroMcpProps {
 }
 
 /** Enforce Metro MCP's single application permission before building a server. */
-export function requireTransitRead(props: unknown): MetroMcpProps {
+export function requireTransitRead<Props>(props: Props): Props {
   const scopes = typeof props === 'object'
     && props !== null
     && !Array.isArray(props)
@@ -59,5 +59,5 @@ export function requireTransitRead(props: unknown): MetroMcpProps {
     throw new OAuthError(OAuthErrorCode.InsufficientScope, 'insufficient_scope');
   }
 
-  return props as MetroMcpProps;
+  return props;
 }
