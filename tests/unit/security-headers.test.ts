@@ -147,6 +147,23 @@ describe('Security Headers', () => {
       const csp = secured.headers.get('Content-Security-Policy');
       expect(csp).toContain("script-src 'none'");
     });
+
+    it('preserves a response policy that is already stricter and route-specific', () => {
+      const response = new Response('<html></html>', {
+        headers: {
+          'Content-Type': 'text/html',
+          'Content-Security-Policy': "default-src 'none'; form-action 'self'",
+          'Referrer-Policy': 'no-referrer',
+        },
+      });
+
+      const secured = addSecurityHeadersAuto(response);
+
+      expect(secured.headers.get('Content-Security-Policy'))
+        .toBe("default-src 'none'; form-action 'self'");
+      expect(secured.headers.get('Referrer-Policy')).toBe('no-referrer');
+      expect(secured.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    });
   });
 
   describe('createSecureJsonResponse', () => {

@@ -16,7 +16,7 @@
 
 import { vi } from 'vitest';
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
-import type { Env, OAuthClient, TransitStation } from '../src/types';
+import type { Env, TransitStation } from '../src/types';
 
 /**
  * Mock KVNamespace implementation
@@ -119,10 +119,8 @@ export function createMockEnv(overrides: Partial<Env> = {}): Env {
     OAUTH_REDIRECT_URI: 'https://metro-mcp.anuragd.me/callback',
     WMATA_API_KEY: 'test-wmata-key',
     JWT_SECRET: 'test-jwt-secret-at-least-32-characters-long',
-    OAUTH_CLIENTS: createMockKV(),
     OAUTH_KV: createMockKV(),
     OAUTH_PROVIDER: createMockOAuthHelpers(),
-    RATE_LIMIT_KV: createMockKV(),
     MCP_SESSION: createMockDONamespace(),
     ASSETS: { fetch: vi.fn() } as unknown as Fetcher,
     ENVIRONMENT: 'production',
@@ -201,17 +199,6 @@ export function createMockFetch(responseBody: any, status: number = 200) {
     createMockResponse(responseBody, status)
   );
 }
-
-/**
- * Test fixtures for OAuth clients
- */
-export const mockOAuthClient: OAuthClient = {
-  client_id: 'test-client-123',
-  client_secret: 'hashed-secret',
-  redirect_uris: ['http://localhost:3000/callback'],
-  client_name: 'Test Client',
-  created_at: Date.now(),
-};
 
 /**
  * Test fixtures for transit stations

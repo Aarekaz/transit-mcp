@@ -19,7 +19,7 @@ import type { AuthRequest, OAuthHelpers } from '@cloudflare/workers-oauth-provid
  * 
  * BINDINGS EXPLAINED:
  * - Environment variables: Configuration and secrets
- * - KV Namespaces: Key-value storage for OAuth clients and rate limiting
+ * - KV Namespaces: Provider-owned OAuth protocol storage
  * 
  * NOTE: Update this when adding new environment variables or KV namespaces
  */
@@ -41,40 +41,11 @@ export interface Env {
   // Security
   JWT_SECRET: string;              // Secret for signing JWT tokens (secret)
 
-  // KV Namespace Bindings
-  /**
-   * OAuth client registration storage
-   * 
-   * WHY KV:
-   * - Persistent storage for registered OAuth clients
-   * - Low latency (edge caching)
-   * - Simple key-value interface
-   * 
-   * USAGE:
-   * await env.OAUTH_CLIENTS.put(clientId, JSON.stringify(clientData));
-   * const client = await env.OAUTH_CLIENTS.get(clientId);
-   */
-  OAUTH_CLIENTS?: KVNamespace;
-
   /** OAuth Provider protocol storage. */
   OAUTH_KV: KVNamespace;
 
   /** OAuth Provider helpers injected into protected/default handlers. */
   OAUTH_PROVIDER: OAuthHelpers;
-
-  /**
-   * Rate limiting storage
-   *
-   * WHY SEPARATE KV:
-   * - High write volume (every request)
-   * - Automatic expiration (TTL)
-   * - Separate from OAuth data (different access patterns)
-   *
-   * USAGE:
-   * await env.RATE_LIMIT_KV.put(key, count, { expirationTtl: 60 });
-   * const count = await env.RATE_LIMIT_KV.get(key);
-   */
-  RATE_LIMIT_KV?: KVNamespace;     // Optional for backward compatibility
 
   /**
    * MCP session storage (legacy KV path).
@@ -88,13 +59,8 @@ export interface Env {
   MCP_SESSIONS?: KVNamespace;
 
   /**
-   * MCP session Durable Object namespace.
-   *
-   * Each MetroMcpAgent instance is one MCP session, addressed by the
-   * Mcp-Session-Id header. The DO holds the transport, event log, and
-   * any subscribed resources. cloudflare/agents' McpAgent base class
-   * wires this binding automatically when MetroMcpAgent.serve() is
-   * invoked with `{ binding: "MCP_SESSION" }`.
+   * Inactive MCP session namespace retained only so the rollback class
+   * continues to type-check until Task 12 removes the active binding.
    */
   MCP_SESSION?: DurableObjectNamespace;
 
@@ -125,87 +91,6 @@ export interface User {
   name: string;
   email: string;
   avatar_url: string;
-}
-
-/**
- * Authentication session data
- * 
- * WHY JWT SESSIONS:
- * - Stateless (no server-side session storage needed)
- * - Secure (signed with JWT_SECRET)
- * - Self-contained (includes all needed info)
- * 
- * STORED IN JWT TOKEN:
- * These fields are encoded in the JWT and sent to clients.
- * Don't include sensitive data that shouldn't be client-readable.
- */
-export interface AuthSession {
-  userId: string;        // GitHub user ID
-  userLogin: string;     // GitHub username
-  expiresAt: number;     // Unix timestamp (seconds)
-  /**
-   * Resource indicator (RFC 8707) bound to this token.
-   * When present, the request URL's canonical MCP resource MUST match this value.
-   * Absent on legacy tokens issued before audience binding was introduced —
-   * those are accepted with a deprecation warning until they expire.
-   */
-  audience?: string;
-}
-
-/**
- * OAuth client registration data
- * 
- * WHY DYNAMIC CLIENT REGISTRATION:
- * Allows MCP clients to register themselves without manual setup.
- * Follows RFC 7591 for OAuth 2.0 Dynamic Client Registration.
- * 
- * STORED IN KV:
- * Persisted in OAUTH_CLIENTS namespace, keyed by client_id.
- */
-export interface OAuthClient {
-  client_id: string;              // Unique client identifier
-  client_secret: string;          // Client secret (hashed)
-  redirect_uris: string[];        // Allowed redirect URIs
-  client_name?: string;           // Human-readable name
-  created_at: number;             // Unix timestamp (milliseconds)
-  last_used_at?: number;          // Unix timestamp (milliseconds)
-}
-
-/**
- * OAuth authorization state
- * 
- * WHY STATE PARAMETER:
- * - Prevents CSRF attacks on OAuth flow
- * - Links authorization request to callback
- * - Can store additional context
- * 
- * STORED IN KV:
- * Temporarily stored during OAuth flow, expires quickly.
- */
-export interface OAuthState {
-  state: string;                  // Random state parameter
-  code_challenge: string;         // PKCE code challenge
-  code_challenge_method: string;  // PKCE method (S256)
-  client_id: string;              // OAuth client ID
-  redirect_uri: string;           // Callback URI
-  created_at: number;             // Unix timestamp (milliseconds)
-}
-
-/**
- * OAuth token response
- * 
- * WHY THESE FIELDS:
- * Standard OAuth 2.0 token response (RFC 6749)
- * 
- * SECURITY NOTE:
- * access_token is a JWT containing AuthSession data.
- * Never log or expose tokens in error messages.
- */
-export interface OAuthTokenResponse {
-  access_token: string;           // JWT access token
-  token_type: 'Bearer';           // Always "Bearer" for JWT
-  expires_in: number;             // Seconds until expiration
-  scope?: string;                 // Granted scopes
 }
 
 /** Application-owned state between Provider validation and GitHub identity. */

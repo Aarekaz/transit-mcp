@@ -58,11 +58,11 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
     },
     transport: {
       type: 'streamable-http',
-      note: 'MCP Streamable HTTP transport. Sessions live in a Durable Object via cloudflare/agents McpAgent.',
+      note: 'MCP stateless Streamable HTTP transport with request-scoped JSON or SSE responses.',
       supportsJSON: true,
       supportsSSEResponses: true,
       supportsServerPush: true,
-      supportsResumability: true
+      supportsResumability: false
     },
     authentication: {
       type: 'OAuth 2.1',

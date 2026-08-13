@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { AuthManager } from '../../src/auth';
 import { resolveLegacyToken } from '../../src/oauth/legacy-token';
 import { createMockEnv } from '../setup';
 
@@ -73,12 +72,13 @@ describe('legacy OAuth token resolver', () => {
     });
   });
 
-  it('accepts the canonical claim pair emitted by the retained AuthManager', async () => {
-    const token = await new AuthManager(env).generateJWT({
+  it('accepts the canonical deployed userId/userLogin claim pair', async () => {
+    const token = await legacyJwt({
+      sub: undefined,
+      login: undefined,
       userId: ' 42 ',
       userLogin: ' anurag ',
-      expiresAt: Date.parse('2026-08-13T13:00:00Z') / 1_000,
-      audience: RESOURCE_URI,
+      exp: Date.parse('2026-08-13T13:00:00Z') / 1_000,
     });
 
     await expect(resolveLegacyToken(token, env, RESOURCE_URI)).resolves.toEqual({
