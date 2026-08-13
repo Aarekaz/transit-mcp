@@ -83,6 +83,16 @@
   "env": {
     "preview": {
       // Preview uses an independent GitHub OAuth app and OAUTH_KV namespace.
+      // Bindings do not inherit into named Wrangler environments. Retain this
+      // rollback binding until the stateless MCP cutover removes active DO routing.
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "MCP_SESSION",
+            "class_name": "MetroMcpAgent"
+          }
+        ]
+      },
       "vars": {
         "GITHUB_CLIENT_ID": "your-preview-github-oauth-app-client-id",
         "MCP_PUBLIC_ORIGIN": "https://metro-mcp-preview.anuragd.me",

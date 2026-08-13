@@ -70,10 +70,12 @@ export function loadConfig(env: Env): Config {
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   }
 
+  const publicOrigin = parsePublicOrigin(env.MCP_PUBLIC_ORIGIN, env.ENVIRONMENT).origin;
+
   const config: Config = {
     mcp: {
-      publicOrigin: env.MCP_PUBLIC_ORIGIN,
-      resourceUri: `${env.MCP_PUBLIC_ORIGIN}/mcp`,
+      publicOrigin,
+      resourceUri: `${publicOrigin}/mcp`,
       allowedHostnames: parseHostnameList(env.MCP_ALLOWED_HOSTNAMES),
       allowedOriginHostnames: parseHostnameList(env.MCP_ALLOWED_ORIGIN_HOSTNAMES),
       requestStateKey: env.MCP_REQUEST_STATE_KEY,
@@ -125,6 +127,9 @@ export function validateConfig(config: Config): void {
   if (new TextEncoder().encode(config.mcp.requestStateKey).byteLength < 32) {
     throw new Error('MCP_REQUEST_STATE_KEY must be at least 32 bytes');
   }
+  if (new TextEncoder().encode(config.legacyJwt.secret).byteLength < 32) {
+    throw new Error('JWT_SECRET must be at least 32 bytes');
+  }
 
   if (config.oauth.accessTokenTtlSeconds !== ACCESS_TOKEN_TTL_SECONDS) {
     throw new Error('OAuth accessTokenTtlSeconds must equal 3600');
@@ -165,14 +170,14 @@ function parsePublicOrigin(
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopback && environment === 'development')) {
     throw new Error('MCP_PUBLIC_ORIGIN must use HTTPS except for loopback development');
   }
-  if (url.username || url.password) {
-    throw new Error('MCP_PUBLIC_ORIGIN must not contain credentials');
-  }
   if (url.pathname !== '/') {
     throw new Error('MCP_PUBLIC_ORIGIN must not contain a path');
   }
   if (url.search || url.hash) {
     throw new Error('MCP_PUBLIC_ORIGIN must not contain a query or fragment');
+  }
+  if (value !== url.origin) {
+    throw new Error('MCP_PUBLIC_ORIGIN must be a canonical origin');
   }
 
   return url;

@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { URL as NodeURL } from 'node:url';
+import stripJsonComments from 'strip-json-comments';
 import { describe, expect, it } from 'vitest';
 import { loadConfig, validateConfig } from '../../src/config';
 import type { Env } from '../../src/types';
@@ -56,6 +59,32 @@ describe('deployment configuration', () => {
     ['https://metro-mcp.anuragd.me/', 'must not end with a slash'],
   ])('rejects invalid public origin %s', (origin, message) => {
     expect(() => loadConfig(createMockEnv({ MCP_PUBLIC_ORIGIN: origin }))).toThrow(message);
+  });
+
+  it.each([
+    'https://metro-mcp.anuragd.me?',
+    'https://metro-mcp.anuragd.me#',
+    'https://@metro-mcp.anuragd.me',
+    'https://user@metro-mcp.anuragd.me',
+    'https://metro-mcp.anuragd.me/.',
+    'https://metro-mcp.anuragd.me/..',
+    'https://METRO-MCP.ANURAGD.ME',
+    'https://metro-mcp.anuragd.me:443',
+  ])('rejects non-canonical public origin spelling %s', origin => {
+    expect(() => loadConfig(createMockEnv({ MCP_PUBLIC_ORIGIN: origin }))).toThrow(
+      'must be a canonical origin',
+    );
+  });
+
+  it('preserves an intentional non-default public-origin port', () => {
+    const config = loadConfig(createMockEnv({
+      MCP_PUBLIC_ORIGIN: 'https://metro-mcp.anuragd.me:8443',
+      OAUTH_REDIRECT_URI: 'https://metro-mcp.anuragd.me:8443/callback',
+    }));
+
+    expect(config.mcp.publicOrigin).toBe('https://metro-mcp.anuragd.me:8443');
+    expect(config.mcp.resourceUri).toBe('https://metro-mcp.anuragd.me:8443/mcp');
+    expect(config.oauth.redirectUri).toBe('https://metro-mcp.anuragd.me:8443/callback');
   });
 
   it.each([
@@ -130,6 +159,21 @@ describe('deployment configuration', () => {
     expect(config.mcp.requestStateKey).toBe('🔐'.repeat(8));
   });
 
+  it('requires a 32-byte legacy JWT secret', () => {
+    expect(() => loadConfig(createMockEnv({ JWT_SECRET: 'short' }))).toThrow(
+      'JWT_SECRET must be at least 32 bytes',
+    );
+  });
+
+  it('measures the legacy JWT secret as bytes', () => {
+    const config = loadConfig(createMockEnv({ JWT_SECRET: '🔐'.repeat(8) }));
+    expect(config.legacyJwt.secret).toBe('🔐'.repeat(8));
+
+    expect(() => loadConfig(createMockEnv({ JWT_SECRET: '🔐'.repeat(7) }))).toThrow(
+      'JWT_SECRET must be at least 32 bytes',
+    );
+  });
+
   it.each(['test', 'staging', 'prod'])('rejects unsupported environment %s', environment => {
     expect(() => loadConfig(createMockEnv({
       ENVIRONMENT: environment as Env['ENVIRONMENT'],
@@ -161,5 +205,22 @@ describe('deployment configuration', () => {
     expect(() => validateConfig(config)).toThrow(
       'legacy JWT cutoff must equal 2026-11-30T00:00:00Z',
     );
+  });
+
+  it('keeps the rollback MCP session binding in the named preview environment', () => {
+    const example = JSON.parse(stripJsonComments(readFileSync(
+      new NodeURL('../../wrangler.jsonc.example', import.meta.url),
+      'utf8',
+    )));
+
+    expect(example.env.preview.durable_objects.bindings).toContainEqual({
+      name: 'MCP_SESSION',
+      class_name: 'MetroMcpAgent',
+    });
+    expect(example.migrations).toEqual([{
+      tag: 'v1',
+      new_sqlite_classes: ['MetroMcpAgent'],
+    }]);
+    expect(JSON.stringify(example.migrations)).not.toContain('deleted_classes');
   });
 });
