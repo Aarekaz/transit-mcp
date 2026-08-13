@@ -67,7 +67,8 @@ export class MTAClient extends TransitAPIClient {
    * Fetch and parse a GTFS-realtime feed
    */
   private async fetchFeed(
-    feedKey: keyof typeof MTA_FEEDS
+    feedKey: keyof typeof MTA_FEEDS,
+    signal?: AbortSignal
   ): Promise<GtfsRealtimeBindings.transit_realtime.FeedMessage> {
     // Check cache
     const cached = this.feedCache.get(feedKey);
@@ -77,7 +78,7 @@ export class MTAClient extends TransitAPIClient {
 
     // Fetch fresh data
     const feedUrl = MTA_FEEDS[feedKey];
-    const response = await fetch(feedUrl);
+    const response = await fetch(feedUrl, { signal });
 
     if (!response.ok) {
       throw new Error(`MTA feed fetch failed: ${response.status} ${response.statusText}`);
@@ -101,7 +102,7 @@ export class MTAClient extends TransitAPIClient {
   /**
    * Get all stations in NYC subway system
    */
-  async getStations(): Promise<TransitStation[]> {
+  async getStations(_signal?: AbortSignal): Promise<TransitStation[]> {
     // In production, this would load from GTFS static data
     // For now, returning the sample stations
     return NYC_STATIONS;
@@ -110,7 +111,10 @@ export class MTAClient extends TransitAPIClient {
   /**
    * Get real-time train predictions for a station
    */
-  async getStationPredictions(stationId: string): Promise<TransitPrediction[]> {
+  async getStationPredictions(
+    stationId: string,
+    signal?: AbortSignal
+  ): Promise<TransitPrediction[]> {
     const predictions: TransitPrediction[] = [];
 
     // Determine which feeds to check based on the station
@@ -118,8 +122,9 @@ export class MTAClient extends TransitAPIClient {
     const feedsToCheck = Object.keys(MTA_FEEDS) as (keyof typeof MTA_FEEDS)[];
 
     for (const feedKey of feedsToCheck) {
+      signal?.throwIfAborted();
       try {
-        const feed = await this.fetchFeed(feedKey);
+        const feed = await this.fetchFeed(feedKey, signal);
 
         for (const entity of feed.entity) {
           if (!entity.tripUpdate) continue;
@@ -159,6 +164,15 @@ export class MTAClient extends TransitAPIClient {
           }
         }
       } catch (error) {
+        if (
+          signal?.aborted ||
+          (typeof error === 'object' &&
+            error !== null &&
+            'name' in error &&
+            error.name === 'AbortError')
+        ) {
+          throw error;
+        }
         // Log error but continue with other feeds to provide partial results
         // In production, this would be sent to Cloudflare's logging/observability
         // Continue with other feeds
@@ -179,13 +193,14 @@ export class MTAClient extends TransitAPIClient {
    * Get current service alerts and incidents
    * Uses dedicated subway-alerts feed for better performance (1 call vs 8)
    */
-  async getIncidents(): Promise<TransitIncident[]> {
+  async getIncidents(signal?: AbortSignal): Promise<TransitIncident[]> {
     const incidents: TransitIncident[] = [];
 
     try {
       // Fetch from dedicated alerts feed (JSON format, faster than protobuf)
       const response = await fetch(
-        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts.json'
+        'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts.json',
+        { signal }
       );
 
       if (!response.ok) {
@@ -235,6 +250,15 @@ export class MTAClient extends TransitAPIClient {
         });
       }
     } catch (error) {
+      if (
+        signal?.aborted ||
+        (typeof error === 'object' &&
+          error !== null &&
+          'name' in error &&
+          error.name === 'AbortError')
+      ) {
+        throw error;
+      }
       // If alerts feed fails, return empty array rather than breaking the whole request
       // In production, this would be sent to Cloudflare's logging/observability
     }
@@ -246,7 +270,10 @@ export class MTAClient extends TransitAPIClient {
    * Search for stations by name or code
    * Handles common abbreviations (Square→Sq, Street→St, etc.)
    */
-  async searchStation(query: string): Promise<TransitStation[]> {
+  async searchStation(
+    query: string,
+    _signal?: AbortSignal
+  ): Promise<TransitStation[]> {
     const normalizedQuery = query.toLowerCase().trim();
 
     // Common abbreviation mappings for fuzzy matching
@@ -272,14 +299,17 @@ export class MTAClient extends TransitAPIClient {
   /**
    * Get stations on a specific line
    */
-  async getStationsByLine(lineCode: string): Promise<TransitStation[]> {
+  async getStationsByLine(
+    lineCode: string,
+    _signal?: AbortSignal
+  ): Promise<TransitStation[]> {
     return NYC_STATIONS.filter((station) => station.lines.includes(lineCode.toUpperCase()));
   }
 
   /**
    * Get detailed route information
    */
-  async getRouteInfo(routeId: string): Promise<TransitRoute | null> {
+  async getRouteInfo(routeId: string, _signal?: AbortSignal): Promise<TransitRoute | null> {
     const route = NYC_ROUTES.find((r) => r.routeId === routeId.toUpperCase());
     return route || null;
   }
@@ -287,7 +317,10 @@ export class MTAClient extends TransitAPIClient {
   /**
    * Get transfer connections from a station
    */
-  async getStationTransfers(stationId: string): Promise<StationTransfer[]> {
+  async getStationTransfers(
+    stationId: string,
+    _signal?: AbortSignal
+  ): Promise<StationTransfer[]> {
     const station = NYC_STATIONS.find((s) => s.id === stationId);
     return station?.transfers || [];
   }
