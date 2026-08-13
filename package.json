@@ -9,7 +9,7 @@
     "deploy": "wrangler deploy",
     "build": "echo 'no build step needed: wrangler bundles src/index.ts directly via esbuild. Type-check runs via `bun run type-check` locally or in a separate CI job.'",
     "test:unit": "vitest run --config vitest.config.ts",
-    "test:workers": "vitest run --config vitest.workers.config.ts --passWithNoTests",
+    "test:workers": "vitest run --config vitest.workers.config.ts",
     "test": "bun run test:unit && bun run test:workers",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -27,7 +27,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "0.16.10",
+    "@cloudflare/vitest-pool-workers": "0.16.20",
     "@cloudflare/workers-types": "^4.20241218.0",
     "@modelcontextprotocol/conformance": "0.2.0-alpha.11",
     "@vitest/coverage-v8": "4.1.10",

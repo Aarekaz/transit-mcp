@@ -23,6 +23,85 @@ function insufficientScope(): Response {
   );
 }
 
+type LinkedMcpRequest = {
+  request: Request;
+  controller: AbortController;
+  cleanup: () => void;
+};
+
+function linkMcpRequestSignal(request: Request): LinkedMcpRequest {
+  const controller = new AbortController();
+  let listening = false;
+  const forwardAbort = () => controller.abort(request.signal.reason);
+
+  if (request.signal.aborted) {
+    forwardAbort();
+  } else {
+    request.signal.addEventListener('abort', forwardAbort, { once: true });
+    listening = true;
+  }
+
+  return {
+    request: new Request(request, { signal: controller.signal }),
+    controller,
+    cleanup() {
+      if (listening) {
+        listening = false;
+        request.signal.removeEventListener('abort', forwardAbort);
+      }
+    },
+  };
+}
+
+function bridgeResponseCancellation(
+  response: Response,
+  controller: AbortController,
+  cleanup: () => void,
+): Response {
+  if (!response.body) {
+    cleanup();
+    return response;
+  }
+
+  const reader = response.body.getReader();
+  let finished = false;
+  const finish = () => {
+    if (!finished) {
+      finished = true;
+      cleanup();
+    }
+  };
+  const body = new ReadableStream<Uint8Array>({
+    async pull(streamController) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          finish();
+          streamController.close();
+        } else if (value !== undefined) {
+          streamController.enqueue(value);
+        }
+      } catch (error) {
+        finish();
+        streamController.error(error);
+      }
+    },
+    async cancel(reason) {
+      if (!controller.signal.aborted) {
+        controller.abort(reason);
+      }
+      finish();
+      await reader.cancel(reason);
+    },
+  });
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 /** Serve one authenticated stateless MCP request from Provider-owned props. */
 export async function handleMcpRequest(
   request: Request,
@@ -70,5 +149,16 @@ export async function handleMcpRequest(
     },
   );
 
-  return handler.fetch(request, authInfo ? { authInfo } : undefined);
+  const linked = linkMcpRequestSignal(request);
+  let response: Response;
+  try {
+    response = await handler.fetch(
+      linked.request,
+      authInfo ? { authInfo } : undefined,
+    );
+  } catch (error) {
+    linked.cleanup();
+    throw error;
+  }
+  return bridgeResponseCancellation(response, linked.controller, linked.cleanup);
 }

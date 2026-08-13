@@ -16,7 +16,13 @@
 
 import { vi } from 'vitest';
 import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
-import type { Env, TransitStation } from '../src/types';
+import type { Env as WorkerEnv, TransitStation } from '../src/types';
+
+declare global {
+  namespace Cloudflare {
+    interface Env extends WorkerEnv {}
+  }
+}
 
 /**
  * Mock KVNamespace implementation
@@ -97,7 +103,7 @@ function createMockDONamespace(): DurableObjectNamespace {
 
 export function createMockOAuthHelpers(
   overrides: Partial<OAuthHelpers> = {},
-): Env['OAUTH_PROVIDER'] {
+): WorkerEnv['OAUTH_PROVIDER'] {
   return new Proxy(overrides, {
     get(target, property, receiver) {
       if (Reflect.has(target, property)) {
@@ -105,10 +111,10 @@ export function createMockOAuthHelpers(
       }
       throw new Error('OAUTH_PROVIDER helpers accessed without an explicit test mock.');
     }
-  }) as Env['OAUTH_PROVIDER'];
+  }) as WorkerEnv['OAUTH_PROVIDER'];
 }
 
-export function createMockEnv(overrides: Partial<Env> = {}): Env {
+export function createMockEnv(overrides: Partial<WorkerEnv> = {}): WorkerEnv {
   return {
     MCP_PUBLIC_ORIGIN: 'https://metro-mcp.anuragd.me',
     MCP_ALLOWED_HOSTNAMES: 'metro-mcp.anuragd.me',
