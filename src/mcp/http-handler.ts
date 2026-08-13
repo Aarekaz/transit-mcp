@@ -1,4 +1,4 @@
-import type { AuthInfo } from '@modelcontextprotocol/server';
+import { isLegacyRequest, type AuthInfo } from '@modelcontextprotocol/server';
 import { createMcpHandler } from 'agents/mcp/server';
 
 import type { Config } from '../config';
@@ -20,6 +20,40 @@ function insufficientScope(): Response {
         'WWW-Authenticate': 'Bearer error="insufficient_scope", scope="transit:read"',
       },
     },
+  );
+}
+
+async function missingModernVersionHeaderResponse(
+  request: Request,
+): Promise<Response | undefined> {
+  if (request.headers.has('MCP-Protocol-Version') || await isLegacyRequest(request)) {
+    return undefined;
+  }
+
+  let id: string | number | null = null;
+  try {
+    const body: unknown = await request.clone().json();
+    if (body && typeof body === 'object' && !Array.isArray(body) && 'id' in body) {
+      const candidate = body.id;
+      if (typeof candidate === 'string' || typeof candidate === 'number') {
+        id = candidate;
+      }
+    }
+  } catch {
+    // The SDK classifier already identified a modern envelope; keep a null ID
+    // if its request body cannot be safely read again.
+  }
+
+  return Response.json(
+    {
+      jsonrpc: '2.0',
+      error: {
+        code: -32020,
+        message: 'The MCP-Protocol-Version header is required for MCP 2026 requests.',
+      },
+      id,
+    },
+    { status: 400 },
   );
 }
 
@@ -120,6 +154,11 @@ export async function handleMcpRequest(
 
   if (telemetry) {
     telemetry.clientId = props.clientId;
+  }
+
+  const missingVersion = await missingModernVersionHeaderResponse(request);
+  if (missingVersion) {
+    return missingVersion;
   }
 
   const handler = createMcpHandler(

@@ -258,8 +258,16 @@ describe('assembled OAuth Provider', () => {
   it('keeps DCR as a TTL-bound compatibility fallback with exact redirect matching', async () => {
     const confidential = await registerClient('client_secret_basic');
     expect(confidential.client_secret).toBeTruthy();
-    expect(confidential.client_secret_expires_at! - confidential.client_id_issued_at)
-      .toBe(7_776_000);
+    expect(confidential.client_id_issued_at).toBeTypeOf('number');
+    expect(confidential.client_secret_expires_at)
+      .toBe(confidential.client_id_issued_at + 7_776_000);
+
+    const accepted = await oauthFetch(authorizationPath(confidential.client_id, {
+      challenge: await pkceChallenge(),
+      method: 'S256',
+    }));
+    expect(accepted.status).toBe(302);
+    expect(new URL(accepted.headers.get('location')!).origin).toBe('https://github.com');
 
     const wrongRedirect = await oauthFetch(authorizationPath(confidential.client_id, {
       redirectUri: 'https://client.example/other',
@@ -458,6 +466,33 @@ describe('assembled OAuth Provider', () => {
     expect(refreshed.access_token).not.toBe(tokens.access_token);
     expect(refreshed.refresh_token).not.toBe(tokens.refresh_token);
     expect(refreshed.resource).toBe(TEST_RESOURCE);
+  });
+
+  it('rejects access just beyond 60 minutes while preserving the refresh grant', async () => {
+    const { client, tokens } = await approveAndExchange();
+    const issuedAt = Date.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(issuedAt + 3_601_000));
+
+    const expiredAccess = await SELF.fetch(await modernMcpRequest('server/discover', {}, {
+      token: tokens.access_token,
+    }));
+    expect(expiredAccess.status).toBe(401);
+    expect(expiredAccess.headers.get('www-authenticate')).toContain('invalid_token');
+    await expect(expiredAccess.json()).resolves.toMatchObject({ error: 'invalid_token' });
+
+    const refresh = await tokenRequest({
+      grant_type: 'refresh_token',
+      client_id: client.client_id,
+      refresh_token: tokens.refresh_token,
+      resource: TEST_RESOURCE,
+    });
+    expect(refresh.status).toBe(200);
+    await expect(refresh.json()).resolves.toMatchObject({
+      token_type: 'bearer',
+      expires_in: 3_600,
+      resource: TEST_RESOURCE,
+    });
   });
 
   it('expires the refresh grant at the configured 30-day boundary', async () => {

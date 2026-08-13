@@ -249,6 +249,32 @@ describe('assembled MCP Worker', () => {
     }
   });
 
+  it('rejects modern metadata when the protocol version mirror header is missing', async () => {
+    const request = await modernMcpRequest('server/discover');
+    request.headers.delete('MCP-Protocol-Version');
+
+    const response = await SELF.fetch(request);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      jsonrpc: '2.0',
+      id: 1,
+      error: { code: -32020 },
+    });
+  });
+
+  it('keeps ordinary 2025 stateless requests headerless', async () => {
+    const request = await legacyMcpRequest('tools/list');
+    expect(request.headers.has('MCP-Protocol-Version')).toBe(false);
+
+    const response = await SELF.fetch(request);
+
+    expect(response.status).toBe(200);
+    const result = onlyResult(await readMcpResponse(response));
+    expect((result.tools as Array<{ name: string }>).map(tool => tool.name))
+      .toEqual(EXPECTED_TOOL_NAMES);
+  });
+
   it('enforces Host and browser Origin while allowing Origin-less desktop requests', async () => {
     const token = await testBearerToken();
     const allowed = await SELF.fetch(await modernMcpRequest('server/discover', {}, {
