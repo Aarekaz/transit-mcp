@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { AuthManager } from '../../src/auth';
 import { resolveLegacyToken } from '../../src/oauth/legacy-token';
 import { createMockEnv } from '../setup';
 
@@ -13,6 +14,8 @@ type LegacyClaims = {
   nbf?: unknown;
   sub?: unknown;
   login?: unknown;
+  userId?: unknown;
+  userLogin?: unknown;
 };
 
 function base64Url(bytes: Uint8Array): string {
@@ -68,6 +71,70 @@ describe('legacy OAuth token resolver', () => {
         scopes: ['transit:read'],
       },
     });
+  });
+
+  it('accepts the canonical claim pair emitted by the retained AuthManager', async () => {
+    const token = await new AuthManager(env).generateJWT({
+      userId: ' 42 ',
+      userLogin: ' anurag ',
+      expiresAt: Date.parse('2026-08-13T13:00:00Z') / 1_000,
+      audience: RESOURCE_URI,
+    });
+
+    await expect(resolveLegacyToken(token, env, RESOURCE_URI)).resolves.toEqual({
+      audience: RESOURCE_URI,
+      props: {
+        userId: '42',
+        userLogin: 'anurag',
+        clientId: 'legacy-jwt',
+        scopes: ['transit:read'],
+      },
+    });
+  });
+
+  it('accepts both complete historical claim pairs only when normalized values agree', async () => {
+    const token = await legacyJwt({
+      userId: ' 42 ',
+      userLogin: ' anurag ',
+    });
+
+    await expect(resolveLegacyToken(token, env, RESOURCE_URI)).resolves.toMatchObject({
+      props: { userId: '42', userLogin: 'anurag' },
+    });
+  });
+
+  it.each([
+    ['only deployed userId', { userId: '42' }],
+    ['only deployed userLogin', { userLogin: 'anurag' }],
+    ['only alternate sub', { sub: '42' }],
+    ['only alternate login', { login: 'anurag' }],
+    ['alternate sub with deployed userLogin', { sub: '42', userLogin: 'anurag' }],
+    ['deployed userId with alternate login', { userId: '42', login: 'anurag' }],
+    ['non-string deployed userId', { userId: 42, userLogin: 'anurag' }],
+    ['non-string deployed userLogin', { userId: '42', userLogin: 42 }],
+    ['blank deployed userId', { userId: '   ', userLogin: 'anurag' }],
+    ['blank deployed userLogin', { userId: '42', userLogin: '   ' }],
+  ])('rejects incomplete, mixed, or invalid identity pair: %s', async (_label, identity) => {
+    const token = await legacyJwt({
+      sub: undefined,
+      login: undefined,
+      userId: undefined,
+      userLogin: undefined,
+      ...identity,
+    });
+
+    await expect(resolveLegacyToken(token, env, RESOURCE_URI)).resolves.toBeNull();
+  });
+
+  it.each([
+    ['different IDs', { userId: '99', userLogin: 'anurag' }],
+    ['different logins', { userId: '42', userLogin: 'other-user' }],
+  ])('rejects conflicting complete identity pairs: %s', async (_label, deployedPair) => {
+    await expect(resolveLegacyToken(
+      await legacyJwt(deployedPair),
+      env,
+      RESOURCE_URI,
+    )).resolves.toBeNull();
   });
 
   it('accepts exactly one trailing audience slash after URL normalization', async () => {

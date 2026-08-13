@@ -4,6 +4,11 @@ import type { Env } from '../types';
 
 const LEGACY_JWT_CUTOFF_MS = Date.parse('2026-11-30T00:00:00Z');
 
+type LegacyIdentity = {
+  userId: string;
+  userLogin: string;
+};
+
 function decodeBase64Url(value: string): Uint8Array {
   const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
   const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
@@ -33,6 +38,45 @@ function canonicalizeAudience(value: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+function parseIdentityPair(
+  claims: Record<string, unknown>,
+  idClaim: 'userId' | 'sub',
+  loginClaim: 'userLogin' | 'login',
+): LegacyIdentity | null | undefined {
+  const hasId = Object.hasOwn(claims, idClaim);
+  const hasLogin = Object.hasOwn(claims, loginClaim);
+  if (!hasId && !hasLogin) {
+    return undefined;
+  }
+  if (!hasId || !hasLogin) {
+    return null;
+  }
+
+  const id = claims[idClaim];
+  const login = claims[loginClaim];
+  if (typeof id !== 'string' || typeof login !== 'string') {
+    return null;
+  }
+  const userId = id.trim();
+  const userLogin = login.trim();
+  return userId.length > 0 && userLogin.length > 0
+    ? { userId, userLogin }
+    : null;
+}
+
+function resolveLegacyIdentity(claims: Record<string, unknown>): LegacyIdentity | null {
+  const deployed = parseIdentityPair(claims, 'userId', 'userLogin');
+  const alternate = parseIdentityPair(claims, 'sub', 'login');
+  if (deployed === null || alternate === null || (!deployed && !alternate)) {
+    return null;
+  }
+  if (deployed && alternate
+    && (deployed.userId !== alternate.userId || deployed.userLogin !== alternate.userLogin)) {
+    return null;
+  }
+  return deployed ?? alternate ?? null;
 }
 
 /**
@@ -94,10 +138,8 @@ export async function resolveLegacyToken(
     )) {
       return null;
     }
-    if (typeof claims.sub !== 'string' || claims.sub.trim().length === 0) {
-      return null;
-    }
-    if (typeof claims.login !== 'string' || claims.login.trim().length === 0) {
+    const identity = resolveLegacyIdentity(claims);
+    if (!identity) {
       return null;
     }
     if (canonicalizeAudience(claims.aud) !== resourceUri) {
@@ -107,8 +149,8 @@ export async function resolveLegacyToken(
     return {
       audience: resourceUri,
       props: {
-        userId: claims.sub.trim(),
-        userLogin: claims.login.trim(),
+        userId: identity.userId,
+        userLogin: identity.userLogin,
         clientId: 'legacy-jwt',
         scopes: ['transit:read'],
       },
