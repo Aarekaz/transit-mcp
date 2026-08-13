@@ -83,6 +83,24 @@ type RegisteredPrompt = {
   ) => Promise<unknown> | unknown;
 };
 
+const UNSUPPORTED_RESOURCE_CITY_CASES = [
+  [
+    'station',
+    'transit://stations/bos/127',
+    { city: 'bos', id: '127' },
+  ],
+  [
+    'route',
+    'transit://routes/bos/A',
+    { city: 'bos', id: 'A' },
+  ],
+  [
+    'incidents',
+    'transit://incidents/bos',
+    { city: 'bos' },
+  ],
+] as const;
+
 type ToolWireContract = {
   name: string;
   title?: string;
@@ -702,6 +720,49 @@ describe('SDK v2 resource contracts', () => {
       requestContext(controller.signal, 'resources/read'),
     )).rejects.toBe(reason);
   });
+
+  it.each(UNSUPPORTED_RESOURCE_CITY_CASES)(
+    'rejects unsupported city through the direct %s callback as invalid params',
+    async (name, uri, variables) => {
+      getTransitClientMock.mockImplementation(() => {
+        throw new Error('Unsupported transit system: bos');
+      });
+      const resource = registeredResourceTemplates()[name]!;
+
+      const failure = resource.readCallback(
+        new URL(uri),
+        variables,
+        requestContext(new AbortController().signal, 'resources/read'),
+      );
+
+      await expect(failure).rejects.toBeInstanceOf(ProtocolError);
+      await expect(failure).rejects.toMatchObject({
+        code: ProtocolErrorCode.InvalidParams,
+        message: 'Unsupported transit city: bos',
+      });
+    },
+  );
+
+  it.each(UNSUPPORTED_RESOURCE_CITY_CASES)(
+    'returns -32602 for unsupported city through the modern %s resource wire',
+    async (_name, uri) => {
+      getTransitClientMock.mockImplementation(() => {
+        throw new Error('Unsupported transit system: bos');
+      });
+
+      const message = await requestOverSdkWire(
+        metroServerFactory(),
+        'resources/read',
+        { uri },
+        { modern: true },
+      );
+
+      expect(message.error).toMatchObject({
+        code: -32602,
+        message: 'Unsupported transit city: bos',
+      });
+    },
+  );
 });
 
 describe('SDK v2 prompt contracts', () => {

@@ -15,6 +15,14 @@ import {
 
 const JSON_MIME_TYPE = 'application/json';
 
+function parseResourceCity(value: string | string[] | undefined): SupportedCity {
+  if (value === 'dc' || value === 'nyc') return value;
+  throw new ProtocolError(
+    ProtocolErrorCode.InvalidParams,
+    `Unsupported transit city: ${String(value)}`,
+  );
+}
+
 /** Register the three transit resource templates in wire-visible order. */
 export function registerResources(
   server: McpServer,
@@ -30,11 +38,11 @@ export function registerResources(
       cacheHint: PUBLIC_24H,
     },
     async (uri, { city, id }, handlerContext) => withTransitErrors(async () => {
-      const cityString = String(city);
+      const cityString = parseResourceCity(city);
       const idString = String(id);
       const signal = handlerContext.mcpReq.signal;
       const station = (await getTransitClient(
-        cityString as SupportedCity,
+        cityString,
         context.env,
       ).getStations(signal)).find(candidate => candidate.id === idString);
       if (!station) {
@@ -71,11 +79,11 @@ export function registerResources(
       cacheHint: PUBLIC_24H,
     },
     async (uri, { city, id }, handlerContext) => withTransitErrors(async () => {
-      const cityString = String(city);
+      const cityString = parseResourceCity(city);
       const idString = String(id);
       const signal = handlerContext.mcpReq.signal;
       const route = await getTransitClient(
-        cityString as SupportedCity,
+        cityString,
         context.env,
       ).getRouteInfo(idString, signal);
       if (!route) {
@@ -122,10 +130,10 @@ export function registerResources(
       cacheHint: PRIVATE_NO_CACHE,
     },
     async (uri, { city }, handlerContext) => withTransitErrors(async () => {
-      const cityString = String(city);
+      const cityString = parseResourceCity(city);
       const signal = handlerContext.mcpReq.signal;
       const incidents = await getTransitClient(
-        cityString as SupportedCity,
+        cityString,
         context.env,
       ).getIncidents(signal);
       return {
