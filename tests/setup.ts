@@ -94,18 +94,32 @@ function createMockDONamespace(): DurableObjectNamespace {
   }) as unknown as DurableObjectNamespace;
 }
 
+function createMockOAuthHelpers(): Env['OAUTH_PROVIDER'] {
+  return new Proxy({}, {
+    get() {
+      throw new Error('OAUTH_PROVIDER helpers accessed without an explicit test mock.');
+    }
+  }) as Env['OAUTH_PROVIDER'];
+}
+
 export function createMockEnv(overrides: Partial<Env> = {}): Env {
   return {
+    MCP_PUBLIC_ORIGIN: 'https://metro-mcp.anuragd.me',
+    MCP_ALLOWED_HOSTNAMES: 'metro-mcp.anuragd.me',
+    MCP_ALLOWED_ORIGIN_HOSTNAMES: 'metro-mcp.anuragd.me',
+    MCP_REQUEST_STATE_KEY: 'test-mrtr-request-state-key-32-bytes-minimum',
     GITHUB_CLIENT_ID: 'test-client-id',
     GITHUB_CLIENT_SECRET: 'test-client-secret',
-    OAUTH_REDIRECT_URI: 'http://localhost:8787/callback',
+    OAUTH_REDIRECT_URI: 'https://metro-mcp.anuragd.me/callback',
     WMATA_API_KEY: 'test-wmata-key',
     JWT_SECRET: 'test-jwt-secret-at-least-32-characters-long',
     OAUTH_CLIENTS: createMockKV(),
+    OAUTH_KV: createMockKV(),
+    OAUTH_PROVIDER: createMockOAuthHelpers(),
     RATE_LIMIT_KV: createMockKV(),
     MCP_SESSION: createMockDONamespace(),
     ASSETS: { fetch: vi.fn() } as unknown as Fetcher,
-    ENVIRONMENT: 'test',
+    ENVIRONMENT: 'production',
     ...overrides,
   };
 }

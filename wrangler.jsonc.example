@@ -3,12 +3,26 @@
  * fill in the placeholders below.
  *
  * Then create the KV namespaces and DO migration:
+ *   bunx wrangler kv namespace create "OAUTH_KV"
+ *   bunx wrangler kv namespace create "OAUTH_KV" --preview
  *   bunx wrangler kv namespace create "OAUTH_CLIENTS"
  *   bunx wrangler kv namespace create "OAUTH_CLIENTS" --preview
  *   bunx wrangler kv namespace create "RATE_LIMIT_KV"
  *   bunx wrangler kv namespace create "RATE_LIMIT_KV" --preview
  *
  * The DO migration runs automatically on first `wrangler deploy`.
+ *
+ * Secrets are not stored here. Set GITHUB_CLIENT_SECRET, WMATA_API_KEY,
+ * JWT_SECRET, and a stable 32+ byte MCP_REQUEST_STATE_KEY with
+ * `wrangler secret put` for production and preview independently.
+ *
+ * Local `.dev.vars` uses the following non-secret deployment values:
+ *   MCP_PUBLIC_ORIGIN=http://localhost:8787
+ *   MCP_ALLOWED_HOSTNAMES=localhost
+ *   MCP_ALLOWED_ORIGIN_HOSTNAMES=localhost,127.0.0.1
+ *   OAUTH_REDIRECT_URI=http://localhost:8787/callback
+ *   ENVIRONMENT=development
+ * Put local-only secret values in `.dev.vars`, never this file.
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
@@ -41,6 +55,11 @@
 
   "kv_namespaces": [
     {
+      "binding": "OAUTH_KV",
+      "id": "your-production-oauth-provider-kv-id-here",
+      "preview_id": "your-local-oauth-provider-kv-preview-id-here"
+    },
+    {
       "binding": "OAUTH_CLIENTS",
       "id": "your-kv-namespace-id-here",
       "preview_id": "your-preview-kv-namespace-id-here"
@@ -54,7 +73,39 @@
 
   "vars": {
     "GITHUB_CLIENT_ID": "your-github-oauth-app-client-id",
-    "OAUTH_REDIRECT_URI": "https://your-subdomain.workers.dev/callback"
+    "MCP_PUBLIC_ORIGIN": "https://metro-mcp.anuragd.me",
+    "MCP_ALLOWED_HOSTNAMES": "metro-mcp.anuragd.me",
+    "MCP_ALLOWED_ORIGIN_HOSTNAMES": "metro-mcp.anuragd.me",
+    "OAUTH_REDIRECT_URI": "https://metro-mcp.anuragd.me/callback",
+    "ENVIRONMENT": "production"
+  },
+
+  "env": {
+    "preview": {
+      // Preview uses an independent GitHub OAuth app and OAUTH_KV namespace.
+      "vars": {
+        "GITHUB_CLIENT_ID": "your-preview-github-oauth-app-client-id",
+        "MCP_PUBLIC_ORIGIN": "https://metro-mcp-preview.anuragd.me",
+        "MCP_ALLOWED_HOSTNAMES": "metro-mcp-preview.anuragd.me",
+        "MCP_ALLOWED_ORIGIN_HOSTNAMES": "metro-mcp-preview.anuragd.me",
+        "OAUTH_REDIRECT_URI": "https://metro-mcp-preview.anuragd.me/callback",
+        "ENVIRONMENT": "preview"
+      },
+      "kv_namespaces": [
+        {
+          "binding": "OAUTH_KV",
+          "id": "your-distinct-preview-oauth-provider-kv-id-here"
+        },
+        {
+          "binding": "OAUTH_CLIENTS",
+          "id": "your-preview-oauth-clients-kv-id-here"
+        },
+        {
+          "binding": "RATE_LIMIT_KV",
+          "id": "your-preview-rate-limit-kv-id-here"
+        }
+      ]
+    }
   },
 
   "assets": {

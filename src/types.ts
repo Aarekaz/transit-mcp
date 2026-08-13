@@ -8,6 +8,8 @@
  * - Self-documenting code through types
  */
 
+import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
+
 /**
  * Cloudflare Workers Environment
  * 
@@ -22,6 +24,12 @@
  * NOTE: Update this when adding new environment variables or KV namespaces
  */
 export interface Env {
+  // Canonical MCP deployment configuration
+  MCP_PUBLIC_ORIGIN: string;
+  MCP_ALLOWED_HOSTNAMES: string;
+  MCP_ALLOWED_ORIGIN_HOSTNAMES: string;
+  MCP_REQUEST_STATE_KEY: string;
+
   // OAuth Configuration
   GITHUB_CLIENT_ID: string;        // GitHub OAuth App Client ID (public)
   GITHUB_CLIENT_SECRET: string;    // GitHub OAuth App Client Secret (secret)
@@ -46,7 +54,13 @@ export interface Env {
    * await env.OAUTH_CLIENTS.put(clientId, JSON.stringify(clientData));
    * const client = await env.OAUTH_CLIENTS.get(clientId);
    */
-  OAUTH_CLIENTS: KVNamespace;
+  OAUTH_CLIENTS?: KVNamespace;
+
+  /** OAuth Provider protocol storage. */
+  OAUTH_KV: KVNamespace;
+
+  /** OAuth Provider helpers injected into protected/default handlers. */
+  OAUTH_PROVIDER: OAuthHelpers;
 
   /**
    * Rate limiting storage
@@ -82,7 +96,7 @@ export interface Env {
    * wires this binding automatically when MetroMcpAgent.serve() is
    * invoked with `{ binding: "MCP_SESSION" }`.
    */
-  MCP_SESSION: DurableObjectNamespace;
+  MCP_SESSION?: DurableObjectNamespace;
 
   /**
    * Static assets fetcher (public/index.html landing page).
@@ -91,8 +105,8 @@ export interface Env {
    */
   ASSETS: Fetcher;
 
-  // Optional Configuration
-  ENVIRONMENT?: string;            // Environment name (development/staging/production)
+  // Deployment environment
+  ENVIRONMENT: 'development' | 'preview' | 'production';
 }
 
 /**

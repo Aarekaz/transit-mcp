@@ -146,7 +146,7 @@ export class OAuthHandler {
       }
 
       // Verify client exists in KV
-      const clientData = await env.OAUTH_CLIENTS.get(`client:${clientId}`);
+      const clientData = await env.OAUTH_CLIENTS!.get(`client:${clientId}`);
       if (!clientData) {
         return new Response(JSON.stringify({
           error: 'invalid_client',
@@ -203,7 +203,7 @@ export class OAuthHandler {
       const oauthState = await this.signStateData(pkcePayload, env);
 
       // Store PKCE challenge and client info temporarily (5 minutes)
-      await env.OAUTH_CLIENTS.put(`pkce:${oauthState}`, JSON.stringify(pkcePayload), {
+      await env.OAUTH_CLIENTS!.put(`pkce:${oauthState}`, JSON.stringify(pkcePayload), {
         expirationTtl: 300
       });
 
@@ -268,7 +268,7 @@ export class OAuthHandler {
       }
 
       // Retrieve authorization code data
-      const authCodeDataStr = await env.OAUTH_CLIENTS.get(`authcode:${code}`);
+      const authCodeDataStr = await env.OAUTH_CLIENTS!.get(`authcode:${code}`);
       if (!authCodeDataStr) {
         return new Response(JSON.stringify({
           error: 'invalid_grant',
@@ -318,7 +318,7 @@ export class OAuthHandler {
       const jwtToken = await authManager.generateJWT(session);
 
       // Delete used authorization code
-      await env.OAUTH_CLIENTS.delete(`authcode:${code}`);
+      await env.OAUTH_CLIENTS!.delete(`authcode:${code}`);
 
       return this.addSecurityHeaders(new Response(JSON.stringify({
         access_token: jwtToken,
@@ -382,7 +382,7 @@ export class OAuthHandler {
       const clientSecret = authManager.generateState();
 
       // Store client in KV (no expiration for persistent client registration)
-      await env.OAUTH_CLIENTS.put(`client:${clientId}`, JSON.stringify({
+      await env.OAUTH_CLIENTS!.put(`client:${clientId}`, JSON.stringify({
         client_id: clientId,
         client_secret: clientSecret,
         client_name,
@@ -452,7 +452,7 @@ export class OAuthHandler {
       const authManager = new AuthManager(env);
 
       // Retrieve PKCE data from KV using state
-      const pkceDataStr = await env.OAUTH_CLIENTS.get(`pkce:${state}`);
+      const pkceDataStr = await env.OAUTH_CLIENTS!.get(`pkce:${state}`);
       let pkceData = pkceDataStr ? JSON.parse(pkceDataStr) : null;
       if (!pkceData) {
         pkceData = await this.verifyStateData(state, env);
@@ -480,7 +480,7 @@ export class OAuthHandler {
       const mcpAuthCode = authManager.generateState();
 
       // Store authorization code with user info and PKCE challenge (valid for 10 minutes)
-      await env.OAUTH_CLIENTS.put(`authcode:${mcpAuthCode}`, JSON.stringify({
+      await env.OAUTH_CLIENTS!.put(`authcode:${mcpAuthCode}`, JSON.stringify({
         userId: user.id,
         userLogin: user.login,
         userName: user.name,
@@ -493,7 +493,7 @@ export class OAuthHandler {
       }), { expirationTtl: 600 });
 
       // Clean up PKCE state
-      await env.OAUTH_CLIENTS.delete(`pkce:${state}`);
+      await env.OAUTH_CLIENTS!.delete(`pkce:${state}`);
 
       // Redirect back to MCP client with authorization code
       const redirectUrl = new URL(pkceData.redirectUri);
