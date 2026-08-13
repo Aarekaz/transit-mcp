@@ -5,6 +5,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import type { MetroMcpContext, MetroRequestState } from '../../src/mcp/context';
 import { createMetroMcpServer } from '../../src/mcp/server';
+import { EXPECTED_TOOL_NAMES } from '../fixtures/mcp-contracts';
 import { createMockEnv } from '../setup';
 
 function testContext(overrides: Partial<MetroMcpContext> = {}): MetroMcpContext {
@@ -147,17 +148,11 @@ describe('createMetroMcpServer', () => {
     expect(configured._requestStateVerify).toBeTypeOf('function');
   });
 
-  it('registers only the five station tools in deterministic order at this task boundary', () => {
+  it('registers the complete transit tool catalog in deterministic order', () => {
     const server = createMetroMcpServer(testContext()) as unknown as {
       _registeredTools: Record<string, unknown>;
     };
 
-    expect(Object.keys(server._registeredTools)).toEqual([
-      'get_station_predictions',
-      'search_stations',
-      'get_stations_by_line',
-      'get_all_stations',
-      'get_station_transfers',
-    ]);
+    expect(Object.keys(server._registeredTools)).toEqual(EXPECTED_TOOL_NAMES);
   });
 });
