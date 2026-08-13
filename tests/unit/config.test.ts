@@ -6,6 +6,28 @@ import { loadConfig, validateConfig } from '../../src/config';
 import type { Env } from '../../src/types';
 import { createMockEnv } from '../setup';
 
+const wrangler = JSON.parse(stripJsonComments(readFileSync(
+  new NodeURL('../../wrangler.jsonc', import.meta.url),
+  'utf8',
+)));
+
+function bindingNames(config: Record<string, any>): string[] {
+  return [
+    ...(config.durable_objects?.bindings ?? []),
+    ...(config.kv_namespaces ?? []),
+  ].map(binding => binding.name ?? binding.binding);
+}
+
+function oauthKvId(config: Record<string, any>): string {
+  const binding = config.kv_namespaces?.find(
+    (candidate: { binding?: string }) => candidate.binding === 'OAUTH_KV',
+  );
+
+  expect(binding).toBeDefined();
+  expect(binding.id).toMatch(/^[a-f0-9]{32}$/);
+  return binding.id;
+}
+
 describe('deployment configuration', () => {
   it('derives one canonical MCP resource', () => {
     const config = loadConfig(createMockEnv());
@@ -207,20 +229,77 @@ describe('deployment configuration', () => {
     );
   });
 
-  it('keeps the rollback MCP session binding in the named preview environment', () => {
-    const example = JSON.parse(stripJsonComments(readFileSync(
-      new NodeURL('../../wrangler.jsonc.example', import.meta.url),
-      'utf8',
-    )));
-
-    expect(example.env.preview.durable_objects.bindings).toContainEqual({
-      name: 'MCP_SESSION',
-      class_name: 'MetroMcpAgent',
+  it('isolates the production and preview OAuth origins', () => {
+    expect(wrangler.vars).toMatchObject({
+      MCP_PUBLIC_ORIGIN: 'https://metro-mcp.anuragd.me',
+      MCP_ALLOWED_HOSTNAMES: 'metro-mcp.anuragd.me',
+      MCP_ALLOWED_ORIGIN_HOSTNAMES: 'metro-mcp.anuragd.me',
+      OAUTH_REDIRECT_URI: 'https://metro-mcp.anuragd.me/callback',
+      ENVIRONMENT: 'production',
     });
-    expect(example.migrations).toEqual([{
+    expect(wrangler.env.preview.vars).toMatchObject({
+      MCP_PUBLIC_ORIGIN: 'https://metro-mcp-preview.anuragd.me',
+      MCP_ALLOWED_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
+      MCP_ALLOWED_ORIGIN_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
+      OAUTH_REDIRECT_URI: 'https://metro-mcp-preview.anuragd.me/callback',
+      ENVIRONMENT: 'preview',
+    });
+  });
+
+  it('uses distinct real OAuth Provider storage in production and preview', () => {
+    const productionId = oauthKvId(wrangler);
+    const previewId = oauthKvId(wrangler.env.preview);
+
+    expect(productionId).toBe('d93416b961b0442b80c04b0081105ff6');
+    expect(previewId).toBe('e66115284977469fa58e5537976647f7');
+    expect(previewId).not.toBe(productionId);
+  });
+
+  it('does not let preview inherit the production custom domain', () => {
+    expect(wrangler.env.preview.routes).toEqual([]);
+  });
+
+  it('uses an independently coordinated GitHub OAuth app in preview', () => {
+    const productionClientId = wrangler.vars.GITHUB_CLIENT_ID;
+    const previewClientId = wrangler.env.preview.vars.GITHUB_CLIENT_ID;
+
+    expect(previewClientId).toBe('Ov23li2oFCt24EJJ0X1O');
+    expect(previewClientId).not.toBe(productionClientId);
+  });
+
+  it.each([
+    ['production', wrangler],
+    ['preview', wrangler.env?.preview],
+  ])('does not expose active legacy bindings in %s', (_name, config) => {
+    expect(bindingNames(config)).not.toEqual(expect.arrayContaining([
+      'MCP_SESSION',
+      'RATE_LIMIT_KV',
+      'OAUTH_CLIENTS',
+    ]));
+  });
+
+  it('retains the original rollback migration without scheduling deletion', () => {
+    expect(wrangler.migrations).toEqual([{
       tag: 'v1',
       new_sqlite_classes: ['MetroMcpAgent'],
     }]);
-    expect(JSON.stringify(example.migrations)).not.toContain('deleted_classes');
+    expect(JSON.stringify(wrangler.migrations)).not.toContain('deleted_classes');
+  });
+
+  it('enables strict public fetches without dropping deployment controls', () => {
+    expect(wrangler.compatibility_flags).toEqual([
+      'nodejs_compat',
+      'global_fetch_strictly_public',
+    ]);
+    expect(wrangler.upload_source_maps).toBe(true);
+    expect(wrangler.assets).toEqual({
+      directory: './public',
+      binding: 'ASSETS',
+    });
+    expect(wrangler.observability.enabled).toBe(true);
+    expect(wrangler.routes).toContainEqual({
+      pattern: 'metro-mcp.anuragd.me',
+      custom_domain: true,
+    });
   });
 });

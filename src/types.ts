@@ -48,21 +48,10 @@ export interface Env {
   OAUTH_PROVIDER: OAuthHelpers;
 
   /**
-   * MCP session storage (legacy KV path).
-   *
-   * Sessions now live in the MetroMcpAgent Durable Object via the
-   * MCP_SESSION binding below. This KV binding is kept as optional so
-   * any existing values can drain (24h TTL) without a deploy-time
-   * binding error. Remove from wrangler.jsonc and this interface in a
-   * follow-up once observation confirms no live sessions remain.
+   * Inactive legacy session KV retained only as a rollback data shape.
+   * It is not bound by the stateless deployment configuration.
    */
   MCP_SESSIONS?: KVNamespace;
-
-  /**
-   * Inactive MCP session namespace retained only so the rollback class
-   * continues to type-check until Task 12 removes the active binding.
-   */
-  MCP_SESSION?: DurableObjectNamespace;
 
   /**
    * Static assets fetcher (public/index.html landing page).

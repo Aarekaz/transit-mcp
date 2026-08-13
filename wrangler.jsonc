@@ -1,39 +1,27 @@
 /**
  * Wrangler configuration for metro-mcp.
  *
- * Migrated from wrangler.toml to wrangler.jsonc in 4.0.0 alongside the
- * Durable Objects rearchitect. JSONC gives us IDE schema validation and
- * inline comments without the indent-sensitivity of TOML nested tables.
+ * The inactive MetroMcpAgent class and original migration remain in the
+ * bundle for rollback, but MCP 5.x request routing is stateless and does not
+ * bind the Durable Object namespace.
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "account_id": "313c4e6e881f1e07c880d7230541200a",
   "name": "metro-mcp",
   "main": "src/index.ts",
-  // 2026-04-07 enables the runtime auto-Close-reply behavior for
-  // hibernatable WebSockets used by McpAgent's transport.
   "compatibility_date": "2026-04-07",
-  // nodejs_compat: cloudflare/agents pulls node:async_hooks +
-  // node:diagnostics_channel; a transitive mimetext dep needs node:path/os.
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
   "workers_dev": true,
   "keep_vars": true,
   "minify": true,
   "upload_source_maps": true,
 
-  // Durable Objects host the MCP session, transport, and event store.
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "MCP_SESSION",
-        "class_name": "MetroMcpAgent"
-      }
-    ]
-  },
-
-  // First-time migration creating the SQLite-backed DO namespace.
-  // `new_sqlite_classes` is required for new namespaces — it enables
-  // ctx.storage.sql which DurableObjectEventStore needs for resumability.
+  // Preserve the original namespace migration for rollback. No active
+  // Durable Object binding or deletion migration is part of this cutover.
   "migrations": [
     {
       "tag": "v1",
@@ -43,28 +31,45 @@
 
   "kv_namespaces": [
     {
-      "binding": "OAUTH_CLIENTS",
-      "id": "44f6224b68354c24bf071e2b53b13dbb",
-      "preview_id": "7d10b069531a459cb56ed59220ede55b"
-    },
-    {
-      "binding": "RATE_LIMIT_KV",
-      "id": "93885a8c949b4298a7d866e2cef408b3",
-      "preview_id": "7cbeddccb3a94346b4452f40bc692b39"
+      "binding": "OAUTH_KV",
+      "id": "d93416b961b0442b80c04b0081105ff6",
+      "preview_id": "e66115284977469fa58e5537976647f7"
     }
-    // MCP_SESSIONS KV binding removed — sessions now live in MCP_SESSION DO.
-    // Existing KV namespace can be deleted once in-flight sessions drain (24h TTL).
   ],
 
   "vars": {
     "GITHUB_CLIENT_ID": "Ov23liGFwmOZeECJ6yeN",
-    "OAUTH_REDIRECT_URI": "https://metro-mcp.anuragd.me/callback"
+    "MCP_PUBLIC_ORIGIN": "https://metro-mcp.anuragd.me",
+    "MCP_ALLOWED_HOSTNAMES": "metro-mcp.anuragd.me",
+    "MCP_ALLOWED_ORIGIN_HOSTNAMES": "metro-mcp.anuragd.me",
+    "OAUTH_REDIRECT_URI": "https://metro-mcp.anuragd.me/callback",
+    "ENVIRONMENT": "production"
+  },
+
+  "env": {
+    "preview": {
+      // Preview DNS/custom-domain setup is approval-gated. Never inherit and
+      // reassign the production custom domain when targeting this environment.
+      "routes": [],
+      "vars": {
+        "GITHUB_CLIENT_ID": "Ov23li2oFCt24EJJ0X1O",
+        "MCP_PUBLIC_ORIGIN": "https://metro-mcp-preview.anuragd.me",
+        "MCP_ALLOWED_HOSTNAMES": "metro-mcp-preview.anuragd.me",
+        "MCP_ALLOWED_ORIGIN_HOSTNAMES": "metro-mcp-preview.anuragd.me",
+        "OAUTH_REDIRECT_URI": "https://metro-mcp-preview.anuragd.me/callback",
+        "ENVIRONMENT": "preview"
+      },
+      "kv_namespaces": [
+        {
+          "binding": "OAUTH_KV",
+          "id": "e66115284977469fa58e5537976647f7"
+        }
+      ]
+    }
   },
 
   "assets": {
     "directory": "./public",
-    // Expose the assets fetcher on env.ASSETS so the worker can delegate
-    // unmatched GETs (e.g. `/`) to the static landing page.
     "binding": "ASSETS"
   },
 
