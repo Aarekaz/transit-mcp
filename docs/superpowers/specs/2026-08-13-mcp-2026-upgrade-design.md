@@ -109,7 +109,7 @@ The current 1,000-line `mcp-agent.ts` is split because the SDK migration already
 | `src/mcp/tools/stations.ts` | Station tools and MRTR station selection |
 | `src/mcp/tools/incidents.ts` | Incident and elevator tools |
 | `src/mcp/tools/buses.ts` | DC bus tools |
-| `src/mcp/tools/trains.ts` | NYC train tools |
+| `src/mcp/tools/trains.ts` | DC live-train-position tool |
 | `src/mcp/tools/routes.ts` | Route tools |
 | `src/mcp/resources.ts` | Three `transit://` resource templates and cache hints |
 | `src/mcp/prompts.ts` | Three prompt registrations and cache hints |
