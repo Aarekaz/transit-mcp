@@ -107,7 +107,8 @@ Want to run your own instance? See the [Deployment](#deployment) section below.
 
 - [WMATA API Key](https://developer.wmata.com/) (required)
 - [Cloudflare Account](https://dash.cloudflare.com/) (free tier works)
-- [Bun](https://bun.sh/) or Node.js installed
+- [Bun](https://bun.sh/) for package management
+- [Node.js](https://nodejs.org/) for Wrangler
 - [GitHub OAuth App](https://github.com/settings/developers) (for authentication)
 
 ### Setup Steps
@@ -115,11 +116,7 @@ Want to run your own instance? See the [Deployment](#deployment) section below.
 **1. Install dependencies:**
 
 ```bash
-# Using Bun (recommended)
-bun install
-
-# Or using npm
-npm install
+bun install --frozen-lockfile
 ```
 
 **2. Generate JWT secret:**
