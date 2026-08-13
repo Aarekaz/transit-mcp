@@ -12,7 +12,7 @@
  * These tests ensure that authentication can't be bypassed.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { AuthManager, AuthError } from '../../src/auth';
 import { createMockEnv } from '../setup';
 import type { Env } from '../../src/types';
