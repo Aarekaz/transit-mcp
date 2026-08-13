@@ -1,5 +1,9 @@
 import {
+  CLIENT_CAPABILITIES_META_KEY,
   McpServer,
+  PROTOCOL_VERSION_META_KEY,
+  ProtocolError,
+  ProtocolErrorCode,
   createMcpHandler,
   type McpRequestContext,
   type ServerContext,
@@ -13,7 +17,9 @@ import {
   EXPECTED_INPUT_SCHEMA_SIGNATURES,
   EXPECTED_NESTED_OUTPUT_SCHEMAS,
   EXPECTED_OUTPUT_SCHEMA_SIGNATURES,
+  EXPECTED_PROMPT_CONTRACTS,
   EXPECTED_PROMPT_NAMES,
+  EXPECTED_RESOURCE_CONTRACTS,
   EXPECTED_RESOURCE_NAMES,
   EXPECTED_TOOL_CONTRACTS,
   EXPECTED_TOOL_NAMES,
@@ -40,6 +46,39 @@ type RegisteredTool = {
   };
   handler: (
     args: Record<string, unknown>,
+    context: ServerContext,
+  ) => Promise<unknown> | unknown;
+};
+
+type RegisteredResourceTemplate = {
+  title?: string;
+  metadata?: {
+    description?: string;
+    mimeType?: string;
+  };
+  cacheHint?: {
+    ttlMs?: number;
+    cacheScope?: string;
+  };
+  resourceTemplate: {
+    uriTemplate: { toString: () => string };
+    listCallback?: (context: ServerContext) => Promise<unknown> | unknown;
+  };
+  readCallback: (
+    uri: URL,
+    variables: Record<string, string | string[]>,
+    context: ServerContext,
+  ) => Promise<unknown> | unknown;
+};
+
+type RegisteredPrompt = {
+  title?: string;
+  description?: string;
+  argsSchema?: {
+    safeParse: (value: unknown) => { success: boolean };
+  };
+  handler: (
+    args: Record<string, unknown> | undefined,
     context: ServerContext,
   ) => Promise<unknown> | unknown;
 };
@@ -143,11 +182,11 @@ function registeredTools(server = createMetroMcpServer(testContext())): Record<s
   return (server as unknown as { _registeredTools: Record<string, RegisteredTool> })._registeredTools;
 }
 
-function requestContext(signal: AbortSignal): ServerContext {
+function requestContext(signal: AbortSignal, method = 'tools/call'): ServerContext {
   return {
     mcpReq: {
       id: 1,
-      method: 'tools/call',
+      method,
       signal,
       requestState: () => undefined,
       send: vi.fn(),
@@ -157,6 +196,22 @@ function requestContext(signal: AbortSignal): ServerContext {
       requestSampling: vi.fn(),
     },
   } as unknown as ServerContext;
+}
+
+function registeredResourceTemplates(
+  server = createMetroMcpServer(testContext()),
+): Record<string, RegisteredResourceTemplate> {
+  return (server as unknown as {
+    _registeredResourceTemplates: Record<string, RegisteredResourceTemplate>;
+  })._registeredResourceTemplates;
+}
+
+function registeredPrompts(
+  server = createMetroMcpServer(testContext()),
+): Record<string, RegisteredPrompt> {
+  return (server as unknown as {
+    _registeredPrompts: Record<string, RegisteredPrompt>;
+  })._registeredPrompts;
 }
 
 async function invoke(
@@ -222,19 +277,41 @@ async function requestOverSdkWire(
   factory: (context: McpRequestContext) => McpServer,
   method: string,
   params: Record<string, unknown>,
+  options: { modern?: boolean; signal?: AbortSignal } = {},
 ): Promise<{ result?: Record<string, unknown>; error?: Record<string, unknown> }> {
   const handler = createMcpHandler(factory);
   try {
+    const wireParams = options.modern
+      ? {
+          ...params,
+          _meta: {
+            [PROTOCOL_VERSION_META_KEY]: '2026-07-28',
+            [CLIENT_CAPABILITIES_META_KEY]: {},
+          },
+        }
+      : params;
     const response = await handler.fetch(new Request('https://metro.test/mcp', {
       method: 'POST',
       headers: {
         accept: 'application/json, text/event-stream',
         'content-type': 'application/json',
+        ...(options.modern
+          ? {
+              'mcp-method': method,
+              ...(
+                typeof (params.name ?? params.uri) === 'string'
+                  ? { 'mcp-name': String(params.name ?? params.uri) }
+                  : {}
+              ),
+              'mcp-protocol-version': '2026-07-28',
+            }
+          : {}),
       },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: wireParams }),
+      signal: options.signal,
     }));
-    expect(response.status).toBe(200);
     const body = await response.text();
+    expect(response.status, body).toBe(200);
     const payload = response.headers.get('content-type')?.includes('text/event-stream')
       ? body.split('\n').find(line => line.startsWith('data: '))?.slice('data: '.length)
       : body;
@@ -258,6 +335,7 @@ function metroServerFactory(context = testContext()) {
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.useRealTimers();
 });
 
 describe('golden MCP catalog', () => {
@@ -388,6 +466,345 @@ describe('golden MCP catalog', () => {
         `${name} representative output must satisfy its registered schema`,
       ).toBe(true);
     }
+  });
+});
+
+describe('SDK v2 resource contracts', () => {
+  it('registers exactly three templates in order with concrete metadata and cache hints', async () => {
+    const resources = registeredResourceTemplates();
+
+    expect(Object.entries(resources).map(([name, resource]) => [
+      name,
+      resource.resourceTemplate.uriTemplate.toString(),
+    ])).toEqual([
+      ['station', 'transit://stations/{city}/{id}'],
+      ['route', 'transit://routes/{city}/{id}'],
+      ['incidents', 'transit://incidents/{city}'],
+    ]);
+    for (const name of EXPECTED_RESOURCE_NAMES) {
+      const expected = EXPECTED_RESOURCE_CONTRACTS[name];
+      expect(resources[name]).toMatchObject({
+        title: expected.title,
+        metadata: {
+          description: expected.description,
+          mimeType: expected.mimeType,
+        },
+        cacheHint: expected.cacheHint,
+      });
+    }
+
+    const message = await requestOverSdkWire(
+      metroServerFactory(),
+      'resources/templates/list',
+      {},
+      { modern: true },
+    );
+    expect(message.error).toBeUndefined();
+    expect(message.result).toMatchObject({
+      resultType: 'complete',
+      ttlMs: 86_400_000,
+      cacheScope: 'public',
+    });
+    expect(message.result?.resourceTemplates).toEqual(
+      EXPECTED_RESOURCE_NAMES.map(name => ({
+        name,
+        uriTemplate: EXPECTED_RESOURCE_CONTRACTS[name].uriTemplate,
+        title: EXPECTED_RESOURCE_CONTRACTS[name].title,
+        description: EXPECTED_RESOURCE_CONTRACTS[name].description,
+        mimeType: EXPECTED_RESOURCE_CONTRACTS[name].mimeType,
+      })),
+    );
+  });
+
+  it('preserves station and route JSON reads, public cache, invalid-param misses, and signals', async () => {
+    const station = EXPECTED_RESOURCE_CONTRACTS.station;
+    const route = EXPECTED_RESOURCE_CONTRACTS.route;
+    const getStations = vi.fn().mockResolvedValue([{
+      id: '127',
+      name: 'Times Square - 42 St',
+      city: 'nyc',
+      latitude: 40.755983,
+      longitude: -73.987495,
+      lines: ['1', '2', '3'],
+      address: station.representativeContent.address,
+      transfers: station.representativeContent.transfers,
+    }]);
+    const getRouteInfo = vi.fn(async (id: string) => (
+      id === 'A' ? route.representativeContent : null
+    ));
+    getTransitClientMock.mockReturnValue({ getStations, getRouteInfo });
+    const resources = registeredResourceTemplates();
+    const signal = new AbortController().signal;
+    const context = requestContext(signal, 'resources/read');
+
+    await expect(resources.station!.readCallback(
+      new URL(station.representativeUri),
+      { city: 'nyc', id: '127' },
+      context,
+    )).resolves.toEqual({
+      contents: [{
+        uri: station.representativeUri,
+        mimeType: station.mimeType,
+        text: JSON.stringify(station.representativeContent),
+      }],
+    });
+    await expect(resources.route!.readCallback(
+      new URL(route.representativeUri),
+      { city: 'nyc', id: 'A' },
+      context,
+    )).resolves.toEqual({
+      contents: [{
+        uri: route.representativeUri,
+        mimeType: route.mimeType,
+        text: JSON.stringify(route.representativeContent),
+      }],
+    });
+    expect(getStations).toHaveBeenCalledWith(signal);
+    expect(getRouteInfo).toHaveBeenCalledWith('A', signal);
+
+    for (const [name, uri, variables, message] of [
+      ['station', 'transit://stations/nyc/missing', { city: 'nyc', id: 'missing' }, 'Station not found: missing (city: nyc)'],
+      ['route', 'transit://routes/nyc/missing', { city: 'nyc', id: 'missing' }, 'Route not found: missing (city: nyc)'],
+    ] as const) {
+      const failure = resources[name]!.readCallback(new URL(uri), variables, context);
+      await expect(failure).rejects.toBeInstanceOf(ProtocolError);
+      await expect(failure).rejects.toMatchObject({
+        code: ProtocolErrorCode.InvalidParams,
+        message,
+      });
+    }
+
+    for (const [uri, expected] of [
+      [station.representativeUri, station],
+      [route.representativeUri, route],
+    ] as const) {
+      const message = await requestOverSdkWire(
+        metroServerFactory(),
+        'resources/read',
+        { uri },
+        { modern: true },
+      );
+      expect(message.error).toBeUndefined();
+      expect(message.result).toMatchObject({
+        resultType: 'complete',
+        ttlMs: 86_400_000,
+        cacheScope: 'public',
+      });
+      expect(message.result?.contents).toEqual([{
+        uri,
+        mimeType: expected.mimeType,
+        text: JSON.stringify(expected.representativeContent),
+      }]);
+    }
+
+    for (const uri of ['transit://stations/nyc/missing', 'transit://routes/nyc/missing']) {
+      const message = await requestOverSdkWire(
+        metroServerFactory(),
+        'resources/read',
+        { uri },
+        { modern: true },
+      );
+      expect(message.error).toMatchObject({ code: -32602 });
+    }
+
+    const controller = new AbortController();
+    const reason = Object.assign(new Error('resource request closed'), {
+      name: 'RequestClosed',
+    });
+    controller.abort(reason);
+    getStations.mockRejectedValue(reason);
+    getRouteInfo.mockRejectedValue(reason);
+    const abortedResources = registeredResourceTemplates();
+    const abortedContext = requestContext(controller.signal, 'resources/read');
+    await expect(abortedResources.station!.readCallback(
+      new URL(station.representativeUri),
+      { city: 'nyc', id: '127' },
+      abortedContext,
+    )).rejects.toBe(reason);
+    await expect(abortedResources.route!.readCallback(
+      new URL(route.representativeUri),
+      { city: 'nyc', id: 'A' },
+      abortedContext,
+    )).rejects.toBe(reason);
+  });
+
+  it('lists only both incident feeds and preserves the live private read body and signal', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-13T18:00:00.000Z'));
+    const incidents = EXPECTED_RESOURCE_CONTRACTS.incidents;
+    const getIncidents = vi.fn().mockResolvedValue([{
+      city: 'dc',
+      incidentId: 'INC-42',
+      description: 'Red Line delay',
+      linesAffected: ['RD'],
+      severity: 'Major',
+      incidentType: 'Delay',
+      timestamp: '2026-08-13T17:55:00.000Z',
+    }]);
+    getTransitClientMock.mockReturnValue({ getIncidents });
+
+    const listMessage = await requestOverSdkWire(
+      metroServerFactory(),
+      'resources/list',
+      {},
+      { modern: true },
+    );
+    expect(listMessage.error).toBeUndefined();
+    expect(listMessage.result).toMatchObject({
+      resultType: 'complete',
+      ttlMs: 86_400_000,
+      cacheScope: 'public',
+    });
+    expect(listMessage.result?.resources).toEqual(incidents.listedResources);
+
+    const resource = registeredResourceTemplates().incidents!;
+    const signal = new AbortController().signal;
+    await expect(resource.readCallback(
+      new URL(incidents.representativeUri),
+      { city: 'dc' },
+      requestContext(signal, 'resources/read'),
+    )).resolves.toEqual({
+      contents: [{
+        uri: incidents.representativeUri,
+        mimeType: incidents.mimeType,
+        text: JSON.stringify(incidents.representativeContent),
+      }],
+    });
+    expect(getIncidents).toHaveBeenCalledWith(signal);
+
+    const readMessage = await requestOverSdkWire(
+      metroServerFactory(),
+      'resources/read',
+      { uri: incidents.representativeUri },
+      { modern: true },
+    );
+    expect(readMessage.error).toBeUndefined();
+    expect(readMessage.result).toMatchObject({
+      resultType: 'complete',
+      ttlMs: 0,
+      cacheScope: 'private',
+    });
+    expect(readMessage.result?.contents).toEqual([{
+      uri: incidents.representativeUri,
+      mimeType: incidents.mimeType,
+      text: JSON.stringify(incidents.representativeContent),
+    }]);
+
+    const controller = new AbortController();
+    const reason = Object.assign(new Error('incident resource request closed'), {
+      name: 'RequestClosed',
+    });
+    controller.abort(reason);
+    getIncidents.mockRejectedValue(reason);
+    await expect(registeredResourceTemplates().incidents!.readCallback(
+      new URL(incidents.representativeUri),
+      { city: 'dc' },
+      requestContext(controller.signal, 'resources/read'),
+    )).rejects.toBe(reason);
+  });
+});
+
+describe('SDK v2 prompt contracts', () => {
+  it('lists exactly three prompts in order with concrete metadata and argument schemas', async () => {
+    const prompts = registeredPrompts();
+    expect(Object.keys(prompts)).toEqual(EXPECTED_PROMPT_NAMES);
+    expect(prompts['service-briefing']!.argsSchema!.safeParse({ city: 'dc' }).success).toBe(true);
+    expect(prompts['service-briefing']!.argsSchema!.safeParse({ city: 'bos' }).success).toBe(false);
+    expect(prompts['commute-planner']!.argsSchema!.safeParse({
+      city: 'nyc',
+      fromStation: 'Times Square',
+      toStation: 'Jay St',
+    }).success).toBe(true);
+    expect(prompts['commute-planner']!.argsSchema!.safeParse({
+      city: 'nyc',
+      fromStation: 'Times Square',
+    }).success).toBe(false);
+    expect(prompts['accessibility-check']!.argsSchema!.safeParse({
+      stationNames: 'Metro Center',
+    }).success).toBe(true);
+    expect(prompts['accessibility-check']!.argsSchema!.safeParse({
+      stationNames: 42,
+    }).success).toBe(false);
+
+    const message = await requestOverSdkWire(
+      metroServerFactory(),
+      'prompts/list',
+      {},
+      { modern: true },
+    );
+    expect(message.error).toBeUndefined();
+    expect(message.result).toMatchObject({
+      resultType: 'complete',
+      ttlMs: 86_400_000,
+      cacheScope: 'public',
+    });
+    expect(message.result?.prompts).toEqual(
+      EXPECTED_PROMPT_NAMES.map(name => ({
+        name,
+        title: EXPECTED_PROMPT_CONTRACTS[name].title,
+        description: EXPECTED_PROMPT_CONTRACTS[name].description,
+        arguments: EXPECTED_PROMPT_CONTRACTS[name].arguments,
+      })),
+    );
+  });
+
+  it('returns every preserved prompt variant as one exact user text message', async () => {
+    for (const name of EXPECTED_PROMPT_NAMES) {
+      for (const example of EXPECTED_PROMPT_CONTRACTS[name].examples) {
+        const message = await requestOverSdkWire(
+          metroServerFactory(),
+          'prompts/get',
+          { name, arguments: example.arguments },
+          { modern: true },
+        );
+        expect(message.error, `${name} should succeed`).toBeUndefined();
+        expect(message.result).toMatchObject({
+          resultType: 'complete',
+        });
+        expect(message.result?.messages).toEqual([{
+          role: 'user',
+          content: { type: 'text', text: example.text },
+        }]);
+      }
+    }
+  });
+
+  it('references only registered get/search tools and rejects missing required arguments', async () => {
+    const referencedTools = new Set<string>();
+
+    for (const name of EXPECTED_PROMPT_NAMES) {
+      for (const example of EXPECTED_PROMPT_CONTRACTS[name].examples) {
+        const message = await requestOverSdkWire(
+          metroServerFactory(),
+          'prompts/get',
+          { name, arguments: example.arguments },
+          { modern: true },
+        );
+        const messages = message.result?.messages as Array<{
+          content?: { type?: string; text?: string };
+        }> | undefined;
+        const text = messages?.[0]?.content?.text ?? '';
+        for (const token of text.match(/\b(?:get|search)_[a-z_]+\b/g) ?? []) {
+          referencedTools.add(token);
+          expect(EXPECTED_TOOL_NAMES).toContain(token);
+        }
+      }
+    }
+    expect([...referencedTools].sort()).toEqual([
+      'get_elevator_incidents',
+      'get_incidents',
+      'get_station_predictions',
+      'get_stations_by_line',
+      'search_stations',
+    ]);
+
+    const invalid = await requestOverSdkWire(
+      metroServerFactory(),
+      'prompts/get',
+      { name: 'service-briefing', arguments: {} },
+      { modern: true },
+    );
+    expect(invalid.error).toMatchObject({ code: -32602 });
   });
 });
 

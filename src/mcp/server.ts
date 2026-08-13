@@ -11,6 +11,8 @@ import {
   type MetroRequestState,
 } from './context';
 import { PRIVATE_NO_CACHE, PUBLIC_24H } from './shared';
+import { registerPrompts } from './prompts';
+import { registerResources } from './resources';
 import { registerBusTools } from './tools/buses';
 import { registerIncidentTools } from './tools/incidents';
 import { registerRouteTools } from './tools/routes';
@@ -74,6 +76,8 @@ function buildMetroMcpServer(context: MetroMcpContext): {
   );
 
   registerMetroFeatures(server, normalizedContext, stateCodec);
+  registerResources(server, normalizedContext);
+  registerPrompts(server);
   return { server, stateCodec };
 }
 

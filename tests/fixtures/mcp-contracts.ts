@@ -22,6 +22,144 @@ export const EXPECTED_PROMPT_NAMES = [
   'accessibility-check',
 ] as const;
 
+export const EXPECTED_RESOURCE_CONTRACTS = {
+  station: {
+    uriTemplate: 'transit://stations/{city}/{id}',
+    title: 'Transit station',
+    description: 'Individual transit station metadata (coordinates, lines, address).',
+    mimeType: 'application/json',
+    cacheHint: { ttlMs: 86_400_000, cacheScope: 'public' },
+    representativeUri: 'transit://stations/nyc/127',
+    representativeContent: {
+      id: '127',
+      name: 'Times Square - 42 St',
+      lines: ['1', '2', '3'],
+      coordinates: { lat: 40.755983, lon: -73.987495 },
+      address: {
+        street: 'Broadway & 42nd St',
+        city: 'New York',
+        state: 'NY',
+        zip: '10036',
+      },
+      transfers: [{
+        toStationId: 'R16',
+        toStationName: 'Times Square - Broadway',
+        transferTime: 75,
+        transferType: 'platform',
+      }],
+    },
+  },
+  route: {
+    uriTemplate: 'transit://routes/{city}/{id}',
+    title: 'Transit route',
+    description:
+      'Route metadata (service patterns, descriptions). NYC routes have rich data; DC currently does not.',
+    mimeType: 'application/json',
+    cacheHint: { ttlMs: 86_400_000, cacheScope: 'public' },
+    representativeUri: 'transit://routes/nyc/A',
+    representativeContent: {
+      routeId: 'A',
+      shortName: 'A',
+      longName: '8 Avenue Express',
+      description: 'Express service in Manhattan and Brooklyn.',
+      city: 'nyc',
+    },
+  },
+  incidents: {
+    uriTemplate: 'transit://incidents/{city}',
+    title: 'Transit incidents',
+    description:
+      'Live service advisories for a transit system. Read-only in 4.0; subscribe support arrives with the incident poller in Phase 2.5.',
+    mimeType: 'application/json',
+    cacheHint: { ttlMs: 0, cacheScope: 'private' },
+    listedResources: [
+      {
+        uri: 'transit://incidents/dc',
+        name: 'DC Metro incidents',
+        title: 'Transit incidents',
+        description: 'Current service advisories for WMATA Metro.',
+        mimeType: 'application/json',
+      },
+      {
+        uri: 'transit://incidents/nyc',
+        name: 'NYC Subway incidents',
+        title: 'Transit incidents',
+        description: 'Current service advisories for MTA Subway.',
+        mimeType: 'application/json',
+      },
+    ],
+    representativeUri: 'transit://incidents/dc',
+    representativeContent: {
+      city: 'dc',
+      fetchedAt: '2026-08-13T18:00:00.000Z',
+      incidents: [{
+        id: 'INC-42',
+        description: 'Red Line delay',
+        linesAffected: ['RD'],
+        severity: 'Major',
+        type: 'Delay',
+        lastUpdated: '2026-08-13T17:55:00.000Z',
+      }],
+    },
+  },
+} as const;
+
+export const EXPECTED_PROMPT_CONTRACTS = {
+  'service-briefing': {
+    title: 'Service briefing',
+    description: 'Concise briefing on current transit service — full system or a single line.',
+    arguments: [
+      { name: 'city', description: 'Transit system', required: true },
+      {
+        name: 'lineCode',
+        description: 'Optional specific line (e.g., "RD", "A"). Omit for whole-system.',
+        required: false,
+      },
+    ],
+    examples: [
+      {
+        arguments: { city: 'dc' },
+        text: 'Using get_incidents(city: "dc"), give me a 3-sentence briefing on overall DC transit service right now.',
+      },
+      {
+        arguments: { city: 'nyc', lineCode: 'A' },
+        text: 'Using get_incidents(city: "nyc") and get_stations_by_line(city: "nyc", lineCode: "A"), give me a 3-sentence briefing on the A line right now: active incidents, impact, what a commuter should expect.',
+      },
+    ],
+  },
+  'commute-planner': {
+    title: 'Commute planner',
+    description: 'Build a step-by-step real-time commute plan between two stations.',
+    arguments: [
+      { name: 'city', required: true },
+      { name: 'fromStation', description: 'Origin station name', required: true },
+      { name: 'toStation', description: 'Destination station name', required: true },
+    ],
+    examples: [{
+      arguments: {
+        city: 'nyc',
+        fromStation: 'Times Square',
+        toStation: 'Jay St',
+      },
+      text: 'Plan a NYC transit commute from "Times Square" to "Jay St". Use search_stations to resolve each, get_station_predictions on the origin for the next train, and check get_incidents for relevant alerts. Return a concrete plan with line, direction, transfer points, and an estimated end-to-end time.',
+    }],
+  },
+  'accessibility-check': {
+    title: 'Accessibility check',
+    description: 'Check elevator/escalator status across a route on the DC Metro.',
+    arguments: [{
+      name: 'stationNames',
+      description:
+        'Comma-separated DC Metro station names along the route (e.g., "Dupont Circle, Metro Center, Capitol South")',
+      required: true,
+    }],
+    examples: [{
+      arguments: { stationNames: 'Dupont Circle, Metro Center' },
+      text: 'Using get_elevator_incidents (DC only), check whether any of these stations currently have elevator outages: Dupont Circle, Metro Center. Flag any that do, explain the impact, and suggest alternatives if available.',
+    }],
+  },
+} as const;
+
 export const EXPECTED_INTENTIONAL_DEVIATIONS = [
   'Modern ambiguous get_station_predictions returns MRTR station selection.',
   'Legacy ambiguous get_station_predictions returns candidate retry guidance.',
