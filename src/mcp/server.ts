@@ -11,6 +11,7 @@ import {
   type MetroRequestState,
 } from './context';
 import { PRIVATE_NO_CACHE, PUBLIC_24H } from './shared';
+import { registerStationTools } from './tools/stations';
 
 type MetroFeatureRegistration = (
   server: McpServer,
@@ -18,8 +19,10 @@ type MetroFeatureRegistration = (
   stateCodec: RequestStateCodec<MetroRequestState>,
 ) => void;
 
-// Tasks 6–8 add their feature registration functions here in wire-visible order.
-const FEATURE_REGISTRATIONS: readonly MetroFeatureRegistration[] = [];
+// Tasks 7–8 add their feature registration functions after stations in wire-visible order.
+const FEATURE_REGISTRATIONS: readonly MetroFeatureRegistration[] = [
+  registerStationTools,
+];
 
 function registerMetroFeatures(
   server: McpServer,

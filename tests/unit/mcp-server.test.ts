@@ -146,4 +146,18 @@ describe('createMetroMcpServer', () => {
     });
     expect(configured._requestStateVerify).toBeTypeOf('function');
   });
+
+  it('registers only the five station tools in deterministic order at this task boundary', () => {
+    const server = createMetroMcpServer(testContext()) as unknown as {
+      _registeredTools: Record<string, unknown>;
+    };
+
+    expect(Object.keys(server._registeredTools)).toEqual([
+      'get_station_predictions',
+      'search_stations',
+      'get_stations_by_line',
+      'get_all_stations',
+      'get_station_transfers',
+    ]);
+  });
 });
