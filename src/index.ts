@@ -28,9 +28,21 @@ function isOAuthRoute(pathname: string): boolean {
 
 function providerTrustRejection(
   request: Request,
+  publicOrigin: string,
   allowedHostnames: string[],
   allowedOriginHostnames?: string[],
 ): Response | undefined {
+  if (new URL(request.url).origin !== publicOrigin) {
+    return Response.json(
+      {
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'Invalid request origin' },
+        id: null,
+      },
+      { status: 403 },
+    );
+  }
+
   return hostHeaderValidationResponse(request, allowedHostnames)
     ?? (allowedOriginHostnames
       ? originValidationResponse(request, allowedOriginHostnames)
@@ -63,12 +75,17 @@ export default {
           telemetry.alias = normalized.alias;
           response = providerTrustRejection(
             normalized.request,
+            config.mcp.publicOrigin,
             config.mcp.allowedHostnames,
             config.mcp.allowedOriginHostnames,
           ) ?? await createOAuthProvider(env, ctx, config, telemetry)
             .fetch(normalized.request, env, ctx);
         } else if (isOAuthRoute(new URL(request.url).pathname)) {
-          response = providerTrustRejection(request, config.mcp.allowedHostnames)
+          response = providerTrustRejection(
+            request,
+            config.mcp.publicOrigin,
+            config.mcp.allowedHostnames,
+          )
             ?? await createOAuthProvider(env, ctx, config, telemetry).fetch(request, env, ctx);
         } else {
           response = await handlePublicRequest(request, env, config);

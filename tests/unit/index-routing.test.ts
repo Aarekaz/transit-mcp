@@ -129,4 +129,55 @@ describe('Worker entry routing', () => {
     expect(response.status).toBe(403);
     expect(providerFetch).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: 'production',
+      origin: 'https://metro-mcp.anuragd.me',
+      env: createMockEnv(),
+    },
+    {
+      name: 'preview',
+      origin: 'https://metro-mcp-preview.anuragd.me',
+      env: createMockEnv({
+        MCP_PUBLIC_ORIGIN: 'https://metro-mcp-preview.anuragd.me',
+        MCP_ALLOWED_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
+        MCP_ALLOWED_ORIGIN_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
+        OAUTH_REDIRECT_URI: 'https://metro-mcp-preview.anuragd.me/callback',
+        ENVIRONMENT: 'preview',
+      }),
+    },
+  ])('never invokes the Provider for non-canonical $name request origins', async deployment => {
+    const hostname = new URL(deployment.origin).hostname;
+    const insecureOrigin = deployment.origin.replace('https://', 'http://');
+
+    for (const request of [
+      new Request(`${insecureOrigin}/.well-known/oauth-authorization-server`, {
+        headers: { Host: hostname },
+      }),
+      new Request(`${insecureOrigin}/token`, {
+        method: 'POST',
+        headers: { Host: hostname },
+      }),
+      new Request(`${insecureOrigin}/mcp`, {
+        method: 'POST',
+        headers: { Host: hostname },
+      }),
+      new Request(`${insecureOrigin}/sse`, {
+        method: 'POST',
+        headers: { Host: hostname },
+      }),
+      new Request('https://attacker.example/mcp', {
+        method: 'POST',
+        headers: { Host: hostname },
+      }),
+    ]) {
+      providerFetch.mockClear();
+
+      const response = await worker.fetch(request, deployment.env, executionContext());
+
+      expect(response.status).toBe(403);
+      expect(providerFetch).not.toHaveBeenCalled();
+    }
+  });
 });

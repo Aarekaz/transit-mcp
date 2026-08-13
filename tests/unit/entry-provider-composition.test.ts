@@ -107,6 +107,49 @@ describe('assembled Worker and real OAuth Provider', () => {
   });
 
   it.each(deployments)(
+    'rejects a non-canonical request URL before every $name Provider path',
+    async deployment => {
+      vi.spyOn(console, 'info').mockImplementation(() => undefined);
+      const hostname = new URL(deployment.origin).hostname;
+      const insecureOrigin = deployment.origin.replace('https://', 'http://');
+
+      for (const request of [
+        new Request(`${insecureOrigin}/.well-known/oauth-authorization-server`, {
+          headers: { Host: hostname },
+        }),
+        new Request(`${insecureOrigin}/token`, {
+          method: 'POST',
+          headers: {
+            Host: hostname,
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: 'grant_type=authorization_code&code=test',
+        }),
+        new Request(`${insecureOrigin}/mcp`, {
+          method: 'POST',
+          headers: { Host: hostname },
+        }),
+        new Request(`${insecureOrigin}/sse`, {
+          method: 'POST',
+          headers: { Host: hostname },
+        }),
+        new Request('https://attacker.example/mcp', {
+          method: 'POST',
+          headers: { Host: hostname },
+        }),
+      ]) {
+        const response = await worker.fetch(request, deployment.env(), executionContext());
+        expect(response.status).toBe(403);
+        await expect(response.json()).resolves.toEqual({
+          jsonrpc: '2.0',
+          error: { code: -32000, message: 'Invalid request origin' },
+          id: null,
+        });
+      }
+    },
+  );
+
+  it.each(deployments)(
     'rejects invalid Origin before unauthenticated $name MCP requests and preflight',
     async deployment => {
       vi.spyOn(console, 'info').mockImplementation(() => undefined);
@@ -151,5 +194,29 @@ describe('assembled Worker and real OAuth Provider', () => {
     expect(response.status).toBe(401);
     expect(response.headers.get('www-authenticate'))
       .toContain(`resource_metadata="${deployment.origin}/.well-known/oauth-protected-resource/mcp"`);
+    expect(response.headers.get('www-authenticate')).not.toContain('http://');
+  });
+
+  it('preserves the exact documented development loopback origin', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const origin = 'http://localhost:8787';
+    const response = await worker.fetch(
+      new Request(`${origin}/mcp`, {
+        method: 'POST',
+        headers: { Host: 'localhost:8787' },
+      }),
+      createMockEnv({
+        MCP_PUBLIC_ORIGIN: origin,
+        MCP_ALLOWED_HOSTNAMES: 'localhost',
+        MCP_ALLOWED_ORIGIN_HOSTNAMES: 'localhost',
+        OAUTH_REDIRECT_URI: `${origin}/callback`,
+        ENVIRONMENT: 'development',
+      }),
+      executionContext(),
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('www-authenticate'))
+      .toContain(`resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"`);
   });
 });
