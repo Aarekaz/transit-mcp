@@ -61,7 +61,7 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
       note: 'MCP stateless Streamable HTTP transport with request-scoped JSON or SSE responses.',
       supportsJSON: true,
       supportsSSEResponses: true,
-      supportsServerPush: true,
+      supportsServerPush: false,
       supportsResumability: false
     },
     authentication: {

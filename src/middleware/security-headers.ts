@@ -325,7 +325,9 @@ export function addSecurityHeaders(
   // Add CORS headers if requested
   if (includeCors) {
     Object.entries(CORS_HEADERS).forEach(([key, value]) => {
-      headers.set(key, value);
+      if (!headers.has(key)) {
+        headers.set(key, value);
+      }
     });
   }
 

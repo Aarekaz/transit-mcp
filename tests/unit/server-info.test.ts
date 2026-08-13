@@ -16,6 +16,7 @@ describe('getServerInfo', () => {
     expect(body.transport.type).toBe('streamable-http');
     expect(body.transport.note).toContain('stateless');
     expect(body.transport.note).not.toContain('Durable Object');
+    expect(body.transport.supportsServerPush).toBe(false);
     expect(body.transport.supportsResumability).toBe(false);
   });
 });

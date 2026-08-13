@@ -28,21 +28,28 @@ export function createOAuthProvider(
       return handlePublicRequest(request, env, config);
     },
   };
+  // Provider 0.10.3 rejects explicit HTTP issuers, but safely derives the
+  // issuer from an absolute loopback token endpoint. Config validation limits
+  // this exception to HTTP loopback in development.
+  const authorizationServerMetadata = config.app.environment === 'development'
+    && config.mcp.publicOrigin.startsWith('http://')
+    ? {}
+    : { authorization_servers: [config.mcp.publicOrigin] };
 
   return new OAuthProvider<Env>({
     apiRoute: '/mcp',
     apiHandler: protectedHandler,
     defaultHandler: publicHandler,
-    authorizeEndpoint: '/authorize',
-    tokenEndpoint: '/token',
-    clientRegistrationEndpoint: '/register',
+    authorizeEndpoint: `${config.mcp.publicOrigin}/authorize`,
+    tokenEndpoint: `${config.mcp.publicOrigin}/token`,
+    clientRegistrationEndpoint: `${config.mcp.publicOrigin}/register`,
     accessTokenTTL: 3_600,
     refreshTokenTTL: 2_592_000,
     clientRegistrationTTL: 7_776_000,
     scopesSupported: ['transit:read'],
     resourceMetadata: {
       resource: config.mcp.resourceUri,
-      authorization_servers: [config.mcp.publicOrigin],
+      ...authorizationServerMetadata,
       scopes_supported: ['transit:read'],
       bearer_methods_supported: ['header'],
       resource_name: 'Metro MCP',

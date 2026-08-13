@@ -1,3 +1,8 @@
+import {
+  hostHeaderValidationResponse,
+  originValidationResponse,
+} from '@modelcontextprotocol/server';
+
 import { loadConfig } from './config';
 import { addSecurityHeadersAuto } from './middleware/security-headers';
 import { createOAuthProvider } from './oauth/provider';
@@ -19,6 +24,17 @@ function isOAuthRoute(pathname: string): boolean {
     || pathname === '/.well-known/oauth-authorization-server'
     || pathname === '/.well-known/oauth-protected-resource'
     || pathname.startsWith('/.well-known/oauth-protected-resource/');
+}
+
+function providerTrustRejection(
+  request: Request,
+  allowedHostnames: string[],
+  allowedOriginHostnames?: string[],
+): Response | undefined {
+  return hostHeaderValidationResponse(request, allowedHostnames)
+    ?? (allowedOriginHostnames
+      ? originValidationResponse(request, allowedOriginHostnames)
+      : undefined);
 }
 
 function withCorrelationId(response: Response, correlationId: string): Response {
@@ -45,10 +61,15 @@ export default {
         const config = loadConfig(env);
         if (normalized) {
           telemetry.alias = normalized.alias;
-          response = await createOAuthProvider(env, ctx, config, telemetry)
+          response = providerTrustRejection(
+            normalized.request,
+            config.mcp.allowedHostnames,
+            config.mcp.allowedOriginHostnames,
+          ) ?? await createOAuthProvider(env, ctx, config, telemetry)
             .fetch(normalized.request, env, ctx);
         } else if (isOAuthRoute(new URL(request.url).pathname)) {
-          response = await createOAuthProvider(env, ctx, config, telemetry).fetch(request, env, ctx);
+          response = providerTrustRejection(request, config.mcp.allowedHostnames)
+            ?? await createOAuthProvider(env, ctx, config, telemetry).fetch(request, env, ctx);
         } else {
           response = await handlePublicRequest(request, env, config);
         }

@@ -31,9 +31,9 @@ describe('createOAuthProvider', () => {
       apiRoute: '/mcp',
       apiHandler: { fetch: expect.any(Function) },
       defaultHandler: { fetch: expect.any(Function) },
-      authorizeEndpoint: '/authorize',
-      tokenEndpoint: '/token',
-      clientRegistrationEndpoint: '/register',
+      authorizeEndpoint: 'https://metro-mcp.anuragd.me/authorize',
+      tokenEndpoint: 'https://metro-mcp.anuragd.me/token',
+      clientRegistrationEndpoint: 'https://metro-mcp.anuragd.me/register',
       accessTokenTTL: 3_600,
       refreshTokenTTL: 2_592_000,
       clientRegistrationTTL: 7_776_000,
@@ -48,6 +48,30 @@ describe('createOAuthProvider', () => {
       clientIdMetadataDocumentEnabled: true,
       allowPlainPKCE: false,
       resolveExternalToken: expect.any(Function),
+    }));
+  });
+
+  it('uses Provider-derived authorization-server metadata for HTTP loopback development', () => {
+    const env = createMockEnv({
+      MCP_PUBLIC_ORIGIN: 'http://localhost:8787',
+      MCP_ALLOWED_HOSTNAMES: 'localhost',
+      MCP_ALLOWED_ORIGIN_HOSTNAMES: 'localhost,127.0.0.1',
+      OAUTH_REDIRECT_URI: 'http://localhost:8787/callback',
+      ENVIRONMENT: 'development',
+    });
+
+    createOAuthProvider(env, {} as ExecutionContext);
+
+    expect(providerConstructor).toHaveBeenCalledWith(expect.objectContaining({
+      authorizeEndpoint: 'http://localhost:8787/authorize',
+      tokenEndpoint: 'http://localhost:8787/token',
+      clientRegistrationEndpoint: 'http://localhost:8787/register',
+      resourceMetadata: {
+        resource: 'http://localhost:8787/mcp',
+        scopes_supported: ['transit:read'],
+        bearer_methods_supported: ['header'],
+        resource_name: 'Metro MCP',
+      },
     }));
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { handleMcpRequest } from '../../src/mcp/http-handler';
+import { addSecurityHeadersAuto } from '../../src/middleware/security-headers';
 import { createMockEnv } from '../setup';
 
 const validProps = {
@@ -45,6 +46,34 @@ describe('handleMcpRequest', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get('access-control-allow-methods')).toContain('POST');
+  });
+
+  it('keeps the Agents modern MCP preflight policy through outer security composition', async () => {
+    const mcpResponse = await handleMcpRequest(
+      new Request('https://metro-mcp.anuragd.me/mcp', {
+        method: 'OPTIONS',
+        headers: {
+          Host: 'metro-mcp.anuragd.me',
+          Origin: 'https://metro-mcp.anuragd.me',
+          'Access-Control-Request-Method': 'POST',
+          'Access-Control-Request-Headers': 'MCP-Protocol-Version, Mcp-Method, Mcp-Name',
+        },
+      }),
+      createMockEnv(),
+      undefined,
+      validProps,
+    );
+
+    const response = addSecurityHeadersAuto(mcpResponse);
+    const allowedHeaders = response.headers.get('access-control-allow-headers') ?? '';
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('access-control-allow-methods'))
+      .toBe('GET, POST, DELETE, OPTIONS');
+    expect(allowedHeaders).toContain('MCP-Protocol-Version');
+    expect(allowedHeaders).toContain('Mcp-Method');
+    expect(allowedHeaders).toContain('Mcp-Name');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
   });
 
   it('serves an ordinary legacy stateless request with props as the authority', async () => {
