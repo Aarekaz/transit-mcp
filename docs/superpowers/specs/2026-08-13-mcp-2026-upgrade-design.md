@@ -92,7 +92,7 @@ flowchart LR
 4. The client discovers the authorization server and obtains a client ID through pre-registration, CIMD, or the temporary DCR fallback.
 5. The user authenticates with GitHub and approves the `transit:read` grant.
 6. The OAuth Provider issues a resource-bound token and rotating refresh token.
-7. For an authenticated request, the provider validates the token, supplies standard `AuthInfo` when available, and exposes application props through the Worker execution context.
+7. For an authenticated request, the provider validates the token and exposes application props through the Worker execution context. Standard `AuthInfo` is optional and expected to be absent with the pinned Provider/Agents integration because Provider 0.10.3 does not install Agents' verified-context symbol.
 8. The protected API handler creates a request-scoped `createMcpHandler` closed over `env`, passes the validated application props as `authContext`, and maps the factory's `McpRequestContext` into `MetroMcpContext`.
 9. The factory constructs a fresh SDK v2 `McpServer`; the server invokes the existing WMATA/MTA client and returns a JSON or request-scoped SSE response.
 
@@ -156,6 +156,8 @@ The handler uses:
 - Explicit local development allowances for `localhost` and `127.0.0.1`.
 - Browser Origin access for the production Metro MCP origin and local development origins. Origin-less desktop and server clients remain valid.
 
+Because the deployment is stateless, exact `GET` and `DELETE` requests to `/mcp` return `405 Method Not Allowed` with `Allow: POST, OPTIONS` before OAuth, matching the explicit legacy-SSE failure contract on `/sse`.
+
 ### 6.2 `/sse` compatibility alias
 
 `POST /sse` is an application-owned URL alias. Before the request reaches the OAuth Provider, the outer router clones the request with pathname `/mcp`, preserves method, headers, query, and body, and records the original alias only in safe telemetry. OAuth discovery, audience validation, resource metadata, and the MCP handler therefore see exactly `https://metro-mcp.anuragd.me/mcp`. Only the canonical `/mcp` audience is accepted; `/sse` is never a separate OAuth resource.
@@ -168,7 +170,7 @@ The handler uses:
 
 1. Resolve an unambiguous station ID directly when possible.
 2. If multiple stations match a modern request and no accepted input response is present, return `input_required` with a form containing the candidate IDs and names.
-3. Use `createRequestStateCodec` with the dedicated `MCP_REQUEST_STATE_KEY` secret, a 5-minute TTL, and a bind value covering authenticated user ID, tool name, normalized city, and normalized original query. The signed state payload contains the phase and candidate IDs.
+3. Use `createRequestStateCodec` with the dedicated `MCP_REQUEST_STATE_KEY` secret, a 5-minute TTL, and a bind value covering authenticated user ID plus MCP operation identity. The signed state payload contains the phase, normalized city, normalized original query, and candidate IDs; the re-entered tool compares its normalized arguments to that verified payload before accepting a selection.
 4. On retry, validate the state, user binding, expiration, and chosen candidate before fetching predictions.
 5. A declined or cancelled input produces a non-retryable, user-readable tool result.
 
@@ -360,6 +362,8 @@ Configure `@cloudflare/vitest-pool-workers` and exercise the assembled Worker:
 - Verify OAuth discovery, consent, tools/list, at least one DC tool, one NYC tool, one prompt, one resource, MRTR selection, and progress.
 - Verify a client configured with `/sse` and automatic/Streamable HTTP transport still connects.
 - Verify a client forced to legacy SSE receives the documented failure.
+
+The implementation pins `@modelcontextprotocol/conformance@0.2.0-alpha.11`: stable `0.1.16` predates MCP 2026, while alpha.11 packages the frozen `requirements/2026-07-28.yaml` manifest and the authorization-server runner. The prerelease pin is exact and is revisited only in a focused dependency update.
 
 ## 12. Release and rollback
 
