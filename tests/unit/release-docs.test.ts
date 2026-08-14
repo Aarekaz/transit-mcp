@@ -32,4 +32,38 @@ describe('release operator documentation', () => {
     expect(securityGuide).toMatch(/path and query values[^.]*encoded/i);
     expect(securityGuide).toMatch(/structured JSON and text[^.]*not rendered as trusted HTML/i);
   });
+
+  it('documents the distinct WMATA and MTA upstream failure contracts', () => {
+    expect(securityGuide).not.toMatch(
+      /Upstream transit clients map provider\/network failures into operational tool errors/i,
+    );
+    expect(securityGuide).toMatch(/thrown WMATA failures[^.]*mapped to operational tool errors/i);
+    expect(securityGuide).toMatch(/MTA prediction-feed failures[^.]*partial or empty/i);
+    expect(securityGuide).toMatch(/MTA incident-feed failures[^.]*empty incidents/i);
+    expect(securityGuide).toMatch(/Abort failures rethrow/i);
+  });
+
+  it('documents the active OAuth HTML and structured logging boundaries', () => {
+    expect(securityGuide).not.toMatch(
+      /script-src 'self' 'unsafe-inline'|inline scripts|Log full error|console\.error/i,
+    );
+    expect(securityGuide).toMatch(/server-rendered[^.]*escaped[^.]*no scripts/i);
+    expect(securityGuide).toContain(
+      "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+    );
+    expect(securityGuide).toMatch(/Referrer-Policy[^.]*no-referrer/i);
+    expect(securityGuide).toMatch(/structured[^.]*allowlisted fields/i);
+    expect(securityGuide).toMatch(
+      /Never log raw error objects, tokens, secrets, or user payloads/i,
+    );
+  });
+
+  it('limits the 90-day client TTL claim to dynamic registration', () => {
+    expect(securityGuide).not.toMatch(/(?:^|\n)Registered clients expire after 90 days/mi);
+    expect(securityGuide).toMatch(/Dynamically registered clients expire after 90 days/i);
+    expect(securityGuide).toMatch(
+      /pre-registered configured clients[^.]*not governed by the DCR TTL[^.]*persist until revoked or removed/i,
+    );
+    expect(securityGuide).toMatch(/CIMD[^.]*resolved metadata[^.]*not a stored DCR record/i);
+  });
 });
