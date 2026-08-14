@@ -28,7 +28,7 @@ We protect against:
 
 - **Unauthorized access**: OAuth 2.1 with PKCE
 - **Abuse/DoS**: Rate limiting
-- **Injection attacks**: Input validation and sanitization
+- **Untrusted input boundaries**: SDK schemas, field-specific domain handling, and non-HTML MCP results
 - **XSS attacks**: Content Security Policy
 - **Clickjacking**: X-Frame-Options
 - **CSRF**: State parameter, PKCE
@@ -73,103 +73,18 @@ MCP 2026 clients send request metadata on every operation without an initializat
 
 Modern ambiguous-station selection uses signed request state with a five-minute TTL. `MCP_REQUEST_STATE_KEY` is a dedicated stable secret of at least 32 bytes and must differ by environment. State binds the user and operation and rejects expiration, tampering, cross-user replay, a changed query, and selections outside the offered candidates. State is signed rather than encrypted, so it contains no secrets or unnecessary personal data.
 
-### Tool input validation
+### Tool input schemas and downstream handling
 
-**Security:**
-- Prevent injection attacks (XSS, SQL, command injection)
-- Prevent path traversal
-- Prevent malformed requests
+The active SDK v2 registrations define a JSON Schema through Zod for every tool. JSON Schema and Zod enforce the documented types, requiredness, object shape, and enums where present. For example, city fields use the supported-city enum, while optional numeric coordinates remain optional numbers. A description such as "7-digit regional bus stop ID" is documentation unless the corresponding schema also declares that constraint.
 
-**Data Integrity:**
-- Ensure data is in expected format
-- Prevent application errors
-- Provide helpful error messages
+Validation beyond the wire schema is field-specific:
 
-### Validation Strategy
+- Station searches normalize case and whitespace where needed, then resolve names and identifiers against transit-domain data. Resource and transfer lookups reject unknown cities or identifiers.
+- Upstream transit clients map provider/network failures into operational tool errors; cancellation and MCP protocol errors keep their own semantics.
+- Path and query values are encoded only where the active transit adapter does so. The optional WMATA bus-route filter uses URL encoding; other fields rely on domain lookup, numeric types, or their adapter contract. This is not a universal character or path constraint.
+- Successful tool results are returned as structured JSON plus a JSON-serialized text representation. That structured JSON and text are not rendered as trusted HTML by the Worker. Separately generated OAuth HTML escapes interpolated values.
 
-**1. Type Checking**
-```typescript
-if (typeof input !== 'string') {
-  throw new ValidationError('Must be a string');
-}
-```
-
-**2. Sanitization**
-```typescript
-// Remove dangerous characters
-const sanitized = input
-  .trim()
-  .replace(/\0/g, '')          // Null bytes
-  .replace(/[\x00-\x1F]/g, ''); // Control characters
-```
-
-**3. Format Validation**
-```typescript
-if (!/^[a-zA-Z0-9\s\-'.]+$/.test(sanitized)) {
-  throw new ValidationError('Invalid characters');
-}
-```
-
-**4. Length Limits**
-```typescript
-if (sanitized.length > maxLength) {
-  throw new ValidationError('Too long');
-}
-```
-
-**5. Whitelist (where possible)**
-```typescript
-const allowedCities = ['dc', 'nyc'];
-if (!allowedCities.includes(city)) {
-  throw new ValidationError('Invalid city');
-}
-```
-
-### Validation Rules
-
-**Station Names:**
-- Pattern: `^[a-zA-Z0-9\s\-'.()&\/]+$`
-- Max length: 100 characters
-- Example: "Union Station", "L'Enfant Plaza"
-
-**Station Codes:**
-- Pattern: `^[A-Z0-9]+[NS]?$`
-- Max length: 10 characters
-- Example: "A01", "123N"
-
-**Line Codes:**
-- Pattern: `^[A-Z0-9\-\/]+$`
-- Max length: 10 characters
-- Example: "RD", "1", "A/C/E"
-
-**Search Queries:**
-- Pattern: `^[a-zA-Z0-9\s\-'.()&\/,]+$`
-- Max length: 100 characters
-- More permissive for natural language
-
-**City Codes:**
-- Whitelist: `['dc', 'nyc']`
-- Strict validation prevents path traversal
-
-### Implementation
-
-```typescript
-// Validate tool parameters
-try {
-  const validated = validateToolParams(toolName, params);
-  // Use validated parameters safely
-} catch (error) {
-  if (error instanceof ValidationError) {
-    return {
-      error: {
-        code: -32602,
-        message: 'Invalid params',
-        data: error.message
-      }
-    };
-  }
-}
-```
+Tool inputs are not universally sanitized. Many strings intentionally have no generic regex or maximum-length constraint, including station names, station searches, line/route identifiers, and bus stop IDs. The server does not execute tool input as SQL or shell commands. Any new field constraint must be added to the active Zod schema and covered by a wire-level test before it is documented as enforced.
 
 ## Security Headers
 
@@ -256,12 +171,14 @@ return addSecurityHeaders(response, 'html');
 
 ### For Developers
 
-**1. Never Trust User Input**
+**1. Keep schemas and downstream boundaries explicit**
 ```typescript
-// Always validate
-const city = validateCityCode(params.city);
-const query = validateSearchQuery(params.query);
+inputSchema: z.object({
+  city: z.enum(['dc', 'nyc']),
+  query: z.string(),
+})
 ```
+Schema descriptions explain values to clients but do not create regex or length constraints. Encode URL components in the transit adapter that builds the relevant upstream request, and render user-influenced HTML only through the dedicated escaping path.
 
 **2. Use TypeScript Strictly**
 ```typescript
@@ -299,17 +216,15 @@ bun audit
 ```
 
 **6. Review Code for Security**
-- Check all user input is validated
+- Check each input has an accurate SDK schema and field-specific downstream boundary
 - Verify authentication is required
 - Verify any Cloudflare edge policy keys on authenticated or trusted identity
 - Confirm security headers are set
 
 **7. Test Security Features**
-```typescript
-it('should reject SQL injection attempts', () => {
-  expect(() => validateQuery("'; DROP TABLE--")).toThrow();
-});
-```
+- Exercise the registered SDK wire schema rather than a duplicate validator.
+- Test every documented enum, regex, range, or length limit at that wire boundary.
+- Verify outbound URL construction and HTML escaping at their actual adapter/rendering boundaries.
 
 ### For Operators
 
@@ -381,7 +296,7 @@ Structured telemetry is allowlisted. Never log access or refresh tokens, authori
 
 ## Security Checklist
 
-- [ ] All user input is validated
+- [ ] Every tool input has an accurate SDK schema and documented downstream boundary
 - [ ] Any edge rate policy uses authenticated or trusted source identity
 - [ ] Authentication is required for MCP endpoints
 - [ ] HTTPS is enforced (Cloudflare Workers default)
