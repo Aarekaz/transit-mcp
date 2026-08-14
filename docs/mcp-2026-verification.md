@@ -30,9 +30,9 @@ All commands below completed successfully from the feature worktree on 2026-08-1
 | --- | --- |
 | `bun install --frozen-lockfile` | Pass: 421 installs checked across 521 packages; no lockfile change |
 | `bun run type-check` | Pass: source and test TypeScript programs |
-| `bun run test:unit` | Pass: 24 files, 330 tests |
+| `bun run test:unit` | Pass: 25 files, 332 tests |
 | `bun run test:workers` | Pass: 2 files, 25 tests in Workerd |
-| `bun run test` | Pass: 330 unit and 25 Workerd tests in the final combined gate |
+| `bun run test` | Pass: 332 unit and 25 Workerd tests in the final combined gate |
 | production Wrangler dry-run | Pass: bundle generated in a fresh `/tmp/metro-mcp-task13-production.*` directory; no upload |
 | preview Wrangler dry-run | Pass: bundle generated in a fresh `/tmp/metro-mcp-task13-preview.*` directory; no upload |
 | conformance requirements pin | Pass: frozen `2026-07-28` manifest lists 69 required scenarios (37 server, 32 client) |
@@ -42,7 +42,7 @@ All commands below completed successfully from the feature worktree on 2026-08-1
 
 Wrangler dry-runs reported only `OAUTH_KV`, static assets, and public environment variables. Production and preview reported distinct OAuth KV namespace IDs, origins, callbacks, and GitHub client IDs. Neither dry-run deployed a Worker.
 
-The Workerd suite is the deterministic Metro-specific OAuth gate. It covers discovery, CIMD/DCR boundaries, PKCE, RFC 9207 issuer behavior, RFC 8707 resource binding, explicit consent, Provider props, refresh rotation, revocation, expiry, query-token rejection, and the legacy-token cutoff. It also covers MCP 2026 request metadata, ordinary 2025 stateless compatibility, exact 13/3/3 discovery, MRTR, progress ordering, cancellation, cache hints, Host/Origin policy, and `/sse` alias behavior.
+The Workerd suite is the deterministic Metro-specific OAuth gate. It covers discovery, CIMD/DCR boundaries, PKCE, RFC 9207 issuer behavior, RFC 8707 resource binding, explicit consent, Provider props, refresh rotation, revocation, expiry, query-token rejection, and the legacy-token cutoff. It also covers MCP 2026 request metadata, ordinary 2025 stateless compatibility (including ambiguous-station retry guidance), exact 13/3/3 discovery, progress ordering, cancellation, cache hints, Host/Origin policy, and `/sse` alias behavior. Modern `input_required` MRTR and its signed-state boundaries are covered by the unit suite; modern MRTR in Workerd, authenticated conformance, and real clients remains pending.
 
 ## Reproducible local commands
 
@@ -87,6 +87,7 @@ Add `--client-id` and `--client-secret` only for an explicitly pre-registered te
 These checks have not been run and are not claimed as passing:
 
 - Authenticated MCP server conformance against a deployed preview. Pending preview secrets, DNS/route, deployment approval, and a short-lived Provider token.
+- Modern MRTR through Workerd and a real authenticated preview client. Its unit coverage passes, but no Workerd or live execution is claimed.
 - The generic authorization-server runner against an approved local or preview issuer. Pending an approved issuer and OAuth test-client conditions.
 - Claude acceptance: discovery, GitHub login, consent, refresh, exact tools list, DC and NYC calls, one prompt, one resource, MRTR, progress, `/sse` automatic/Streamable HTTP alias, and forced legacy-SSE failure.
 - Codex acceptance with the same behavioral matrix.

@@ -134,13 +134,22 @@ Production and preview must also use distinct GitHub OAuth apps. Configure each 
 - `ENVIRONMENT` (`production`, `preview`, or `development`)
 - `OAUTH_KV`, pointing at the environment's dedicated namespace
 
-Set secrets interactively. `MCP_REQUEST_STATE_KEY` is a stable, environment-specific 32-byte-or-longer key used only for signed MRTR state. `JWT_SECRET` remains temporarily for the legacy `/mcp`-audience bridge.
+Set production secrets interactively. `MCP_REQUEST_STATE_KEY` is a stable, environment-specific 32-byte-or-longer key used only for signed MRTR state. `JWT_SECRET` remains temporarily for the legacy `/mcp`-audience bridge.
 
 ```bash
 bunx wrangler secret put MCP_REQUEST_STATE_KEY
 bunx wrangler secret put GITHUB_CLIENT_SECRET
 bunx wrangler secret put WMATA_API_KEY
 bunx wrangler secret put JWT_SECRET
+```
+
+Set the same four secret names independently for preview; named Wrangler environments do not inherit production secrets:
+
+```bash
+bunx wrangler secret put MCP_REQUEST_STATE_KEY --env preview
+bunx wrangler secret put GITHUB_CLIENT_SECRET --env preview
+bunx wrangler secret put WMATA_API_KEY --env preview
+bunx wrangler secret put JWT_SECRET --env preview
 ```
 
 Wrangler must include both `nodejs_compat` and `global_fetch_strictly_public`. Validate both shapes before any approved deployment:

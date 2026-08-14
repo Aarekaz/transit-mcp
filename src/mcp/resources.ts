@@ -125,7 +125,7 @@ export function registerResources(
     {
       title: 'Transit incidents',
       description:
-        'Live service advisories for a transit system. Read-only in 4.0; subscribe support arrives with the incident poller in Phase 2.5.',
+        'Current read-only service advisories for a transit system, fetched for this request.',
       mimeType: JSON_MIME_TYPE,
       cacheHint: PRIVATE_NO_CACHE,
     },

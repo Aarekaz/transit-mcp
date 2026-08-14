@@ -33,6 +33,8 @@ describe('getServerInfo', () => {
     });
     expect(body.transport).not.toHaveProperty('session');
     expect(body.transport).not.toHaveProperty('sessions');
+    expect(body.capabilities.tools).toEqual({});
+    expect(body.capabilities.tools).not.toHaveProperty('listChanged');
   });
 
   it('keeps release and client configuration metadata aligned', () => {

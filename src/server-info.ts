@@ -18,9 +18,7 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
       documentation: 'https://github.com/anuragdhungana/metro-mcp/blob/main/README.md',
     },
     capabilities: {
-      tools: {
-        listChanged: true
-      }
+      tools: {},
     },
     cities: [
       {

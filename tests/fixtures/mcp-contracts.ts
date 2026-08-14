@@ -69,7 +69,7 @@ export const EXPECTED_RESOURCE_CONTRACTS = {
     uriTemplate: 'transit://incidents/{city}',
     title: 'Transit incidents',
     description:
-      'Live service advisories for a transit system. Read-only in 4.0; subscribe support arrives with the incident poller in Phase 2.5.',
+      'Current read-only service advisories for a transit system, fetched for this request.',
     mimeType: 'application/json',
     cacheHint: { ttlMs: 0, cacheScope: 'private' },
     listedResources: [

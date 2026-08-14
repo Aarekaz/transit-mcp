@@ -488,6 +488,15 @@ describe('golden MCP catalog', () => {
 });
 
 describe('SDK v2 resource contracts', () => {
+  it('describes live incidents as current stateless read-only data', () => {
+    const incidents = registeredResourceTemplates().incidents;
+
+    expect(incidents?.metadata?.description).toBe(
+      'Current read-only service advisories for a transit system, fetched for this request.',
+    );
+    expect(incidents?.metadata?.description).not.toMatch(/4\.0|Phase 2\.5|subscribe/i);
+  });
+
   it('registers exactly three templates in order with concrete metadata and cache hints', async () => {
     const resources = registeredResourceTemplates();
 
