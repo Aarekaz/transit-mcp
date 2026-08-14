@@ -2,7 +2,8 @@
 
 > Model Context Protocol Server for US Transit Systems (DC Metro & NYC Subway)
 
-[![MCP](https://img.shields.io/badge/MCP-2025--06--18-blue)](https://modelcontextprotocol.io)
+[![MCP](https://img.shields.io/badge/MCP-2026--07--28-blue)](https://modelcontextprotocol.io)
+[![Metro MCP](https://img.shields.io/badge/Metro_MCP-5.0.0-0f766e)](CHANGELOG.md)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange)](https://workers.cloudflare.com)
 [![OAuth 2.1](https://img.shields.io/badge/OAuth-2.1%20%2B%20PKCE-green)](https://oauth.net/2.1/)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
@@ -111,133 +112,86 @@ Want to run your own instance? See the [Deployment](#deployment) section below.
 - [Node.js](https://nodejs.org/) for Wrangler and the Workerd Vitest pool; Bun remains the sole package manager and lockfile owner
 - [GitHub OAuth App](https://github.com/settings/developers) (for authentication)
 
-### Setup Steps
+### Environment setup
 
-**1. Install dependencies:**
+Install exactly what `bun.lock` records:
 
 ```bash
 bun install --frozen-lockfile
 ```
 
-**2. Generate JWT secret:**
+Create one OAuth Provider namespace for each deployed environment and put its ID in the corresponding `OAUTH_KV` binding:
 
 ```bash
-openssl rand -hex 32
+bunx wrangler kv namespace create OAUTH_KV
+bunx wrangler kv namespace create OAUTH_KV_preview
 ```
 
-**3. Create GitHub OAuth App:**
+Production and preview must also use distinct GitHub OAuth apps. Configure each callback as `${MCP_PUBLIC_ORIGIN}/callback`; never reuse the production app or OAuth KV for preview. Each environment sets:
 
-- Go to [github.com/settings/developers](https://github.com/settings/developers)
-- Click "New OAuth App"
-- Set **Homepage URL**: `https://metro-mcp.your-subdomain.workers.dev`
-- Set **Authorization callback URL**: `https://metro-mcp.your-subdomain.workers.dev/callback`
-- Save the **Client ID** and **Client Secret**
+- `MCP_PUBLIC_ORIGIN`, `MCP_ALLOWED_HOSTNAMES`, and `MCP_ALLOWED_ORIGIN_HOSTNAMES`
+- `OAUTH_REDIRECT_URI` and the environment's public GitHub `GITHUB_CLIENT_ID`
+- `ENVIRONMENT` (`production`, `preview`, or `development`)
+- `OAUTH_KV`, pointing at the environment's dedicated namespace
 
-**4. Create KV Namespaces:**
-
-```bash
-# Create OAuth storage namespace
-bunx wrangler kv namespace create "OAUTH_CLIENTS"
-bunx wrangler kv namespace create "OAUTH_CLIENTS" --preview
-
-# Create rate limiting namespace
-bunx wrangler kv namespace create "RATE_LIMIT_KV"
-bunx wrangler kv namespace create "RATE_LIMIT_KV" --preview
-```
-
-Copy the IDs from the output and update `wrangler.jsonc`.
-
-**5. Configure environment:**
-
-Copy the example files and fill in your values:
+Set secrets interactively. `MCP_REQUEST_STATE_KEY` is a stable, environment-specific 32-byte-or-longer key used only for signed MRTR state. `JWT_SECRET` remains temporarily for the legacy `/mcp`-audience bridge.
 
 ```bash
-# Copy wrangler config
-cp wrangler.jsonc.example wrangler.jsonc
-# Update the KV namespace IDs in wrangler.jsonc
-
-# Copy local development secrets
-cp .dev.vars.example .dev.vars
-# Add your actual secrets to .dev.vars
-```
-
-**6. Set production secrets:**
-
-```bash
-# These are encrypted and stored securely by Cloudflare
-bunx wrangler secret put WMATA_API_KEY
+bunx wrangler secret put MCP_REQUEST_STATE_KEY
 bunx wrangler secret put GITHUB_CLIENT_SECRET
+bunx wrangler secret put WMATA_API_KEY
 bunx wrangler secret put JWT_SECRET
 ```
 
-**7. Deploy:**
+Wrangler must include both `nodejs_compat` and `global_fetch_strictly_public`. Validate both shapes before any approved deployment:
 
 ```bash
-# Deploy to Cloudflare Workers
-bunx wrangler deploy
+bunx wrangler deploy --dry-run --outdir /tmp/metro-mcp-production
+bunx wrangler deploy --dry-run --env preview --outdir /tmp/metro-mcp-preview
 ```
 
 ## MCP Client Integration
 
-### Claude Desktop (Automatic OAuth)
+### Claude
 
-**Simple Setup:**
+Use the canonical Streamable HTTP endpoint in Claude Code:
 
-Just add the server URL to Claude Desktop:
-
-```text
-https://metro-mcp.anuragd.me/mcp
+```bash
+claude mcp add --transport http metro-mcp https://metro-mcp.anuragd.me/mcp
 ```
 
-Claude Desktop will automatically:
+Then open `/mcp`, select `metro-mcp`, and complete GitHub login and consent. Claude.ai/Desktop users can add the same URL as a remote custom connector where their plan and workspace policy permit it.
 
-1. Discover OAuth endpoints via `/.well-known/oauth-authorization-server`
-2. Register as a client
-3. Open your browser for GitHub authentication
-4. Receive and store the access token
-5. Connect to the MCP server
+### Codex
 
-**No manual token copying required!**
-
-### Other MCP Clients
-
-For MCP clients that support OAuth 2.1 with automatic discovery:
-
-**Server URL:**
-
-```text
-https://metro-mcp.anuragd.me/mcp
+```bash
+codex mcp add metro-mcp --url https://metro-mcp.anuragd.me/mcp
+codex mcp login metro-mcp --scopes transit:read
 ```
 
-The client will handle authentication automatically via the OAuth flow.
+The checked-in [`mcp-config.json`](mcp-config.json) shows the equivalent generic remote-HTTP configuration. Access and refresh tokens stay in the client's credential store; do not paste them into project configuration.
 
-### Manual Token Authentication (Legacy)
+### Transport compatibility
 
-If your MCP client doesn't support OAuth, you can still authenticate manually:
-
-1. Visit `https://metro-mcp.anuragd.me/authorize` in your browser
-2. Authorize via GitHub
-3. Copy the JWT token displayed
-4. Configure your client with:
-   - Server URL: `https://metro-mcp.anuragd.me/mcp`
-   - Authorization Header: `Bearer your-jwt-token-here`
+- MCP `2026-07-28` requests are stateless and do not require `initialize`.
+- Ordinary tools, resources, and prompts remain available to MCP 2025 stateless clients.
+- `POST /sse` and `OPTIONS /sse` are URL aliases rewritten to canonical `/mcp` before authorization.
+- Legacy HTTP+SSE is removed. `GET` and `DELETE` on `/sse` or `/mcp`, session message URLs, and `/sse/` return `405`.
+- OAuth audience and discovery always use `https://metro-mcp.anuragd.me/mcp`; `/sse` is never an OAuth resource.
 
 ## OAuth Endpoints
 
-The server implements OAuth 2.1 with PKCE for secure authentication:
+The Workers OAuth Provider implements OAuth 2.1 with PKCE:
 
 - Discovery: `/.well-known/oauth-authorization-server`
-- Registration: `/register` (Dynamic client registration - RFC 7591)
+- Registration: CIMD first, with `/register` as a temporary Dynamic Client Registration fallback
 - Authorization: `/authorize` (GitHub OAuth integration)
 - Token: `/token` (Authorization code exchange with PKCE verification)
 - Callback: `/callback` (GitHub OAuth callback)
 
-### Security Features
+Clients receive an explicit `transit:read` consent screen. Grants are bound to the canonical `/mcp` resource; access tokens last at most 60 minutes, refresh tokens last at most 30 days and rotate on use, and bearer tokens are accepted only in the `Authorization` header. The DCR fallback sunsets on **2027-06-30**.
 
-- PKCE (S256) required for all authorization flows
-- Persistent client registration via Cloudflare KV
-- JWT tokens with 90-day expiration
-- Rate limiting and origin validation
+Version 5.0 requires reauthorization for tokens without an audience, tokens bound to `/sse`, and clients registered in the old DCR store. Existing compatible legacy JWTs bound to `/mcp` stop working at the earlier of their embedded expiry and **2026-11-30T00:00:00Z**.
 
 ## Supported Cities
 
@@ -274,18 +228,16 @@ The server exposes the following tools through the MCP protocol:
 
 ### MCP Protocol
 
-- **Version:** 2025-06-18
-- **Transport:** Streamable HTTP via [`cloudflare/agents`](https://github.com/cloudflare/agents) `McpAgent`. Sessions are Durable Object instances (one per `Mcp-Session-Id`) with hibernatable WebSockets — the DO evicts while idle and wakes on incoming messages, so quiet sessions cost nothing.
-- **Authentication:** OAuth 2.1 with PKCE (S256) + RFC 8707 resource indicators (audience-bound tokens). The Worker shell verifies the JWT and propagates the user's identity to the DO via `ctx.props`.
+- **Version:** MCP `2026-07-28`, with ordinary MCP 2025 stateless compatibility
+- **Transport:** Stateless Streamable HTTP through a fresh SDK v2 server for each request. JSON and request-scoped SSE responses are supported; protocol sessions, resumability, and server push are not advertised.
+- **Authentication:** The Cloudflare Workers OAuth Provider owns discovery, CIMD/DCR validation, PKCE, RFC 9207 issuer identifiers, RFC 8707 resource binding, RFC 9728 protected-resource metadata, refresh rotation, revocation, and Provider token storage.
 - **Tool result shape:** Every tool emits `structuredContent` (typed object matching `outputSchema`) alongside the legacy `content[0].text` (serialized JSON) for backwards compatibility.
 - **Tool annotations:** Every tool declares `readOnlyHint`, `idempotentHint`, `openWorldHint` so clients can render safe-action affordances.
 - **Capabilities exposed:**
   - `tools` — 13 transit query tools (DC + NYC)
   - `resources` — three `transit://` URI templates (stations, routes, incidents)
   - `prompts` — three canned templates (service-briefing, commute-planner, accessibility-check)
-  - `elicitation` — server asks the user to disambiguate when a station name matches multiple platforms
-  - Server push: enabled (DurableObject-backed)
-  - Resumability: enabled via `DurableObjectEventStore` (`Last-Event-ID` replay)
+  - MRTR input — modern clients receive `input_required` for ambiguous stations; MCP 2025 clients receive deterministic retry guidance with exact station IDs
   - Progress notifications: emitted for `get_all_stations` when the client opts in via `params._meta.progressToken`
 
 ### Transit APIs
@@ -313,9 +265,8 @@ The server uses GTFS-Realtime feeds from the MTA. Public API endpoints (no API k
 - **Platform:** Cloudflare Workers
 - **Static assets:** `public/` is deployed through Cloudflare Workers Static Assets and bound as `env.ASSETS`; the Worker serves API/OAuth/MCP routes first, then delegates landing-page, docs, image, and icon requests to the assets binding.
 - **Storage:**
-  - Cloudflare KV `OAUTH_CLIENTS` — registered OAuth clients
-  - Cloudflare KV `RATE_LIMIT_KV` — rate-limit counters
-  - Durable Object `MCP_SESSION` (class `MetroMcpAgent`) — per-session MCP state, transport, and event log
+  - Environment-specific Cloudflare KV `OAUTH_KV` — OAuth Provider grants, tokens, and registrations
+  - No active protocol-session storage. The old `MetroMcpAgent` export and original `v1` migration remain inactive solely for rollback.
 - **Runtime:** V8 isolates with global edge deployment
 
 ### Source Structure
@@ -324,32 +275,13 @@ The codebase is organized for multi-city transit support with a clean separation
 
 ```text
 src/
-├── index.ts              # Cloudflare Worker entry point and DO export
-├── router.ts             # Request routing (OAuth, MCP, info, static assets)
-├── server-info.ts        # Public /info capability summary
-├── config.ts             # Runtime config, caching, and rate-limit defaults
-├── types.ts              # Shared TypeScript type definitions
-│
-├── OAuth & Authentication
-│   ├── auth.ts           # JWT token management and verification
-│   └── oauth-handler.ts  # OAuth 2.1 flow implementation with PKCE
-│
-├── MCP Protocol
-│   ├── mcp-agent.ts      # McpAgent tools, resources, prompts, sessions
-│   └── mcp/              # MCP response format helpers
-│
-├── Middleware
-│   ├── input-validator.ts
-│   ├── rate-limiter.ts
-│   └── security-headers.ts
-│
-└── Transit Abstraction Layer
-    ├── base.ts           # Abstract TransitAPIClient class
-    ├── registry.ts       # Transit client factory (city routing)
-    ├── wmata-client.ts   # DC Metro client (WMATA REST APIs)
-    ├── mta-client.ts     # NYC Subway client (GTFS-Realtime)
-    ├── nyc-routes.ts     # Bundled NYC route metadata
-    └── nyc-stations.ts   # Bundled NYC station metadata
+├── index.ts              # Outer route normalization and Provider composition
+├── public-handler.ts     # /info, OAuth UI, and static assets
+├── route-normalizer.ts   # Exact /mcp admission and /sse URL alias
+├── oauth/                # Provider configuration, GitHub consent, legacy bridge
+├── mcp/                  # Stateless server factory, tools, resources, and prompts
+├── mcp-agent.ts          # Inactive 4.x rollback class only
+└── transit/              # WMATA and MTA clients with request cancellation
 ```
 
 **Key Architecture Decisions:**
@@ -358,6 +290,24 @@ src/
 - **City Routing:** Single server handles all cities via `city` parameter in MCP tool calls
 - **Normalized Responses:** All transit clients return standardized `TransitStation`, `TransitPrediction`, and `TransitIncident` types
 - **Extensibility:** Adding a new city only requires implementing the abstract client class
+
+## Verification and rollback
+
+Run the complete local suite with `bun run test`. The authenticated conformance runner requires an operator-obtained short-lived Provider access token in the process environment; it never stores the token or puts it in command arguments:
+
+```bash
+export MCP_CONFORMANCE_TARGET_URL=https://metro-mcp-preview.anuragd.me/mcp
+export MCP_CONFORMANCE_ALLOW_REMOTE=1
+read -rsp 'Short-lived MCP token: ' MCP_CONFORMANCE_TOKEN && export MCP_CONFORMANCE_TOKEN
+./scripts/run-conformance.sh
+unset MCP_CONFORMANCE_TOKEN
+```
+
+See [`docs/mcp-2026-verification.md`](docs/mcp-2026-verification.md) for the automated and approval-gated acceptance record.
+
+Rollback restores the prior Worker version and its prior bindings. Do not delete the original `MetroMcpAgent` Durable Object namespace or add a deletion migration during the stabilization window; protocol session state is disposable, but retaining the class and original `v1` migration keeps rollback possible.
+
+MCP Apps and embedded interactive UI are intentionally deferred to the next PR.
 
 ## Contributing
 

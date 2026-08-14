@@ -1,12 +1,8 @@
 {
   "mcpServers": {
     "metro-mcp": {
-      "command": "npx",
-      "args": [
-        "mcp-remote", 
-        "https://metro-mcp.anuragd.me/mcp"
-      ],
-      "env": {}
+      "type": "http",
+      "url": "https://metro-mcp.anuragd.me/mcp"
     }
   }
 }

@@ -7,7 +7,7 @@ This document explains the security measures implemented in Metro MCP and the ra
 - [Overview](#overview)
 - [Authentication & Authorization](#authentication--authorization)
 - [Rate Limiting](#rate-limiting)
-- [Input Validation](#input-validation)
+- [MCP and Input Boundaries](#mcp-and-input-boundaries)
 - [Security Headers](#security-headers)
 - [Security Best Practices](#security-best-practices)
 
@@ -35,172 +35,45 @@ We protect against:
 
 ## Authentication & Authorization
 
-### OAuth 2.1 with PKCE
+Metro MCP 5.0 delegates OAuth protocol ownership to `@cloudflare/workers-oauth-provider`. GitHub authenticates the person but does not issue the MCP access token. The Provider owns authorization-server and protected-resource discovery, PKCE S256, RFC 9207 issuer identifiers, RFC 8707 resource binding, RFC 9728 challenges, refresh rotation, revocation, and client storage in `OAUTH_KV`.
 
-**Why OAuth 2.1:**
-- Industry standard for API authorization
-- Widely supported by clients (like Claude Desktop)
-- Delegated authentication (uses GitHub, don't handle passwords)
-- Refresh tokens for long-lived access
+### Registration, consent, and scope
 
-**Why PKCE (Proof Key for Code Exchange):**
-- Prevents authorization code interception attacks
-- Required for public clients (mobile apps, desktop apps)
-- No client secret needed (can't be kept secret in public clients)
-- Forward-compatible with OAuth 2.1 requirements
+Clients register in this order:
 
-### Flow
+1. A pre-registered client relationship, when available.
+2. A Client ID Metadata Document (CIMD).
+3. Temporary Dynamic Client Registration at `/register`.
 
-```
-1. Client registers (POST /register)
-   ← Returns client_id, client_secret
+DCR is a compatibility fallback and sunsets on **2027-06-30**. `global_fetch_strictly_public` is required so CIMD fetches stay on publicly routable addresses. GitHub login is followed by an explicit consent screen identifying the MCP client, canonical resource, and exact application permission `transit:read`. Invalid clients and redirect URIs are rendered locally and are not redirected.
 
-2. Client initiates auth (GET /authorize + code_challenge)
-   → Redirects to GitHub OAuth
-   
-3. User authorizes on GitHub
-   → GitHub redirects to /callback
-   
-4. Server exchanges code for token
-   → Returns access_token (JWT)
-   
-5. Client uses token (Authorization: Bearer <token>)
-   ✓ Verified on each request
-```
+### Resource and token boundaries
 
-### JWT Tokens
+The production resource is exactly `https://metro-mcp.anuragd.me/mcp`; preview uses its own origin plus `/mcp`. `/sse` is only a URL alias rewritten before OAuth and is never an audience. Provider-issued access tokens last no more than 60 minutes. Refresh tokens last no more than 30 days and rotate on use. Registered clients expire after 90 days.
 
-**Structure:**
-```json
-{
-  "header": {
-    "alg": "HS256",
-    "typ": "JWT"
-  },
-  "payload": {
-    "userId": "12345",
-    "userLogin": "username",
-    "exp": 1735689600,
-    "iat": 1735603200
-  },
-  "signature": "<HMAC-SHA256 signature>"
-}
-```
+Bearer credentials are accepted only through `Authorization: Bearer`. Query parameters such as `access_token` and `token` are ignored. Protected requests also require Provider props with the exact normalized `transit:read` scope; missing scope returns `403`.
 
-**Why JWT:**
-- Stateless (no server-side session storage)
-- Self-contained (includes user info)
-- Tamper-proof (signed with JWT_SECRET)
-- Standard format (RFC 7519)
+### Legacy JWT bridge
 
-**Security Measures:**
-- Signed with HMAC-SHA256
-- 90-day expiration (configurable)
-- Secret key must be 32+ characters
-- Verified on every request
-
-### Implementation
-
-```typescript
-// Generate JWT
-const token = await authManager.generateJWT(session);
-
-// Verify JWT
-try {
-  const session = await authManager.verifyJWT(token);
-  // Token valid, proceed
-} catch (error) {
-  // Token invalid/expired, deny access
-}
-```
+Metro MCP 5.0 no longer issues custom JWTs. The temporary resolver accepts an old token only when it has a valid signature and expiry, arrived in the Authorization header, and has an `aud` exactly matching canonical `/mcp`. Tokens without an audience and tokens bound to `/sse` require reauthorization. An otherwise compatible legacy JWT expires at the earlier of its embedded expiry and **2026-11-30T00:00:00Z**. Old DCR records are not imported.
 
 ## Rate Limiting
 
-### Why Rate Limiting
+Rate limiting is an edge policy, not an application KV binding. Rules may use validated `Mcp-Method` and `Mcp-Name` as dimensions, but those headers are not authorization proof. Enforcement must also key on authenticated client/user context or trusted source identity. `RATE_LIMIT_KV` is not an active Worker binding in 5.0.
 
-1. **Prevent DoS attacks**: Limit damage from malicious actors
-2. **Fair usage**: Ensure resources are shared fairly
-3. **Cost control**: Protect backend API quotas (WMATA, MTA)
-4. **Performance**: Prevent system overload
+## MCP and Input Boundaries
 
-### Implementation
+### Host, Origin, and transport
 
-**Algorithm**: Sliding Window Counter
+The Worker derives trust from configured `MCP_PUBLIC_ORIGIN` and hostname allowlists, never from an incoming Host header. Undeclared or malformed Host and browser Origin values return `403`; origin-less desktop/server clients remain valid. Exact `POST`/`OPTIONS /sse` requests are rewritten to `/mcp` before the Provider sees them. `GET` and `DELETE`, slash variants, and legacy session-message URLs return `405`.
 
-```
-Window: 60 seconds
-Limit: 100 requests
+MCP 2026 clients send request metadata on every operation without an initialization handshake. Header/body version, method, and name mismatches are rejected. The server is stateless and does not advertise protocol sessions, resumability, or server push.
 
-Time Window: [0-60s] [60-120s] [120-180s]
-             ╰─────╯   ╰─────╯    ╰─────╯
-             100 req   resets      100 req
-```
+### MRTR request state
 
-**Storage**: Cloudflare KV
-```typescript
-Key: rate_limit:{client_ip}:{window_timestamp}
-Value: request_count
-Expiration: 120 seconds (window + buffer)
-```
+Modern ambiguous-station selection uses signed request state with a five-minute TTL. `MCP_REQUEST_STATE_KEY` is a dedicated stable secret of at least 32 bytes and must differ by environment. State binds the user and operation and rejects expiration, tampering, cross-user replay, a changed query, and selections outside the offered candidates. State is signed rather than encrypted, so it contains no secrets or unnecessary personal data.
 
-**Limits by Endpoint:**
-- OAuth endpoints: 200 requests/minute (auth flows need multiple requests)
-- MCP endpoints: 100 requests/minute (standard API usage)
-- Static endpoints: 50 requests/minute (less critical)
-
-### Client Identification
-
-```typescript
-// Priority order:
-1. CF-Connecting-IP (most reliable, set by Cloudflare)
-2. X-Real-IP (proxy header)
-3. X-Forwarded-For (standard but spoofable, use first IP)
-4. "unknown" (fallback)
-```
-
-**Why IP-based:**
-- Available for all requests (including unauthenticated)
-- Reasonably unique per user
-- Prevents abuse before authentication
-
-### Error Handling
-
-**When limit exceeded:**
-```http
-HTTP/1.1 429 Too Many Requests
-X-RateLimit-Limit: 100
-X-RateLimit-Remaining: 0
-X-RateLimit-Reset: 1735689660
-Retry-After: 45
-
-{
-  "jsonrpc": "2.0",
-  "error": {
-    "code": -32603,
-    "message": "Too Many Requests",
-    "data": {
-      "retryAfter": 45
-    }
-  }
-}
-```
-
-**Fail Open Strategy:**
-If KV fails, allow request (availability > strict limiting)
-
-```typescript
-try {
-  const count = await KV.get(key);
-  // Check limit
-} catch (error) {
-  console.error('Rate limiter error:', error);
-  return { allowed: true };  // Fail open
-}
-```
-
-## Input Validation
-
-### Why Input Validation
+### Tool input validation
 
 **Security:**
 - Prevent injection attacks (XSS, SQL, command injection)
@@ -422,14 +295,13 @@ db.query('SELECT * FROM stations WHERE id = ?', [stationId]);
 **5. Keep Dependencies Updated**
 ```bash
 # Regularly check for updates
-npm audit
-npm update
+bun audit
 ```
 
 **6. Review Code for Security**
 - Check all user input is validated
 - Verify authentication is required
-- Ensure rate limiting is applied
+- Verify any Cloudflare edge policy keys on authenticated or trusted identity
 - Confirm security headers are set
 
 **7. Test Security Features**
@@ -443,12 +315,14 @@ it('should reject SQL injection attempts', () => {
 
 **1. Use Strong Secrets**
 ```bash
-# Generate secure JWT secret
-openssl rand -hex 32
-
-# Store securely in Cloudflare
-wrangler secret put JWT_SECRET
+# Store each value interactively; do not put it in shell history or config
+bunx wrangler secret put MCP_REQUEST_STATE_KEY
+bunx wrangler secret put GITHUB_CLIENT_SECRET
+bunx wrangler secret put WMATA_API_KEY
+bunx wrangler secret put JWT_SECRET
 ```
+
+Production and preview require distinct `OAUTH_KV` namespaces, GitHub OAuth apps/callbacks, and MRTR keys. The legacy JWT secret is retained only through the bridge and rollback windows.
 
 **2. Monitor Rate Limits**
 - Check for unusually high rejection rates
@@ -464,20 +338,29 @@ wrangler secret put JWT_SECRET
 - Unusual access patterns
 ```
 
-**4. Keep Wrangler Updated**
+**4. Keep exact runtime pins reviewed**
 ```bash
-npm update wrangler
+bun install --frozen-lockfile
+bun audit
 ```
 
 **5. Use Environment Variables Correctly**
-```toml
-# wrangler.toml
-[vars]
-PUBLIC_VALUE = "can be in git"  # OK
-
-# Secret (use wrangler secret put)
-# JWT_SECRET = "never in git"  # WRONG
+```jsonc
+// wrangler.jsonc contains public values and binding IDs only.
+// Never place MCP_REQUEST_STATE_KEY, GITHUB_CLIENT_SECRET,
+// WMATA_API_KEY, JWT_SECRET, or bearer tokens here.
 ```
+
+**6. Preserve rollback boundaries**
+
+- Keep the inactive `MetroMcpAgent` export and original `v1` migration.
+- Do not add a Durable Object deletion migration during the 5.0 stabilization window.
+- Roll back by restoring the prior Worker version and its prior binding configuration.
+- Treat production deployment, DNS, secret changes, and old namespace deletion as separately approved operations.
+
+### Logging and conformance
+
+Structured telemetry is allowlisted. Never log access or refresh tokens, authorization codes, GitHub tokens, raw Provider props, request bodies, or MRTR responses. The conformance proxy binds only `127.0.0.1`, replaces inbound Authorization, supplies the operator token only from the process environment, uses manual redirects, and rejects remote targets unless `MCP_CONFORMANCE_ALLOW_REMOTE=1` is explicit.
 
 ### Incident Response
 
@@ -499,7 +382,7 @@ PUBLIC_VALUE = "can be in git"  # OK
 ## Security Checklist
 
 - [ ] All user input is validated
-- [ ] Rate limiting is enabled
+- [ ] Any edge rate policy uses authenticated or trusted source identity
 - [ ] Authentication is required for MCP endpoints
 - [ ] HTTPS is enforced (Cloudflare Workers default)
 - [ ] Security headers are applied
@@ -508,6 +391,8 @@ PUBLIC_VALUE = "can be in git"  # OK
 - [ ] Security tests pass
 - [ ] No secrets in code/logs
 - [ ] Error messages don't leak internal details
+- [ ] Production and preview OAuth storage, apps, callbacks, and MRTR keys are distinct
+- [ ] Rollback assets and the original `v1` migration remain intact
 
 ## Resources
 

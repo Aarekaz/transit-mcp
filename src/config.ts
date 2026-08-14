@@ -1,10 +1,10 @@
 import type { Env } from './types';
 
-/** Single source of truth for the server version until the 5.0 metadata task. */
-export const SERVER_VERSION = '4.0.0';
+/** Single source of truth for the public Metro MCP release version. */
+export const SERVER_VERSION = '5.0.0';
 
-/** Protocol version used by the inactive 4.x routing path. */
-export const MCP_PROTOCOL_VERSION = '2025-06-18';
+/** Protocol revision advertised by the public server metadata. */
+export const MCP_PROTOCOL_VERSION = '2026-07-28';
 
 const ACCESS_TOKEN_TTL_SECONDS = 3600 as const;
 const REFRESH_TOKEN_TTL_SECONDS = 2_592_000 as const;
