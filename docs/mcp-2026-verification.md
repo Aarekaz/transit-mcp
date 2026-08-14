@@ -30,9 +30,9 @@ All commands below completed successfully from the feature worktree on 2026-08-1
 | --- | --- |
 | `bun install --frozen-lockfile` | Pass: 421 installs checked across 521 packages; no lockfile change |
 | `bun run type-check` | Pass: source and test TypeScript programs |
-| `bun run test:unit` | Pass: 25 files, 332 tests |
+| `bun run test:unit` | Pass: 25 files, 333 tests |
 | `bun run test:workers` | Pass: 2 files, 25 tests in Workerd |
-| `bun run test` | Pass: 332 unit and 25 Workerd tests in the final combined gate |
+| `bun run test` | Pass: 333 unit and 25 Workerd tests in the final combined gate |
 | production Wrangler dry-run | Pass: bundle generated in a fresh `/tmp/metro-mcp-task13-production.*` directory; no upload |
 | preview Wrangler dry-run | Pass: bundle generated in a fresh `/tmp/metro-mcp-task13-preview.*` directory; no upload |
 | conformance requirements pin | Pass: frozen `2026-07-28` manifest lists 69 required scenarios (37 server, 32 client) |

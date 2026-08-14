@@ -120,6 +120,15 @@ Install exactly what `bun.lock` records:
 bun install --frozen-lockfile
 ```
 
+For local development, create a dedicated GitHub OAuth App whose callback is exactly `http://localhost:8787/callback`. Then copy the canonical [`.dev.vars.example`](.dev.vars.example) template, replace every `replace-with-...` placeholder, and start Wrangler:
+
+```bash
+cp .dev.vars.example .dev.vars
+bun run dev
+```
+
+Keep the template's `http://localhost:8787` origin, `localhost` host/origin allowlists, callback, and `ENVIRONMENT=development` values together. In Wrangler's default local mode, the configured `OAUTH_KV` binding uses local non-production storage under `.wrangler`; it does not read or write the deployed production or preview namespace. Do not add `--remote` for normal local development.
+
 Create one OAuth Provider namespace for each deployed environment and put its ID in the corresponding `OAUTH_KV` binding:
 
 ```bash

@@ -11,6 +11,20 @@ const wrangler = JSON.parse(stripJsonComments(readFileSync(
   'utf8',
 )));
 
+function parseVarsExample(url: NodeURL): Record<string, string> {
+  return Object.fromEntries(
+    readFileSync(url, 'utf8')
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line => line.length > 0 && !line.startsWith('#'))
+      .map(line => {
+        const separator = line.indexOf('=');
+        expect(separator).toBeGreaterThan(0);
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
+}
+
 function bindingNames(config: Record<string, any>): string[] {
   return [
     ...(config.durable_objects?.bindings ?? []),
@@ -29,6 +43,57 @@ function oauthKvId(config: Record<string, any>): string {
 }
 
 describe('deployment configuration', () => {
+  it('loads the checked-in local development template as the exact localhost contract', () => {
+    const localVars = parseVarsExample(
+      new NodeURL('../../.dev.vars.example', import.meta.url),
+    );
+    expect(Object.keys(localVars).sort()).toEqual([
+      'ENVIRONMENT',
+      'GITHUB_CLIENT_ID',
+      'GITHUB_CLIENT_SECRET',
+      'JWT_SECRET',
+      'MCP_ALLOWED_HOSTNAMES',
+      'MCP_ALLOWED_ORIGIN_HOSTNAMES',
+      'MCP_PUBLIC_ORIGIN',
+      'MCP_REQUEST_STATE_KEY',
+      'OAUTH_REDIRECT_URI',
+      'WMATA_API_KEY',
+    ]);
+
+    const config = loadConfig({
+      ...localVars,
+      OAUTH_KV: {} as KVNamespace,
+      OAUTH_PROVIDER: {} as Env['OAUTH_PROVIDER'],
+      ASSETS: {} as Fetcher,
+    } as Env);
+
+    expect(config.mcp).toMatchObject({
+      publicOrigin: 'http://localhost:8787',
+      resourceUri: 'http://localhost:8787/mcp',
+      allowedHostnames: ['localhost'],
+      allowedOriginHostnames: ['localhost'],
+    });
+    expect(config.oauth).toMatchObject({
+      github: {
+        clientId: 'replace-with-your-local-github-oauth-app-client-id',
+        clientSecret: 'replace-with-your-local-github-oauth-app-client-secret',
+      },
+      redirectUri: 'http://localhost:8787/callback',
+    });
+    expect(config.apis.wmata).toBe('replace-with-your-local-wmata-api-key');
+    expect(config.app.environment).toBe('development');
+    expect(config.mcp.requestStateKey).toBe(
+      'replace-with-a-local-request-state-key-at-least-32-bytes',
+    );
+    expect(config.legacyJwt.secret).toBe(
+      'replace-with-a-local-jwt-secret-at-least-32-bytes',
+    );
+    expect(new TextEncoder().encode(localVars.MCP_REQUEST_STATE_KEY).byteLength)
+      .toBeGreaterThanOrEqual(32);
+    expect(new TextEncoder().encode(localVars.JWT_SECRET).byteLength)
+      .toBeGreaterThanOrEqual(32);
+  });
+
   it('derives one canonical MCP resource', () => {
     const config = loadConfig(createMockEnv());
 

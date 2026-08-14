@@ -13,13 +13,9 @@
  * JWT_SECRET, and a stable 32+ byte MCP_REQUEST_STATE_KEY with
  * `wrangler secret put` for production and preview independently.
  *
- * Local `.dev.vars` uses the following non-secret deployment values:
- *   MCP_PUBLIC_ORIGIN=http://localhost:8787
- *   MCP_ALLOWED_HOSTNAMES=localhost
- *   MCP_ALLOWED_ORIGIN_HOSTNAMES=localhost,127.0.0.1
- *   OAUTH_REDIRECT_URI=http://localhost:8787/callback
- *   ENVIRONMENT=development
- * Put local-only secret values in `.dev.vars`, never this file.
+ * For local development, copy the complete canonical `.dev.vars.example`
+ * template to `.dev.vars` and replace its clear placeholders. Never put
+ * local-only credentials in this file.
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
