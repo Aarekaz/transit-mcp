@@ -43,7 +43,7 @@ describe('release operator documentation', () => {
     expect(securityGuide).toMatch(/Abort failures rethrow/i);
   });
 
-  it('documents the active OAuth HTML and structured logging boundaries', () => {
+  it('documents the active OAuth HTML boundary', () => {
     expect(securityGuide).not.toMatch(
       /script-src 'self' 'unsafe-inline'|inline scripts|Log full error|console\.error/i,
     );
@@ -52,10 +52,37 @@ describe('release operator documentation', () => {
       "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
     );
     expect(securityGuide).toMatch(/Referrer-Policy[^.]*no-referrer/i);
-    expect(securityGuide).toMatch(/structured[^.]*allowlisted fields/i);
-    expect(securityGuide).toMatch(
-      /Never log raw error objects, tokens, secrets, or user payloads/i,
+  });
+
+  it('distinguishes Metro telemetry from pinned Provider diagnostics', () => {
+    expect(securityGuide).not.toMatch(
+      /Application telemetry is structured and restricted to allowlisted fields/i,
     );
+    expect(securityGuide).not.toMatch(/Structured telemetry is limited to allowlisted fields/i);
+    expect(securityGuide).toMatch(/Metro application telemetry[^.]*allowlisted fields/i);
+    expect(securityGuide).toMatch(/Provider 0\.10\.3[^.]*outside[^.]*Metro serializer/i);
+    expect(securityGuide).toMatch(
+      /OAuth and CIMD diagnostics[^.]*client or metadata URL[^.]*upstream error detail/i,
+    );
+    expect(securityGuide).toMatch(
+      /reviewed Provider paths[^.]*no known bearer credentials, client secrets, or tokens/i,
+    );
+    expect(securityGuide).toMatch(/Worker log and tail access[^.]*sensitive/i);
+    expect(securityGuide).toMatch(/restrict access[^.]*limit retention[^.]*redact downstream/i);
+  });
+
+  it('treats MCP edge dimensions as untrusted request headers', () => {
+    expect(securityGuide).not.toMatch(
+      /Rules may use validated `Mcp-Method` and `Mcp-Name` as dimensions/i,
+    );
+    expect(securityGuide).toMatch(
+      /`Mcp-Method` and `Mcp-Name` are untrusted request headers at the edge/i,
+    );
+    expect(securityGuide).toMatch(/edge rule[^.]*validate and allowlist[^.]*itself/i);
+    expect(securityGuide).toMatch(
+      /key primarily on trusted Cloudflare identity or source IP/i,
+    );
+    expect(securityGuide).toMatch(/never treat[^.]*authenticated identity/i);
   });
 
   it('limits the 90-day client TTL claim to dynamic registration', () => {

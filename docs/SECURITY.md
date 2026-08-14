@@ -61,7 +61,7 @@ Metro MCP 5.0 no longer issues custom JWTs. The temporary resolver accepts an ol
 
 ## Rate Limiting
 
-Metro MCP 5.0 has no application rate-limiter implementation or KV binding. Rate limiting, when configured, is operator-managed Cloudflare edge policy outside this repository. Rules may use validated `Mcp-Method` and `Mcp-Name` as dimensions, but those headers are not authorization proof. Enforcement must also key on authenticated client/user context or trusted source identity. `RATE_LIMIT_KV` is not an active Worker binding in 5.0.
+Metro MCP 5.0 has no application rate-limiter implementation or KV binding. Rate limiting, when configured, is operator-managed Cloudflare edge policy outside this repository. `Mcp-Method` and `Mcp-Name` are untrusted request headers at the edge. If an edge rule uses either as a secondary dimension, the edge rule must validate and allowlist the value itself. It must key primarily on trusted Cloudflare identity or source IP and must never treat either header as authenticated identity. `RATE_LIMIT_KV` is not an active Worker binding in 5.0.
 
 ## MCP and Input Boundaries
 
@@ -124,7 +124,7 @@ Schema descriptions explain values to clients but do not create regex or length 
 
 **3. Handle Errors and Telemetry Safely**
 
-Preserve abort and MCP protocol errors at their existing boundaries, and use the shared tool-error mapping for uncaught operational failures. Application telemetry is structured and restricted to allowlisted fields. Never log raw error objects, tokens, secrets, or user payloads.
+Preserve abort and MCP protocol errors at their existing boundaries, and use the shared tool-error mapping for uncaught operational failures. Send Metro-owned diagnostics through `serializeTelemetry`; do not add raw error objects, tokens, secrets, or user payloads to Metro-owned log entries. This guidance controls Metro application code, not the pinned Provider diagnostics described below.
 
 **4. Use Prepared Statements (if using SQL)**
 ```typescript
@@ -171,7 +171,11 @@ Production and preview require distinct `OAUTH_KV` namespaces, GitHub OAuth apps
 
 **3. Review Logs Regularly**
 
-Application telemetry may contain only `correlationId`, `era`, `protocolVersion`, `mcpMethod`, `mcpName`, `alias`, `clientId`, `upstream`, `durationMs`, and `statusClass`; invalid or unknown fields are dropped. Use `statusClass` and the safe request dimensions for application trends. Authentication detail and rate-limit analytics are not emitted by this telemetry and must be reviewed in the owning platform when available.
+Metro application telemetry is serialized through `serializeTelemetry` into these allowlisted fields only: `correlationId`, `era`, `protocolVersion`, `mcpMethod`, `mcpName`, `alias`, `clientId`, `upstream`, `durationMs`, and `statusClass`. Invalid or unknown fields are dropped. Use `statusClass` and the safe request dimensions for application trends. Authentication detail and rate-limit analytics are not emitted by Metro telemetry and must be reviewed in the owning platform when available.
+
+Provider 0.10.3 emits its own OAuth and CIMD diagnostics outside the Metro serializer. Those OAuth and CIMD diagnostics can include a client or metadata URL and upstream error detail. Across the reviewed Provider paths, no known bearer credentials, client secrets, or tokens are intentionally emitted. This is a pinned-code observation, not a guarantee that Provider diagnostics are suppressed or globally allowlisted.
+
+Worker log and tail access remain sensitive. Restrict access, limit retention, and redact downstream before exporting or sharing logs. Review Provider upgrades for logging changes before deployment.
 
 **4. Keep exact runtime pins reviewed**
 ```bash
@@ -195,7 +199,7 @@ bun audit
 
 ### Logging and conformance
 
-Structured telemetry is limited to allowlisted fields and reports only the response status class, not a raw response or error. Never log raw error objects, access or refresh tokens, authorization codes, GitHub tokens, secrets, raw Provider props, request bodies, user payloads, or MRTR responses. The conformance proxy binds only `127.0.0.1`, replaces inbound Authorization, supplies the operator token only from the process environment, uses manual redirects, and rejects remote targets unless `MCP_CONFORMANCE_ALLOW_REMOTE=1` is explicit.
+Metro application telemetry reports only the response status class, not a raw response or error. Metro-owned code must not add raw error objects, access or refresh tokens, authorization codes, GitHub tokens, secrets, raw Provider props, request bodies, user payloads, or MRTR responses. The Provider-owned diagnostic boundary and operator controls are documented above; Metro does not claim to suppress those dependency warnings. The conformance proxy binds only `127.0.0.1`, replaces inbound Authorization, supplies the operator token only from the process environment, uses manual redirects, and rejects remote targets unless `MCP_CONFORMANCE_ALLOW_REMOTE=1` is explicit.
 
 ### Incident Response
 
@@ -217,14 +221,14 @@ Structured telemetry is limited to allowlisted fields and reports only the respo
 ## Security Checklist
 
 - [ ] Every tool input has an accurate SDK schema and documented downstream boundary
-- [ ] Any edge rate policy uses authenticated or trusted source identity
+- [ ] Any edge rate policy primarily keys on trusted Cloudflare identity or source IP and independently allowlists secondary request-header dimensions
 - [ ] Authentication is required for MCP endpoints
 - [ ] Production and preview origins use HTTPS; only loopback development may use HTTP
 - [ ] Security headers are applied
 - [ ] Secrets are stored in environment variables
 - [ ] Exact dependency pins are reviewed and the frozen install passes
 - [ ] Security tests pass
-- [ ] No secrets in code/logs
+- [ ] Worker log/tail access is restricted, retention is limited, and downstream exports are redacted
 - [ ] Public errors and structured telemetry are reviewed for sensitive-data disclosure
 - [ ] Production and preview OAuth storage, apps, callbacks, and MRTR keys are distinct
 - [ ] Rollback assets and the original `v1` migration remain intact
