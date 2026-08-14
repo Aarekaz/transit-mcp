@@ -86,6 +86,33 @@ describe('authenticated conformance proxy', () => {
     expect(upstreamRequests).toBe(0);
   });
 
+  it('does not advertise compression after fetch has decoded the upstream body', async () => {
+    let upstreamAcceptEncoding: string | null = null;
+    const handler = createConformanceProxyHandler(
+      new URL('http://127.0.0.1:8787/mcp'),
+      'operator-short-lived-token',
+      async request => {
+        upstreamAcceptEncoding = request.headers.get('accept-encoding');
+        return new Response('{"ok":true}', {
+          headers: {
+            'content-encoding': 'gzip',
+            'content-length': '31',
+            'content-type': 'application/json',
+          },
+        });
+      },
+    );
+
+    const response = await handler(new Request('http://127.0.0.1:8788/mcp', {
+      headers: { 'accept-encoding': 'gzip, deflate' },
+    }));
+
+    expect(upstreamAcceptEncoding).toBe('identity');
+    expect(response.headers.get('content-encoding')).toBeNull();
+    expect(response.headers.get('content-length')).toBeNull();
+    expect(await response.json()).toEqual({ ok: true });
+  });
+
   it('uses manual redirects and never follows a cross-origin location', async () => {
     let upstreamRequests = 0;
     let redirectMode: string | undefined;

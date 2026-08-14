@@ -98,6 +98,7 @@ export function createConformanceProxyHandler(
     headers.delete('content-length');
     headers.delete('host');
     headers.delete('transfer-encoding');
+    headers.set('accept-encoding', 'identity');
     headers.set('authorization', `Bearer ${token}`);
 
     const body = ['GET', 'HEAD'].includes(request.method)
@@ -111,7 +112,15 @@ export function createConformanceProxyHandler(
     });
 
     try {
-      return await fetchUpstream(upstreamRequest);
+      const upstream = await fetchUpstream(upstreamRequest);
+      const responseHeaders = new Headers(upstream.headers);
+      responseHeaders.delete('content-encoding');
+      responseHeaders.delete('content-length');
+      return new Response(upstream.body, {
+        status: upstream.status,
+        statusText: upstream.statusText,
+        headers: responseHeaders,
+      });
     } catch {
       return new Response('Bad Gateway', {
         status: 502,
