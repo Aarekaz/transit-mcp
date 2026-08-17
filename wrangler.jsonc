@@ -48,9 +48,14 @@
 
   "env": {
     "preview": {
-      // Preview DNS/custom-domain setup is approval-gated. Never inherit and
-      // reassign the production custom domain when targeting this environment.
-      "routes": [],
+      // Preview uses its independently approved custom domain and never
+      // inherits or reassigns the production domain.
+      "routes": [
+        {
+          "pattern": "metro-mcp-preview.anuragd.me",
+          "custom_domain": true
+        }
+      ],
       "vars": {
         "GITHUB_CLIENT_ID": "Ov23li2oFCt24EJJ0X1O",
         "MCP_PUBLIC_ORIGIN": "https://metro-mcp-preview.anuragd.me",

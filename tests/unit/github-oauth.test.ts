@@ -16,7 +16,7 @@ import { createMockEnv, createMockOAuthHelpers } from '../setup';
 const ORIGIN = 'https://metro-mcp.anuragd.me';
 const RESOURCE_URI = `${ORIGIN}/mcp`;
 const CLIENT_REDIRECT_URI = 'https://client.example/callback';
-const CONSENT_CSP = "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+const CONSENT_CSP = "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https://client.example";
 
 const parsedAuthRequest: AuthRequest = {
   responseType: 'code',
@@ -164,6 +164,7 @@ function stubSuccessfulGitHub(events: string[], user: Record<string, unknown> = 
       expect(init?.headers).toMatchObject({
         Authorization: 'Bearer github-access-token',
         Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2026-03-10',
       });
       return Response.json(user);
     }
@@ -287,6 +288,33 @@ describe('GitHub callback and consent', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('retries one transient GitHub identity outage without replaying the OAuth code exchange', async () => {
+    const harness = createHarness();
+    const { state } = await beginAuthorization(harness);
+    let identityAttempts = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://github.com/login/oauth/access_token') {
+        return Response.json({ access_token: 'github-access-token' });
+      }
+      if (url === 'https://api.github.com/user') {
+        identityAttempts += 1;
+        return identityAttempts === 1
+          ? Response.json({ message: 'Service unavailable' }, { status: 503 })
+          : Response.json({ id: 42, login: 'anurag' });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await handleGitHubCallback(callbackRequest(state), harness.env);
+
+    expect(response.status).toBe(200);
+    expect(identityAttempts).toBe(2);
+    expect(fetchMock.mock.calls.filter(([input]) => String(input)
+      === 'https://github.com/login/oauth/access_token')).toHaveLength(1);
+  });
+
   it('escapes identity/client text and emits the exact consent security policy', async () => {
     const harness = createHarness();
     const { response, html, consentState, setCookie } = await reachConsent(harness);
@@ -323,6 +351,22 @@ describe('GitHub callback and consent', () => {
     expect(setCookie).toMatch(/^metro-consent=[a-f0-9]{64}; Path=\/; HttpOnly; SameSite=Lax; Max-Age=600$/);
     expect(setCookie).not.toContain('Secure');
     expect(setCookie).not.toContain('__Host-');
+  });
+
+  it('allows only the validated loopback callback origin through the consent form policy', async () => {
+    const loopbackRedirect = 'http://127.0.0.1:61507/callback/codex-client';
+    const harness = createHarness({
+      authRequest: { ...parsedAuthRequest, redirectUri: loopbackRedirect },
+      client: { ...providerClient, redirectUris: [loopbackRedirect] },
+    });
+
+    const { response } = await reachConsent(harness);
+    const policy = response.headers.get('content-security-policy');
+
+    expect(policy).toBe(
+      "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' http://127.0.0.1:61507",
+    );
+    expect(policy).not.toContain('/callback');
   });
 
   it.each([

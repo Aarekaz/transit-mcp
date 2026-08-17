@@ -131,10 +131,13 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function htmlHeaders(extra?: HeadersInit): Headers {
+function htmlHeaders(extra?: HeadersInit, formActionOrigin?: string): Headers {
   const headers = new Headers(extra);
   headers.set('Content-Type', 'text/html; charset=utf-8');
-  headers.set('Content-Security-Policy', CONSENT_CSP);
+  headers.set(
+    'Content-Security-Policy',
+    formActionOrigin ? `${CONSENT_CSP} ${formActionOrigin}` : CONSENT_CSP,
+  );
   headers.set('Cache-Control', 'no-store');
   headers.set('Pragma', 'no-cache');
   headers.set('X-Content-Type-Options', 'nosniff');
@@ -225,12 +228,22 @@ function renderConsent(
   env: Env,
 ): Response {
   const resourceUri = canonicalResource(env);
+  let clientRedirectOrigin: string;
+  try {
+    const redirectUri = new URL(pending.authRequest.redirectUri);
+    if (redirectUri.protocol !== 'http:' && redirectUri.protocol !== 'https:') {
+      return localError('Invalid authorization redirect.');
+    }
+    clientRedirectOrigin = redirectUri.origin;
+  } catch {
+    return localError('Invalid authorization redirect.');
+  }
   const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Authorize Metro MCP</title></head><body><main><h1>Authorize Metro MCP</h1><p>Signed in as ${escapeHtml(pending.user.login)}.</p><p>${escapeHtml(pending.clientName)} is requesting access to ${escapeHtml(resourceUri)}.</p><form method="post" action="/authorize/decision"><input type="hidden" name="state" value="${escapeHtml(state)}"><fieldset><legend>Permission</legend><p><code>${TRANSIT_SCOPE}</code></p></fieldset><button type="submit" name="decision" value="approve">Approve</button><button type="submit" name="decision" value="deny">Deny</button></form></main></body></html>`;
   return new Response(body, {
     status: 200,
     headers: htmlHeaders({
       'Set-Cookie': consentCookie(env, stateDigest, STATE_TTL_SECONDS),
-    }),
+    }, clientRedirectOrigin),
   });
 }
 
@@ -293,25 +306,33 @@ async function exchangeGitHubCode(code: string, env: Env): Promise<string | null
 }
 
 async function fetchGitHubIdentity(accessToken: string): Promise<PendingConsent['user'] | null> {
-  const response = await fetch('https://api.github.com/user', {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'Metro-MCP-Server/5.0',
-    },
-  });
-  if (!response.ok) {
-    return null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'Metro-MCP-Server/5.0',
+        'X-GitHub-Api-Version': '2026-03-10',
+      },
+    });
+    if (!response.ok) {
+      if (attempt === 0 && [502, 503, 504].includes(response.status)) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+        continue;
+      }
+      return null;
+    }
+    const data: unknown = await response.json();
+    if (!isRecord(data)
+      || (typeof data.id !== 'string' && typeof data.id !== 'number')
+      || String(data.id).length === 0
+      || typeof data.login !== 'string'
+      || data.login.trim().length === 0) {
+      return null;
+    }
+    return { id: String(data.id), login: data.login.trim() };
   }
-  const data: unknown = await response.json();
-  if (!isRecord(data)
-    || (typeof data.id !== 'string' && typeof data.id !== 'number')
-    || String(data.id).length === 0
-    || typeof data.login !== 'string'
-    || data.login.trim().length === 0) {
-    return null;
-  }
-  return { id: String(data.id), login: data.login.trim() };
+  return null;
 }
 
 /** Consume the GitHub login state, fetch identity, and render explicit consent. */

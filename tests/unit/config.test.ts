@@ -320,8 +320,15 @@ describe('deployment configuration', () => {
     expect(previewId).not.toBe(productionId);
   });
 
-  it('does not let preview inherit the production custom domain', () => {
-    expect(wrangler.env.preview.routes).toEqual([]);
+  it('routes preview only through its independently approved custom domain', () => {
+    expect(wrangler.env.preview.routes).toEqual([{
+      pattern: 'metro-mcp-preview.anuragd.me',
+      custom_domain: true,
+    }]);
+    expect(wrangler.env.preview.routes).not.toContainEqual({
+      pattern: 'metro-mcp.anuragd.me',
+      custom_domain: true,
+    });
   });
 
   it('uses an independently coordinated GitHub OAuth app in preview', () => {
