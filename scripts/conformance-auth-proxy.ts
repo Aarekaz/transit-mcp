@@ -91,7 +91,9 @@ export function createConformanceProxyHandler(
       });
     }
 
-    const upstreamUrl = new URL(`${incomingUrl.pathname}${incomingUrl.search}`, target.origin);
+    const upstreamUrl = new URL(target.origin);
+    upstreamUrl.pathname = incomingUrl.pathname;
+    upstreamUrl.search = incomingUrl.search;
     const headers = new Headers(request.headers);
     headers.delete('authorization');
     headers.delete('connection');

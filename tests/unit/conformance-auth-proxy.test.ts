@@ -137,6 +137,29 @@ describe('authenticated conformance proxy', () => {
     expect(redirectMode).toBe('manual');
   });
 
+  it('keeps injected authorization on the configured origin for network-path-like requests', async () => {
+    let upstreamUrl: URL | undefined;
+    let upstreamAuthorization: string | null = null;
+    const handler = createConformanceProxyHandler(
+      new URL('http://127.0.0.1:8787/mcp'),
+      'operator-short-lived-token',
+      async request => {
+        upstreamUrl = new URL(request.url);
+        upstreamAuthorization = request.headers.get('authorization');
+        return new Response('ok');
+      },
+    );
+
+    const response = await handler(
+      new Request('http://127.0.0.1:8788//attacker.example/collect'),
+    );
+
+    expect(response.status).toBe(200);
+    expect(upstreamUrl?.origin).toBe('http://127.0.0.1:8787');
+    expect(upstreamUrl?.pathname).toBe('//attacker.example/collect');
+    expect(upstreamAuthorization).toBe('Bearer operator-short-lived-token');
+  });
+
   it('returns a redacted gateway error when forwarding fails', async () => {
     const token = 'operator-token-that-must-not-escape';
     const handler = createConformanceProxyHandler(
