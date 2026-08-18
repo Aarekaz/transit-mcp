@@ -94,7 +94,7 @@ The outer Worker applies response-type-aware security headers after routing. It 
 
 - MCP JSON responses receive a deny-by-default CSP with scripts, styles, images, connections, frames, base URIs, and form actions disabled.
 - Event streams receive a deny-by-default CSP that allows only same-origin connections.
-- OAuth consent and error forms are server-rendered with escaped interpolated values and no scripts. Their exact CSP is `default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`.
+- OAuth consent and error forms are server-rendered with escaped interpolated values and no scripts. Error forms use `default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`; consent forms append only the Provider-validated client redirect origin to `form-action` so the approved form submission can complete its redirect.
 - OAuth forms also set `Cache-Control: no-store`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`.
 - Other responses receive the shared `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, and disabled legacy XSS-filter headers when a route has not already supplied a stricter value.
 
