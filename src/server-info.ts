@@ -18,9 +18,7 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
       documentation: 'https://github.com/anuragdhungana/metro-mcp/blob/main/README.md',
     },
     capabilities: {
-      tools: {
-        listChanged: true
-      }
+      tools: {},
     },
     cities: [
       {
@@ -44,7 +42,9 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
       totalStations: 598,
       totalLines: 35,
       citiesSupported: 2,
-      toolsAvailable: 13
+      toolsAvailable: 13,
+      resourcesAvailable: 3,
+      promptsAvailable: 3
     },
     endpoints: {
       mcp: ['/mcp', '/sse'],
@@ -58,16 +58,18 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
     },
     transport: {
       type: 'streamable-http',
-      note: 'MCP Streamable HTTP transport. Sessions live in a Durable Object via cloudflare/agents McpAgent.',
+      stateless: true,
+      note: 'MCP stateless Streamable HTTP transport with request-scoped JSON or SSE responses.',
       supportsJSON: true,
       supportsSSEResponses: true,
-      supportsServerPush: true,
-      supportsResumability: true
+      supportsServerPush: false,
+      supportsResumability: false
     },
     authentication: {
       type: 'OAuth 2.1',
       pkce: true,
-      provider: 'GitHub'
+      provider: 'GitHub',
+      scopes: ['transit:read']
     },
     tools: [
       'get_station_predictions',

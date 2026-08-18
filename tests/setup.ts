@@ -15,7 +15,14 @@
  */
 
 import { vi } from 'vitest';
-import type { Env, OAuthClient, TransitStation } from '../src/types';
+import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
+import type { Env as WorkerEnv, TransitStation } from '../src/types';
+
+declare global {
+  namespace Cloudflare {
+    interface Env extends WorkerEnv {}
+  }
+}
 
 /**
  * Mock KVNamespace implementation
@@ -83,29 +90,34 @@ export function createMockKV(): KVNamespace {
  * const env = createMockEnv({ WMATA_API_KEY: 'test-key' });
  * ```
  */
-// Stub DurableObjectNamespace — sufficient for the existing unit tests
-// which never call into the DO. Tests that exercise the DO use
-// @cloudflare/vitest-pool-workers with a real runtime instead.
-function createMockDONamespace(): DurableObjectNamespace {
-  return new Proxy({}, {
-    get() {
-      throw new Error('MCP_SESSION DO binding accessed in a non-DO-aware test. Use vitest-pool-workers.');
+export function createMockOAuthHelpers(
+  overrides: Partial<OAuthHelpers> = {},
+): WorkerEnv['OAUTH_PROVIDER'] {
+  return new Proxy(overrides, {
+    get(target, property, receiver) {
+      if (Reflect.has(target, property)) {
+        return Reflect.get(target, property, receiver);
+      }
+      throw new Error('OAUTH_PROVIDER helpers accessed without an explicit test mock.');
     }
-  }) as unknown as DurableObjectNamespace;
+  }) as WorkerEnv['OAUTH_PROVIDER'];
 }
 
-export function createMockEnv(overrides: Partial<Env> = {}): Env {
+export function createMockEnv(overrides: Partial<WorkerEnv> = {}): WorkerEnv {
   return {
+    MCP_PUBLIC_ORIGIN: 'https://metro-mcp.anuragd.me',
+    MCP_ALLOWED_HOSTNAMES: 'metro-mcp.anuragd.me',
+    MCP_ALLOWED_ORIGIN_HOSTNAMES: 'metro-mcp.anuragd.me',
+    MCP_REQUEST_STATE_KEY: 'test-mrtr-request-state-key-32-bytes-minimum',
     GITHUB_CLIENT_ID: 'test-client-id',
     GITHUB_CLIENT_SECRET: 'test-client-secret',
-    OAUTH_REDIRECT_URI: 'http://localhost:8787/callback',
+    OAUTH_REDIRECT_URI: 'https://metro-mcp.anuragd.me/callback',
     WMATA_API_KEY: 'test-wmata-key',
     JWT_SECRET: 'test-jwt-secret-at-least-32-characters-long',
-    OAUTH_CLIENTS: createMockKV(),
-    RATE_LIMIT_KV: createMockKV(),
-    MCP_SESSION: createMockDONamespace(),
+    OAUTH_KV: createMockKV(),
+    OAUTH_PROVIDER: createMockOAuthHelpers(),
     ASSETS: { fetch: vi.fn() } as unknown as Fetcher,
-    ENVIRONMENT: 'test',
+    ENVIRONMENT: 'production',
     ...overrides,
   };
 }
@@ -181,17 +193,6 @@ export function createMockFetch(responseBody: any, status: number = 200) {
     createMockResponse(responseBody, status)
   );
 }
-
-/**
- * Test fixtures for OAuth clients
- */
-export const mockOAuthClient: OAuthClient = {
-  client_id: 'test-client-123',
-  client_secret: 'hashed-secret',
-  redirect_uris: ['http://localhost:3000/callback'],
-  client_name: 'Test Client',
-  created_at: Date.now(),
-};
 
 /**
  * Test fixtures for transit stations

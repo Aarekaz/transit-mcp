@@ -1,12 +1,23 @@
-# Local development secrets
-# Copy this file to .dev.vars and fill in your actual values
-# .dev.vars is gitignored and safe for local development
+# Metro MCP local development
+# Copy this file to .dev.vars, then replace every `replace-with-...` value.
+# .dev.vars is gitignored. Never commit the populated file.
 
-# Get your WMATA API key from: https://developer.wmata.com/
-WMATA_API_KEY=your-wmata-api-key-here
+# Keep this exact loopback trust contract for `bun run dev`.
+MCP_PUBLIC_ORIGIN=http://localhost:8787
+MCP_ALLOWED_HOSTNAMES=localhost
+MCP_ALLOWED_ORIGIN_HOSTNAMES=localhost
+OAUTH_REDIRECT_URI=http://localhost:8787/callback
+ENVIRONMENT=development
 
-# GitHub OAuth App credentials (from https://github.com/settings/developers)
-GITHUB_CLIENT_SECRET=your-github-oauth-app-client-secret
+# Use a dedicated local GitHub OAuth App with the callback above.
+GITHUB_CLIENT_ID=replace-with-your-local-github-oauth-app-client-id
+GITHUB_CLIENT_SECRET=replace-with-your-local-github-oauth-app-client-secret
 
-# Generate with: openssl rand -hex 32
-JWT_SECRET=your-jwt-secret-here
+# Get a development key from https://developer.wmata.com/.
+WMATA_API_KEY=replace-with-your-local-wmata-api-key
+
+# Generate independent stable local values with `openssl rand -hex 32`.
+# These clear placeholders are intentionally at least 32 bytes so loadConfig()
+# can validate the complete checked-in example; replace both before use.
+MCP_REQUEST_STATE_KEY=replace-with-a-local-request-state-key-at-least-32-bytes
+JWT_SECRET=replace-with-a-local-jwt-secret-at-least-32-bytes

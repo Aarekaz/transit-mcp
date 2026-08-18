@@ -34,7 +34,11 @@ export class WMATAClient extends TransitAPIClient {
   /**
    * Make HTTP request to WMATA API with caching
    */
-  private async makeRequest<T>(endpoint: string, cacheTtl: number = 60): Promise<T> {
+  private async makeRequest<T>(
+    endpoint: string,
+    cacheTtl: number = 60,
+    signal?: AbortSignal
+  ): Promise<T> {
     try {
       const response = await fetch(`${this.baseUrl}${endpoint}`, {
         headers: {
@@ -46,16 +50,40 @@ export class WMATAClient extends TransitAPIClient {
           cacheTtl: cacheTtl,
           cacheEverything: true,
         },
+        signal,
       });
 
       if (!response.ok) {
-        const errorText = await response.text().catch(() => 'Unknown error');
+        let errorText: string;
+        try {
+          errorText = await response.text();
+        } catch (error) {
+          if (
+            signal?.aborted ||
+            (typeof error === 'object' &&
+              error !== null &&
+              'name' in error &&
+              error.name === 'AbortError')
+          ) {
+            throw error;
+          }
+          errorText = 'Unknown error';
+        }
         throw new WMATAError(`API request failed: ${errorText}`, response.status);
       }
 
       const data = (await response.json()) as T;
       return data;
     } catch (error) {
+      if (
+        signal?.aborted ||
+        (typeof error === 'object' &&
+          error !== null &&
+          'name' in error &&
+          error.name === 'AbortError')
+      ) {
+        throw error;
+      }
       if (error instanceof WMATAError) {
         throw error;
       }
@@ -126,11 +154,12 @@ export class WMATAClient extends TransitAPIClient {
   /**
    * Get all DC Metro stations
    */
-  async getStations(): Promise<TransitStation[]> {
+  async getStations(signal?: AbortSignal): Promise<TransitStation[]> {
     // Station data changes rarely, cache for 1 hour
     const data = await this.makeRequest<{ Stations: WMATAStation[] }>(
       '/Rail.svc/json/jStations',
-      3600
+      3600,
+      signal
     );
     return data.Stations.map((station) => this.normalizeStation(station));
   }
@@ -138,11 +167,15 @@ export class WMATAClient extends TransitAPIClient {
   /**
    * Get real-time train predictions for a station
    */
-  async getStationPredictions(stationCode: string): Promise<TransitPrediction[]> {
+  async getStationPredictions(
+    stationCode: string,
+    signal?: AbortSignal
+  ): Promise<TransitPrediction[]> {
     // Train predictions change frequently, cache for 30 seconds
     const data = await this.makeRequest<{ Trains: WMATAPrediction[] }>(
       `/StationPrediction.svc/json/GetPrediction/${stationCode}`,
-      30
+      30,
+      signal
     );
     return data.Trains.map((prediction) => this.normalizePrediction(prediction));
   }
@@ -150,11 +183,12 @@ export class WMATAClient extends TransitAPIClient {
   /**
    * Get current service incidents
    */
-  async getIncidents(): Promise<TransitIncident[]> {
+  async getIncidents(signal?: AbortSignal): Promise<TransitIncident[]> {
     // Incidents change moderately, cache for 5 minutes
     const data = await this.makeRequest<{ Incidents: WMATAIncident[] }>(
       '/Incidents.svc/json/Incidents',
-      300
+      300,
+      signal
     );
     return data.Incidents.map((incident) => this.normalizeIncident(incident));
   }
@@ -163,11 +197,12 @@ export class WMATAClient extends TransitAPIClient {
    * Get elevator and escalator incidents
    * Note: This is DC Metro specific, not part of base Transit interface
    */
-  async getElevatorIncidents(): Promise<WMATAElevatorIncident[]> {
+  async getElevatorIncidents(signal?: AbortSignal): Promise<WMATAElevatorIncident[]> {
     // Elevator incidents change moderately, cache for 5 minutes
     const data = await this.makeRequest<{ ElevatorIncidents: WMATAElevatorIncident[] }>(
       '/Incidents.svc/json/ElevatorIncidents',
-      300
+      300,
+      signal
     );
     return data.ElevatorIncidents;
   }
@@ -175,8 +210,8 @@ export class WMATAClient extends TransitAPIClient {
   /**
    * Search for stations by name or code
    */
-  async searchStation(query: string): Promise<TransitStation[]> {
-    const stations = await this.getStations();
+  async searchStation(query: string, signal?: AbortSignal): Promise<TransitStation[]> {
+    const stations = await this.getStations(signal);
     const queryLower = query.toLowerCase();
 
     return stations.filter(
@@ -189,8 +224,11 @@ export class WMATAClient extends TransitAPIClient {
   /**
    * Get stations on a specific line
    */
-  async getStationsByLine(lineCode: string): Promise<TransitStation[]> {
-    const stations = await this.getStations();
+  async getStationsByLine(
+    lineCode: string,
+    signal?: AbortSignal
+  ): Promise<TransitStation[]> {
+    const stations = await this.getStations(signal);
     const lineUpper = lineCode.toUpperCase();
 
     return stations.filter((station) => station.lines.includes(lineUpper));
@@ -203,14 +241,18 @@ export class WMATAClient extends TransitAPIClient {
    * @param stopId - 7-digit regional stop ID
    * @returns Bus predictions with arrival times and route information
    */
-  async getBusPredictions(stopId: string): Promise<WMATABusPrediction[]> {
+  async getBusPredictions(
+    stopId: string,
+    signal?: AbortSignal
+  ): Promise<WMATABusPrediction[]> {
     // Bus predictions change frequently, cache for 30 seconds
     const data = await this.makeRequest<{
       Predictions: WMATABusPrediction[];
       StopName: string;
     }>(
       `/NextBusService.svc/json/jPredictions?StopID=${stopId}`,
-      30
+      30,
+      signal
     );
     return data.Predictions;
   }
@@ -224,11 +266,12 @@ export class WMATAClient extends TransitAPIClient {
    *
    * @returns Array of train positions with location and service information
    */
-  async getTrainPositions(): Promise<WMATATrainPosition[]> {
+  async getTrainPositions(signal?: AbortSignal): Promise<WMATATrainPosition[]> {
     // Train positions refresh every 7-10 seconds, cache briefly
     const data = await this.makeRequest<{ TrainPositions: WMATATrainPosition[] }>(
       '/TrainPositions/TrainPositions?contentType=json',
-      10
+      10,
+      signal
     );
     return data.TrainPositions;
   }
@@ -242,12 +285,13 @@ export class WMATAClient extends TransitAPIClient {
    *
    * @returns Bus routes with IDs and descriptions
    */
-  async getBusRoutes(): Promise<WMATABusRoute[]> {
+  async getBusRoutes(signal?: AbortSignal): Promise<WMATABusRoute[]> {
     const data = await this.makeRequest<{
       Routes: WMATABusRoute[];
     }>(
       '/Bus.svc/json/jRoutes',
-      3600
+      3600,
+      signal
     );
     return data.Routes;
   }
@@ -267,7 +311,8 @@ export class WMATAClient extends TransitAPIClient {
   async getBusStops(
     latitude?: number,
     longitude?: number,
-    radius?: number
+    radius?: number,
+    signal?: AbortSignal
   ): Promise<WMATABusStop[]> {
     // Build query string based on parameters
     let endpoint = '/Bus.svc/json/jStops';
@@ -290,7 +335,8 @@ export class WMATAClient extends TransitAPIClient {
       Stops: WMATABusStop[];
     }>(
       endpoint,
-      1800
+      1800,
+      signal
     );
 
     return data.Stops;
@@ -306,7 +352,10 @@ export class WMATAClient extends TransitAPIClient {
    * @param routeId - Optional route ID (e.g., "30N", "B30")
    * @returns Bus positions with locations and trip information
    */
-  async getBusPositions(routeId?: string): Promise<WMATABusPosition[]> {
+  async getBusPositions(
+    routeId?: string,
+    signal?: AbortSignal
+  ): Promise<WMATABusPosition[]> {
     let endpoint = '/Bus.svc/json/jBusPositions';
 
     if (routeId) {
@@ -318,7 +367,8 @@ export class WMATAClient extends TransitAPIClient {
       BusPositions: WMATABusPosition[];
     }>(
       endpoint,
-      10
+      10,
+      signal
     );
 
     return data.BusPositions;
@@ -328,7 +378,10 @@ export class WMATAClient extends TransitAPIClient {
    * Get detailed route information
    * Note: Not yet implemented for DC Metro
    */
-  async getRouteInfo(_routeId: string): Promise<import('./base').TransitRoute | null> {
+  async getRouteInfo(
+    _routeId: string,
+    _signal?: AbortSignal
+  ): Promise<import('./base').TransitRoute | null> {
     // DC Metro routes are lines (RD, BL, etc.) - not implemented yet
     return null;
   }

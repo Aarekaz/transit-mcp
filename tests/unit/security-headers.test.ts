@@ -85,6 +85,29 @@ describe('Security Headers', () => {
       expect(secured.headers.get('Access-Control-Allow-Origin')).toBeNull();
     });
 
+    it('preserves every route-owned CORS header while filling only absent defaults', () => {
+      const response = new Response(null, {
+        headers: {
+          'Access-Control-Allow-Origin': 'https://client.example',
+          'Access-Control-Allow-Methods': '*',
+          'Access-Control-Allow-Headers': 'Authorization, *',
+          'Access-Control-Expose-Headers': 'WWW-Authenticate, Retry-After',
+          'Access-Control-Max-Age': '120',
+        },
+      });
+
+      const secured = addSecurityHeaders(response, 'json', true);
+
+      expect(secured.headers.get('Access-Control-Allow-Origin'))
+        .toBe('https://client.example');
+      expect(secured.headers.get('Access-Control-Allow-Methods')).toBe('*');
+      expect(secured.headers.get('Access-Control-Allow-Headers')).toBe('Authorization, *');
+      expect(secured.headers.get('Access-Control-Expose-Headers'))
+        .toBe('WWW-Authenticate, Retry-After');
+      expect(secured.headers.get('Access-Control-Max-Age')).toBe('120');
+      expect(secured.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    });
+
     it('should preserve original response body', async () => {
       const body = JSON.stringify({ test: 'data' });
       const response = new Response(body);
@@ -146,6 +169,23 @@ describe('Security Headers', () => {
 
       const csp = secured.headers.get('Content-Security-Policy');
       expect(csp).toContain("script-src 'none'");
+    });
+
+    it('preserves a response policy that is already stricter and route-specific', () => {
+      const response = new Response('<html></html>', {
+        headers: {
+          'Content-Type': 'text/html',
+          'Content-Security-Policy': "default-src 'none'; form-action 'self'",
+          'Referrer-Policy': 'no-referrer',
+        },
+      });
+
+      const secured = addSecurityHeadersAuto(response);
+
+      expect(secured.headers.get('Content-Security-Policy'))
+        .toBe("default-src 'none'; form-action 'self'");
+      expect(secured.headers.get('Referrer-Policy')).toBe('no-referrer');
+      expect(secured.headers.get('X-Content-Type-Options')).toBe('nosniff');
     });
   });
 

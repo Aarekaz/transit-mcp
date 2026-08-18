@@ -311,17 +311,23 @@ export function addSecurityHeaders(
   const headers = new Headers(response.headers);
 
   // Add context-specific CSP
-  headers.set('Content-Security-Policy', CSP_POLICIES[context]);
+  if (!headers.has('Content-Security-Policy')) {
+    headers.set('Content-Security-Policy', CSP_POLICIES[context]);
+  }
 
   // Add universal security headers
   Object.entries(SECURITY_HEADERS).forEach(([key, value]) => {
-    headers.set(key, value);
+    if (!headers.has(key)) {
+      headers.set(key, value);
+    }
   });
 
   // Add CORS headers if requested
   if (includeCors) {
     Object.entries(CORS_HEADERS).forEach(([key, value]) => {
-      headers.set(key, value);
+      if (!headers.has(key)) {
+        headers.set(key, value);
+      }
     });
   }
 

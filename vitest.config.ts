@@ -15,9 +15,19 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      'cloudflare:workers': new URL('./tests/helpers/cloudflare-workers.ts', import.meta.url).pathname,
+    },
+  },
   test: {
+    server: {
+      deps: {
+        inline: ['@cloudflare/workers-oauth-provider'],
+      },
+    },
     // Test file patterns
-    include: ['src/**/*.test.ts', 'tests/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'tests/unit/**/*.test.ts'],
     exclude: ['node_modules', 'dist', '.wrangler'],
 
     // Coverage configuration

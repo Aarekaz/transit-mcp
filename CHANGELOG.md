@@ -5,6 +5,36 @@ All notable changes to Metro MCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.0] - 2026-08-13
+
+Metro MCP 5.0 upgrades the remote server to MCP `2026-07-28` and a request-scoped SDK v2 architecture. The transit surface remains exactly thirteen read-only tools, three resources, and three prompts.
+
+### Added
+
+- MCP `2026-07-28` request metadata, discovery, cache hints, cancellation, and Multi Round-Trip Requests (MRTR) for ambiguous station selection.
+- Cloudflare's OAuth Provider with Client ID Metadata Documents first, temporary DCR fallback, explicit `transit:read` consent, PKCE, RFC 9207 issuer identifiers, RFC 8707 resource binding, RFC 9728 discovery, rotating refresh tokens, and revocation.
+- Workerd protocol/OAuth lifecycle coverage plus a loopback-only authenticated conformance runner pinned to `@modelcontextprotocol/conformance@0.2.0-alpha.11` and its frozen `2026-07-28` requirements.
+- Dedicated production and preview `OAUTH_KV` bindings and separately configured GitHub OAuth apps/callbacks.
+
+### Changed
+
+- `/mcp` is the only canonical MCP resource. Modern MCP 2026 operations are stateless and do not require `initialize`; ordinary MCP 2025 stateless tools, resources, and prompts remain supported.
+- `POST` and `OPTIONS /sse` are rewritten to `/mcp` before authorization. `/sse` is not an OAuth audience.
+- Access tokens last at most 60 minutes. Refresh tokens last at most 30 days and rotate on use. Bearer credentials are accepted only through the Authorization header.
+- DCR remains available temporarily and sunsets on **2027-06-30**; CIMD or pre-registration is preferred.
+- Protocol work no longer creates or addresses a Durable Object. The original `MetroMcpAgent` export, namespace, and `v1` migration remain inactive for rollback.
+
+### Breaking
+
+- Legacy GET SSE, DELETE, slash variants, and session message URLs now return `405`; there is no persistent SSE stream, resumability, or server push.
+- Tokens without an audience, tokens bound to `/sse`, and clients from the old DCR store must reauthorize against canonical `/mcp`.
+- Compatible legacy JWTs already bound to `/mcp` expire at the earlier of their embedded expiry and **2026-11-30T00:00:00Z**.
+- The old active `MCP_SESSION`, `OAUTH_CLIENTS`, and `RATE_LIMIT_KV` bindings are removed. Self-hosters must configure a dedicated `OAUTH_KV`, `global_fetch_strictly_public`, and the new origin/allowlist/MRTR environment contract.
+
+### Deferred
+
+- MCP Apps and embedded interactive UI are explicitly deferred to the next PR.
+
 ## [4.0.0] - Durable Objects rearchitect via cloudflare/agents McpAgent
 
 A foundational rewrite of how Metro MCP serves sessions. The MCP API

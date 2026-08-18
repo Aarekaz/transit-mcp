@@ -169,36 +169,42 @@ export abstract class TransitAPIClient {
   /**
    * Fetch all stations in the transit system
    */
-  abstract getStations(): Promise<TransitStation[]>;
+  abstract getStations(signal?: AbortSignal): Promise<TransitStation[]>;
 
   /**
    * Get real-time predictions for a specific station
    * @param stationId - Normalized station ID
    */
-  abstract getStationPredictions(stationId: string): Promise<TransitPrediction[]>;
+  abstract getStationPredictions(
+    stationId: string,
+    signal?: AbortSignal
+  ): Promise<TransitPrediction[]>;
 
   /**
    * Get current incidents/service alerts
    */
-  abstract getIncidents(): Promise<TransitIncident[]>;
+  abstract getIncidents(signal?: AbortSignal): Promise<TransitIncident[]>;
 
   /**
    * Search for stations by name or code
    * @param query - Search query (station name or code)
    */
-  abstract searchStation(query: string): Promise<TransitStation[]>;
+  abstract searchStation(query: string, signal?: AbortSignal): Promise<TransitStation[]>;
 
   /**
    * Get stations on a specific line
    * @param lineCode - Line identifier (e.g., "RD", "1", "A")
    */
-  abstract getStationsByLine(lineCode: string): Promise<TransitStation[]>;
+  abstract getStationsByLine(
+    lineCode: string,
+    signal?: AbortSignal
+  ): Promise<TransitStation[]>;
 
   /**
    * Get detailed route information
    * @param routeId - Route identifier (e.g., "A", "1", "RD")
    */
-  abstract getRouteInfo(routeId: string): Promise<TransitRoute | null>;
+  abstract getRouteInfo(routeId: string, signal?: AbortSignal): Promise<TransitRoute | null>;
 
   /**
    * Get the city this client serves
