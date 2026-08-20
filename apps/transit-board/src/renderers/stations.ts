@@ -69,9 +69,9 @@ function fillStationList(
   list: HTMLOListElement | HTMLUListElement,
   stations: readonly Station[],
   detailHost: HTMLElement,
+  controls: HTMLButtonElement[] = [],
 ): void {
   list.replaceChildren();
-  const controls: HTMLButtonElement[] = [];
   for (const station of stations) {
     const row = stationRow(station, (selected, selectedControl) => {
       for (const control of controls) {
@@ -203,6 +203,7 @@ export function renderStationDirectory(model: StationDirectoryModel): HTMLElemen
   const renderGroups = (): void => {
     groupsHost.replaceChildren();
     detailHost.replaceChildren();
+    const stationControls: HTMLButtonElement[] = [];
     const query = input.value.trim().toLocaleLowerCase();
     const visibleLines = focusedLine === null ? lines : [focusedLine];
     let visibleStationCount = 0;
@@ -223,7 +224,7 @@ export function renderStationDirectory(model: StationDirectoryModel): HTMLElemen
         className: 'station-list',
         attributes: { 'aria-label': `${line} line stations` },
       });
-      fillStationList(list, stations, detailHost);
+      fillStationList(list, stations, detailHost, stationControls);
       groupsHost.append(element('section', { className: 'network-group' }, [
         element('h2', { text: line === 'Unassigned' ? line : `Line ${line}` }),
         list,

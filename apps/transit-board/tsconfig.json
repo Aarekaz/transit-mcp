@@ -7,5 +7,6 @@
   "include": [
     "src/**/*.ts",
     "../../tests/unit/mcp-app-renderers.test.ts"
-  ]
+  ],
+  "exclude": []
 }

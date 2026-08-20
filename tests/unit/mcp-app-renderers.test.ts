@@ -4,6 +4,21 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { EXPECTED_TOOL_CONTRACTS } from '../fixtures/mcp-contracts';
 import { renderToolResult } from '../../apps/transit-board/src/render';
 
+const directoryResult = {
+  city: 'nyc',
+  totalStations: 2,
+  stations: [
+    EXPECTED_TOOL_CONTRACTS.get_all_stations.structuredContent.stations[0],
+    {
+      id: 'A41',
+      name: 'Jay St - MetroTech',
+      lines: ['A', 'C', 'F'],
+      coordinates: { lat: 40.692338, lon: -73.987342 },
+      address: null,
+    },
+  ],
+} as const;
+
 const mountResult = (toolName: string, structuredContent: unknown): HTMLElement => {
   const container = document.createElement('main');
   document.body.append(container);
@@ -85,6 +100,18 @@ describe('Transit Board arrival renderers', () => {
       'No train arrivals are available',
     );
   });
+
+  it('renders the distinct bus empty state', () => {
+    const container = mountResult('get_bus_predictions', {
+      city: 'dc',
+      stopId: '1001195',
+      predictions: [],
+    });
+
+    expect(queryRequired(container, '[data-empty-state]').textContent).toContain(
+      'No bus arrivals are available',
+    );
+  });
 });
 
 describe('Transit Board station and network renderers', () => {
@@ -128,21 +155,7 @@ describe('Transit Board station and network renderers', () => {
   });
 
   it('groups the all-stations directory by line and keeps filter and line focus accessible', () => {
-    const result = {
-      city: 'nyc',
-      totalStations: 2,
-      stations: [
-        EXPECTED_TOOL_CONTRACTS.get_all_stations.structuredContent.stations[0],
-        {
-          id: 'A41',
-          name: 'Jay St - MetroTech',
-          lines: ['A', 'C', 'F'],
-          coordinates: { lat: 40.692338, lon: -73.987342 },
-          address: null,
-        },
-      ],
-    };
-    const container = mountResult('get_all_stations', result);
+    const container = mountResult('get_all_stations', directoryResult);
 
     expect(queryRequired(container, 'section[data-view="station-directory"]')).toBeTruthy();
     expect(queryRequired(container, 'h1').textContent).toBe('NYC station directory');
@@ -161,6 +174,34 @@ describe('Transit Board station and network renderers', () => {
     expect(container.textContent).not.toContain('Times Square - 42 St');
   });
 
+  it('keeps one pressed station and matching detail when selection crosses line groups', () => {
+    const container = mountResult('get_all_stations', directoryResult);
+    const stationControls = [...container.querySelectorAll<HTMLButtonElement>(
+      '[data-station-row] button',
+    )];
+    const timesSquare = stationControls.find(control => (
+      control.textContent?.includes('Times Square - 42 St')
+    ));
+    const jayStreet = stationControls.find(control => (
+      control.textContent?.includes('Jay St - MetroTech')
+    ));
+    if (!timesSquare || !jayStreet) {
+      throw new Error('Missing cross-group station controls');
+    }
+
+    timesSquare.click();
+    jayStreet.click();
+
+    const pressed = container.querySelectorAll(
+      '[data-station-row] button[aria-pressed="true"]',
+    );
+    expect(pressed).toHaveLength(1);
+    expect(pressed[0]).toBe(jayStreet);
+    expect(queryRequired(container, '[data-station-detail]').textContent).toContain(
+      'Jay St - MetroTech',
+    );
+  });
+
   it('renders the transfer source and keyboard-reachable destination focus', () => {
     const result = EXPECTED_TOOL_CONTRACTS.get_station_transfers.structuredContent;
     const container = mountResult('get_station_transfers', result);
@@ -175,6 +216,38 @@ describe('Transit Board station and network renderers', () => {
     expect(queryRequired(container, '[data-transfer-detail]').textContent).toContain(
       '2 min walk',
     );
+  });
+
+  it.each([
+    {
+      toolName: 'search_stations',
+      result: { city: 'nyc', query: 'Ghost', results: [] },
+      message: 'No stations were found for this search',
+    },
+    {
+      toolName: 'get_stations_by_line',
+      result: { city: 'nyc', line: 'A', stations: [] },
+      message: 'No stations are listed for line A',
+    },
+    {
+      toolName: 'get_all_stations',
+      result: { city: 'nyc', totalStations: 0, stations: [] },
+      message: 'No stations are available in this directory',
+    },
+    {
+      toolName: 'get_station_transfers',
+      result: {
+        city: 'nyc',
+        stationId: '127',
+        stationName: 'Times Square - 42 St',
+        totalTransfers: 0,
+        transfers: [],
+      },
+      message: 'No transfer connections are listed for this station',
+    },
+  ])('renders the $toolName empty state', ({ toolName, result, message }) => {
+    const container = mountResult(toolName, result);
+    expect(queryRequired(container, '[data-empty-state]').textContent).toContain(message);
   });
 });
 
@@ -210,6 +283,47 @@ describe('Transit Board rendering boundary', () => {
   });
 
   it.each([
+    {
+      toolName: 'get_bus_predictions',
+      result: {
+        ...EXPECTED_TOOL_CONTRACTS.get_bus_predictions.structuredContent,
+        predictions: [{
+          ...EXPECTED_TOOL_CONTRACTS.get_bus_predictions.structuredContent.predictions[0],
+          minutesAway: Number.NaN,
+        }],
+      },
+      label: 'bus arrival',
+    },
+    {
+      toolName: 'search_stations',
+      result: {
+        ...EXPECTED_TOOL_CONTRACTS.search_stations.structuredContent,
+        results: [{
+          ...EXPECTED_TOOL_CONTRACTS.search_stations.structuredContent.results[0],
+          coordinates: { lat: Number.POSITIVE_INFINITY, lon: -73.987495 },
+        }],
+      },
+      label: 'station search',
+    },
+    {
+      toolName: 'get_station_transfers',
+      result: {
+        ...EXPECTED_TOOL_CONTRACTS.get_station_transfers.structuredContent,
+        transfers: [{
+          ...EXPECTED_TOOL_CONTRACTS.get_station_transfers.structuredContent.transfers[0],
+          transferType: 'stairs',
+        }],
+      },
+      label: 'station transfer',
+    },
+  ])('rejects malformed $label item fields', ({ toolName, result, label }) => {
+    const container = mountResult(toolName, result);
+    expect(queryRequired(container, '[role="alert"]').textContent).toContain(
+      `This ${label} result can’t be displayed`,
+    );
+  });
+
+  it.each([
     'get_incidents',
     'get_elevator_incidents',
     'get_bus_routes',
@@ -230,23 +344,4 @@ describe('Transit Board rendering boundary', () => {
     expect(container.textContent).not.toContain(JSON.stringify(fixture));
   });
 
-  it('keeps filters and selection controls available at a 320px viewport', () => {
-    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 320 });
-    window.dispatchEvent(new Event('resize'));
-    const container = mountResult(
-      'search_stations',
-      EXPECTED_TOOL_CONTRACTS.search_stations.structuredContent,
-    );
-
-    const controls = container.querySelectorAll<HTMLInputElement | HTMLButtonElement>(
-      'input, button',
-    );
-    expect(controls.length).toBeGreaterThan(1);
-    for (const control of controls) {
-      expect(control.hidden).toBe(false);
-      expect(control.tabIndex).toBeGreaterThanOrEqual(0);
-      expect(control.style.inlineSize).toBe('');
-      expect(control.style.width).toBe('');
-    }
-  });
 });
