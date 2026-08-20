@@ -133,6 +133,7 @@ describe('assembled MCP Worker', () => {
 
     expect(publicAssetResponse.status).toBe(200);
     expect(publicHtml).toMatch(/^<!doctype html>/i);
+    expect(new TextEncoder().encode(publicHtml).byteLength).toBeLessThanOrEqual(1_048_576);
     expect((listed.resources as unknown[])[0]).toEqual({
       uri: TRANSIT_BOARD_URI,
       name: TRANSIT_BOARD_RESOURCE_CONTRACT.name,

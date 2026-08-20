@@ -633,7 +633,203 @@ describe('SDK v2 resource contracts', () => {
     });
     expect(assetsFetch).toHaveBeenCalledTimes(1);
     const assetRequest = new Request(assetsFetch.mock.calls[0]![0]);
-    expect(assetRequest.url).toBe('https://assets.metro-mcp.invalid/apps/transit-board.html');
+    expect(assetRequest.url).toBe('https://metro-mcp.anuragd.me/apps/transit-board.html');
+  });
+
+  it.each([
+    ['production', 'https://metro-mcp.anuragd.me'],
+    ['preview', 'https://metro-mcp-preview.anuragd.me'],
+    ['development', 'http://127.0.0.1:8787'],
+  ] as const)('loads the fixed asset path from the validated %s public origin', async (
+    environment,
+    publicOrigin,
+  ) => {
+    const html = `<!doctype html><title>${environment}</title>`;
+    const assetsFetch = vi.fn().mockResolvedValue(new Response(html));
+    const context = testContext();
+    context.env = createMockEnv({
+      ASSETS: { fetch: assetsFetch } as unknown as Fetcher,
+      ENVIRONMENT: environment,
+      MCP_PUBLIC_ORIGIN: publicOrigin,
+    });
+
+    const message = await requestOverSdkWire(
+      metroServerFactory(context),
+      'resources/read',
+      { uri: TRANSIT_BOARD_URI },
+      { modern: true },
+    );
+
+    expect(message.error).toBeUndefined();
+    expect(message.result?.contents).toEqual([{
+      uri: TRANSIT_BOARD_URI,
+      mimeType: TRANSIT_BOARD_MIME,
+      text: html,
+      _meta: TRANSIT_BOARD_RESOURCE_META,
+    }]);
+    expect(new Request(assetsFetch.mock.calls[0]![0]).url).toBe(
+      `${publicOrigin}/apps/transit-board.html`,
+    );
+  });
+
+  it('never derives the asset URL from a malicious requested resource URI', async () => {
+    const assetsFetch = vi.fn();
+    const context = testContext();
+    context.env = createMockEnv({
+      ASSETS: { fetch: assetsFetch } as unknown as Fetcher,
+    });
+
+    const message = await requestOverSdkWire(
+      metroServerFactory(context),
+      'resources/read',
+      { uri: `${TRANSIT_BOARD_URI}?asset=https://attacker.example/payload` },
+      { modern: true },
+    );
+
+    expect(message.error).toMatchObject({ code: -32602 });
+    expect(assetsFetch).not.toHaveBeenCalled();
+  });
+
+  it('preserves exact text at the 1 MiB ceiling across stream chunk boundaries', async () => {
+    const first = 'a'.repeat(700_001);
+    const second = 'b'.repeat(1_048_576 - first.length);
+    const context = testContext();
+    context.env = createMockEnv({
+      ASSETS: {
+        fetch: vi.fn().mockResolvedValue(new Response(new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(first));
+            controller.enqueue(new TextEncoder().encode(second));
+            controller.close();
+          },
+        }), {
+          headers: { 'content-length': '1048576' },
+        })),
+      } as unknown as Fetcher,
+    });
+    const resource = registeredResources(createMetroMcpServer(context))[TRANSIT_BOARD_URI]!;
+
+    const result = await resource.readCallback(
+      new URL(TRANSIT_BOARD_URI),
+      requestContext(new AbortController().signal, 'resources/read'),
+    ) as { contents: Array<{ text: string }> };
+
+    expect(result.contents[0]?.text).toBe(first + second);
+  });
+
+  it('strictly decodes valid UTF-8 split across stream chunk boundaries', async () => {
+    const context = testContext();
+    context.env = createMockEnv({
+      ASSETS: {
+        fetch: vi.fn().mockResolvedValue(new Response(new ReadableStream({
+          start(controller) {
+            controller.enqueue(Uint8Array.from([0x41, 0xf0, 0x9f]));
+            controller.enqueue(Uint8Array.from([0x9a, 0x87, 0x42]));
+            controller.close();
+          },
+        }))),
+      } as unknown as Fetcher,
+    });
+    const resource = registeredResources(createMetroMcpServer(context))[TRANSIT_BOARD_URI]!;
+
+    const result = await resource.readCallback(
+      new URL(TRANSIT_BOARD_URI),
+      requestContext(new AbortController().signal, 'resources/read'),
+    ) as { contents: Array<{ text: string }> };
+
+    expect(result.contents[0]?.text).toBe('A🚇B');
+  });
+
+  it('rejects a declared asset over 1 MiB before reading its body', async () => {
+    const bodyRead = vi.fn();
+    const response = new Response(new ReadableStream({
+      pull(controller) {
+        bodyRead();
+        controller.enqueue(new TextEncoder().encode('private oversized declared body'));
+        controller.close();
+      },
+    }, { highWaterMark: 0 }), {
+      headers: { 'content-length': '1048577' },
+    });
+    const context = testContext();
+    context.env = createMockEnv({
+      ASSETS: {
+        fetch: vi.fn().mockResolvedValue(response),
+      } as unknown as Fetcher,
+    });
+
+    const message = await requestOverSdkWire(
+      metroServerFactory(context),
+      'resources/read',
+      { uri: TRANSIT_BOARD_URI },
+      { modern: true },
+    );
+
+    expect(message.error).toEqual({
+      code: -32603,
+      message: 'Transit Board application asset is unavailable',
+    });
+    expect(bodyRead).not.toHaveBeenCalled();
+    expect(JSON.stringify(message)).not.toContain('private oversized declared body');
+  });
+
+  it('stops an unknown-length stream once it exceeds 1 MiB and redacts detail', async () => {
+    const cancel = vi.fn();
+    let chunk = 0;
+    const privateDetail = 'private chunked upstream detail';
+    const firstChunk = new Uint8Array(700_000).fill(0x61);
+    firstChunk.set(new TextEncoder().encode(privateDetail));
+    const response = new Response(new ReadableStream({
+      pull(controller) {
+        if (chunk === 0) controller.enqueue(firstChunk);
+        else if (chunk === 1) controller.enqueue(new Uint8Array(400_000).fill(0x62));
+        else controller.close();
+        chunk += 1;
+      },
+      cancel,
+    }, { highWaterMark: 0 }));
+    const context = testContext();
+    context.env = createMockEnv({
+      ASSETS: {
+        fetch: vi.fn().mockResolvedValue(response),
+      } as unknown as Fetcher,
+    });
+
+    const message = await requestOverSdkWire(
+      metroServerFactory(context),
+      'resources/read',
+      { uri: TRANSIT_BOARD_URI },
+      { modern: true },
+    );
+
+    expect(message.error).toEqual({
+      code: -32603,
+      message: 'Transit Board application asset is unavailable',
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(message)).not.toContain(privateDetail);
+  });
+
+  it('rejects malformed UTF-8 with the same redacted internal error', async () => {
+    const context = testContext();
+    context.env = createMockEnv({
+      ASSETS: {
+        fetch: vi.fn().mockResolvedValue(new Response(Uint8Array.from([0xc3, 0x28]))),
+      } as unknown as Fetcher,
+    });
+
+    const message = await requestOverSdkWire(
+      metroServerFactory(context),
+      'resources/read',
+      { uri: TRANSIT_BOARD_URI },
+      { modern: true },
+    );
+
+    expect(message.error).toEqual({
+      code: -32603,
+      message: 'Transit Board application asset is unavailable',
+    });
+    expect(JSON.stringify(message)).not.toContain('\ufffd');
   });
 
   it.each([
@@ -648,6 +844,15 @@ describe('SDK v2 resource contracts', () => {
       'an asset binding failure',
       () => vi.fn().mockRejectedValue(new Error('private binding detail')),
       'private binding detail',
+    ],
+    [
+      'an asset body read failure',
+      () => vi.fn().mockResolvedValue(new Response(new ReadableStream({
+        pull() {
+          throw new Error('private body read detail');
+        },
+      }))),
+      'private body read detail',
     ],
   ])('fails safely for %s without exposing upstream detail', async (
     _description,
