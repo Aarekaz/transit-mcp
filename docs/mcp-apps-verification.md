@@ -46,7 +46,9 @@ bun run test:apps
 
 `bun run test:apps` starts a new loopback-only Vite server at `127.0.0.1:4178`, opens `tests/apps/host.html`, and uses the Chromium revision managed by the exact `@playwright/test` `1.62.1` pin. The gating configuration never silently selects branded Chrome or reuses an existing server. The host loads `/apps/transit-board.html` in an iframe with exactly `sandbox="allow-scripts"`; it does not grant `allow-same-origin` or a permission-policy `allow` attribute.
 
-The harness uses the official `AppBridge` and `PostMessageTransport` host APIs. It supplies initial host context through the `ui/initialize` response, waits for `ui/notifications/initialized`, then sends exactly one `ui/notifications/tool-input` before one `ui/notifications/tool-result`. Refresh `tools/call` requests are answered only from checked-in fixture objects. There is no provider request, secret lookup, account access, or authorization emulation.
+The harness uses the official `AppBridge` and `PostMessageTransport` host APIs. It supplies initial host context through the `ui/initialize` response, waits for `ui/notifications/initialized`, then sends exactly one `ui/notifications/tool-input` before one `ui/notifications/tool-result`. Refresh `tools/call` requests are answered only from checked-in fixture objects. A source-filtered ledger classifies requests, notifications, success responses, error responses, and malformed messages, and correlates each response to one pending opposite-direction request in the same mount. There is no provider request, secret lookup, account access, or authorization emulation.
+
+Security-effect instrumentation reports only to a Playwright-owned runner binding installed before navigation. It does not use `window.postMessage`, add a page `message` listener, or consume any Apps traffic, and its runner-owned record survives iframe remounts.
 
 The visible host controls cover:
 
@@ -69,7 +71,8 @@ The committed Playwright suite verifies:
 - light/dark host context, inline/fullscreen transitions, and safe-area padding;
 - native modern host values including `color-mix(in oklab, ...)`, OKLCH colors, and the host font stack;
 - hostile transit markup rendered as literal text;
-- zero console errors, page errors, unexpected external requests or WebSockets, network-constructor calls, storage or cookie access, privileged-browser API access, or unexpected protocol effects; adversarial tests prove each oracle observes a forbidden attempt, including caught opaque-origin access before an iframe remount.
+- in normal scenarios, exact empty sequences for console/page errors, unexpected external requests or WebSockets, network-constructor calls, storage or cookie access, privileged-browser API access, unexpected protocol methods, protocol violations, and requests still awaiting responses;
+- adversarial probes for every recorded surface, including caught opaque-origin access before an iframe remount, hybrid marker/JSON-RPC traffic, unsolicited/duplicate/mismatched/missing responses, and malformed JSON-RPC. Acknowledgements accept only the exact new ordered observations; mixed expected-plus-unexpected probes demonstrate that unrelated effects remain failures.
 
 Transient screenshots, traces, and failure artifacts are ignored under `output/playwright/` and are never committed.
 

@@ -24,9 +24,27 @@ type DeliveryRecord = {
 
 type ProtocolRecord = {
   direction: 'app-to-host' | 'host-to-app';
-  method: string;
+  kind: 'request' | 'notification' | 'success-response' | 'error-response' | 'malformed';
   sequence: number;
+  id?: unknown;
+  method?: unknown;
   params?: unknown;
+  result?: unknown;
+  error?: unknown;
+};
+
+type PendingProtocolRequest = {
+  direction: ProtocolRecord['direction'];
+  sequence: number;
+  id: string | number;
+  method: string;
+};
+
+type ProtocolViolation = {
+  kind: 'unsolicited-response' | 'duplicate-response' | 'mismatched-response' | 'malformed';
+  direction: ProtocolRecord['direction'];
+  sequence: number;
+  id?: unknown;
 };
 
 type HarnessRecords = {
@@ -41,6 +59,9 @@ type HarnessSnapshot = HarnessRecords & {
   state: FixtureState;
   protocol: ProtocolRecord[];
   unexpectedProtocol: string[];
+  bridgeEvents: { name: string; sequence: number }[];
+  protocolViolations: ProtocolViolation[];
+  pendingProtocol: PendingProtocolRequest[];
 };
 
 const required = <ElementType extends Element>(selector: string): ElementType => {
@@ -64,6 +85,10 @@ let operation = Promise.resolve();
 let records: HarnessRecords = freshRecords();
 const protocol: ProtocolRecord[] = [];
 const unexpectedProtocol: string[] = [];
+const bridgeEvents: { name: string; sequence: number }[] = [];
+const protocolViolations: ProtocolViolation[] = [];
+const pendingProtocol: PendingProtocolRequest[] = [];
+const completedProtocol: PendingProtocolRequest[] = [];
 const frameSources = new Set<MessageEventSource>();
 const frameSequences = new Map<MessageEventSource, number>();
 const expectedInboundMethods = new Set([
@@ -88,17 +113,139 @@ function recordProtocol(
   sequence: number,
   message: unknown,
 ): void {
-  if (typeof message !== 'object' || message === null) return;
-  const candidate = message as { jsonrpc?: unknown; method?: unknown; params?: unknown };
-  if (candidate.jsonrpc !== '2.0' || typeof candidate.method !== 'string') return;
-  protocol.push({
-    direction,
-    method: candidate.method,
-    sequence,
-    ...('params' in candidate ? { params: structuredClone(candidate.params) } : {}),
-  });
-  if (direction === 'app-to-host' && !expectedInboundMethods.has(candidate.method)) {
-    unexpectedProtocol.push(candidate.method);
+  const candidate = typeof message === 'object' && message !== null && !Array.isArray(message)
+    ? message as Record<string, unknown>
+    : {};
+  const hasOnlyKeys = (...allowed: string[]): boolean => (
+    Object.keys(candidate).every(key => allowed.includes(key))
+  );
+  const hasId = typeof candidate.id === 'string'
+    || (typeof candidate.id === 'number' && Number.isInteger(candidate.id));
+  const hasOptionalId = !('id' in candidate) || hasId;
+  const hasParams = !('params' in candidate)
+    || (typeof candidate.params === 'object' && candidate.params !== null && !Array.isArray(candidate.params));
+  const base = { direction, sequence };
+  let record: ProtocolRecord;
+
+  if (candidate.jsonrpc === '2.0'
+    && typeof candidate.method === 'string'
+    && hasId
+    && hasParams
+    && hasOnlyKeys('jsonrpc', 'id', 'method', 'params')) {
+    record = {
+      ...base,
+      kind: 'request',
+      id: candidate.id,
+      method: candidate.method,
+      ...('params' in candidate ? { params: structuredClone(candidate.params) } : {}),
+    };
+  } else if (candidate.jsonrpc === '2.0'
+    && typeof candidate.method === 'string'
+    && !('id' in candidate)
+    && hasParams
+    && hasOnlyKeys('jsonrpc', 'method', 'params')) {
+    record = {
+      ...base,
+      kind: 'notification',
+      method: candidate.method,
+      ...('params' in candidate ? { params: structuredClone(candidate.params) } : {}),
+    };
+  } else if (candidate.jsonrpc === '2.0'
+    && hasId
+    && typeof candidate.result === 'object'
+    && candidate.result !== null
+    && !Array.isArray(candidate.result)
+    && hasOnlyKeys('jsonrpc', 'id', 'result')) {
+    record = {
+      ...base,
+      kind: 'success-response',
+      id: candidate.id,
+      result: structuredClone(candidate.result),
+    };
+  } else if (candidate.jsonrpc === '2.0'
+    && hasOptionalId
+    && typeof candidate.error === 'object'
+    && candidate.error !== null
+    && !Array.isArray(candidate.error)
+    && Number.isInteger((candidate.error as Record<string, unknown>).code)
+    && typeof (candidate.error as Record<string, unknown>).message === 'string'
+    && hasOnlyKeys('jsonrpc', 'id', 'error')) {
+    record = {
+      ...base,
+      kind: 'error-response',
+      id: candidate.id,
+      error: structuredClone(candidate.error),
+    };
+  } else {
+    record = {
+      ...base,
+      kind: 'malformed',
+      ...('id' in candidate ? { id: structuredClone(candidate.id) } : {}),
+      ...('method' in candidate ? { method: structuredClone(candidate.method) } : {}),
+      ...('params' in candidate ? { params: structuredClone(candidate.params) } : {}),
+      ...('result' in candidate ? { result: structuredClone(candidate.result) } : {}),
+      ...('error' in candidate ? { error: structuredClone(candidate.error) } : {}),
+    };
+  }
+  protocol.push(record);
+
+  if (record.kind === 'malformed') {
+    protocolViolations.push({
+      kind: 'malformed',
+      direction,
+      sequence,
+      ...('id' in record ? { id: record.id } : {}),
+    });
+    return;
+  }
+  if (record.kind === 'request') {
+    pendingProtocol.push({
+      direction,
+      sequence,
+      id: record.id as string | number,
+      method: record.method as string,
+    });
+  } else if (record.kind === 'success-response' || record.kind === 'error-response') {
+    const responseId = record.id;
+    const oppositeDirection = direction === 'app-to-host' ? 'host-to-app' : 'app-to-host';
+    const pendingIndex = (typeof responseId === 'string' || typeof responseId === 'number')
+      ? pendingProtocol.findIndex(request => (
+        request.direction === oppositeDirection
+        && request.sequence === sequence
+        && request.id === responseId
+      ))
+      : -1;
+    if (pendingIndex >= 0) {
+      const [completed] = pendingProtocol.splice(pendingIndex, 1);
+      if (completed) completedProtocol.push(completed);
+    } else {
+      const duplicate = (typeof responseId === 'string' || typeof responseId === 'number')
+        && completedProtocol.some(request => (
+        request.direction === oppositeDirection
+        && request.sequence === sequence
+        && request.id === responseId
+      ));
+      const mismatched = (typeof responseId === 'string' || typeof responseId === 'number')
+        && (pendingProtocol.some(request => request.id === responseId)
+          || completedProtocol.some(request => request.id === responseId));
+      protocolViolations.push({
+        kind: duplicate
+          ? 'duplicate-response'
+          : mismatched
+            ? 'mismatched-response'
+            : 'unsolicited-response',
+        direction,
+        sequence,
+        ...(typeof responseId === 'string' || typeof responseId === 'number'
+          ? { id: responseId }
+          : {}),
+      });
+    }
+  }
+  if (direction === 'app-to-host'
+    && (record.kind === 'request' || record.kind === 'notification')
+    && !expectedInboundMethods.has(record.method as string)) {
+    unexpectedProtocol.push(record.method as string);
   }
 }
 
@@ -249,6 +396,9 @@ async function mountScenario(
     { hostContext: initialContext },
   );
   activeBridge = bridge;
+  bridge.onerror = () => {
+    bridgeEvents.push({ name: 'error', sequence });
+  };
 
   bridge.oncalltool = async params => {
     const calledTool = params.name;
@@ -291,6 +441,9 @@ async function mountScenario(
   });
   bridge.addEventListener('loggingmessage', () => {
     unexpectedProtocol.push('notifications/message');
+  });
+  bridge.addEventListener('sandboxready', () => {
+    bridgeEvents.push({ name: 'sandboxready', sequence });
   });
 
   const initialized = new Promise<void>((resolve, reject) => {
@@ -385,7 +538,17 @@ Object.defineProperty(window, '__metroAppsHarness', {
         ...records,
         protocol,
         unexpectedProtocol,
+        bridgeEvents,
+        protocolViolations,
+        pendingProtocol,
       });
+    },
+    async teardownActive(): Promise<void> {
+      if (!activeBridge) throw new Error('No active Apps bridge is available.');
+      await activeBridge.teardownResource({});
+    },
+    async closeActiveForProbe(): Promise<void> {
+      await closeActiveBridge();
     },
   },
 });
@@ -396,6 +559,8 @@ declare global {
   interface Window {
     __metroAppsHarness: {
       snapshot(): HarnessSnapshot;
+      teardownActive(): Promise<void>;
+      closeActiveForProbe(): Promise<void>;
     };
   }
 }

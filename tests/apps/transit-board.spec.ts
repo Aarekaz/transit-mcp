@@ -19,12 +19,38 @@ type HarnessSnapshot = {
   displayRequests: string[];
   sizeChanges: { width?: number; height?: number }[];
   unexpectedProtocol: string[];
+  bridgeEvents?: { name: string; sequence: number }[];
   protocol?: {
     direction: 'app-to-host' | 'host-to-app';
-    method: string;
+    kind?: 'request' | 'notification' | 'success-response' | 'error-response' | 'malformed';
     sequence: number;
+    id?: unknown;
+    method?: unknown;
     params?: unknown;
+    result?: unknown;
+    error?: unknown;
   }[];
+  protocolViolations?: ProtocolViolation[];
+  pendingProtocol?: {
+    direction: 'app-to-host' | 'host-to-app';
+    sequence: number;
+    id: string | number;
+    method: string;
+  }[];
+};
+
+type ProtocolViolation = {
+  kind: 'unsolicited-response' | 'duplicate-response' | 'mismatched-response' | 'malformed';
+  direction: 'app-to-host' | 'host-to-app';
+  sequence: number;
+  id?: unknown;
+};
+
+type PendingProtocolRequest = {
+  direction: 'app-to-host' | 'host-to-app';
+  sequence: number;
+  id: string | number;
+  method: string;
 };
 
 type Observations = {
@@ -32,11 +58,14 @@ type Observations = {
   pageErrors: string[];
   externalRequests: string[];
   webSockets: string[];
+  securityEffects: string[];
   expectedConsoleErrors: string[];
   expectedSecurityEffects: string[];
   expectedExternalRequests: string[];
   expectedWebSockets: string[];
   expectedUnexpectedProtocol: string[];
+  expectedProtocolViolations: ProtocolViolation[];
+  expectedPendingProtocol: PendingProtocolRequest[];
 };
 
 const observations = new WeakMap<Page, Observations>();
@@ -116,60 +145,106 @@ async function snapshot(page: Page): Promise<HarnessSnapshot> {
 }
 
 async function securityEffects(page: Page): Promise<string[]> {
-  return page.evaluate(() => (
-    (window as Window & { __metroSecurityEffects?: string[] }).__metroSecurityEffects ?? []
-  ));
+  return [...(observations.get(page)?.securityEffects ?? [])];
 }
 
 async function acknowledgeSecurityEffects(page: Page, expected: string[]): Promise<void> {
-  await expect.poll(() => securityEffects(page)).toEqual(expect.arrayContaining(expected));
-  const actual = await securityEffects(page);
-  expect(actual).not.toEqual([]);
   const current = observations.get(page);
   if (!current) throw new Error('Missing browser observations.');
-  current.expectedSecurityEffects = actual;
+  const start = current.expectedSecurityEffects.length;
+  await expect.poll(() => current.securityEffects.length).toBeGreaterThanOrEqual(
+    start + expected.length,
+  );
+  expect(current.securityEffects.slice(start)).toEqual(expected);
+  current.expectedSecurityEffects.push(...expected);
 }
 
-async function acknowledgeWebSocket(page: Page, url: string): Promise<void> {
+async function acknowledgeWebSockets(page: Page, expected: string[]): Promise<void> {
   const current = observations.get(page);
   if (!current) throw new Error('Missing browser observations.');
-  await expect.poll(() => current.webSockets).toContain(url);
-  current.expectedWebSockets = [...current.webSockets];
+  const start = current.expectedWebSockets.length;
+  await expect.poll(() => current.webSockets.length).toBeGreaterThanOrEqual(
+    start + expected.length,
+  );
+  expect(current.webSockets.slice(start)).toEqual(expected);
+  current.expectedWebSockets.push(...expected);
 }
 
-async function acknowledgeConsoleError(page: Page, fragment: string): Promise<void> {
+async function acknowledgeConsoleErrors(page: Page, expectedFragments: string[]): Promise<void> {
   const current = observations.get(page);
   if (!current) throw new Error('Missing browser observations.');
-  await expect.poll(() => current.consoleErrors.some(message => message.includes(fragment)))
-    .toBe(true);
-  current.expectedConsoleErrors = [...current.consoleErrors];
+  const start = current.expectedConsoleErrors.length;
+  await expect.poll(() => current.consoleErrors.length).toBeGreaterThanOrEqual(
+    start + expectedFragments.length,
+  );
+  const actual = current.consoleErrors.slice(start);
+  expect(actual).toHaveLength(expectedFragments.length);
+  expectedFragments.forEach((fragment, index) => {
+    expect(actual[index]).toContain(fragment);
+  });
+  current.expectedConsoleErrors.push(...actual);
 }
 
-async function acknowledgeUnexpectedProtocol(page: Page, method: string): Promise<void> {
-  await expect.poll(async () => (await snapshot(page)).unexpectedProtocol).toContain(method);
+async function acknowledgeUnexpectedProtocol(page: Page, expected: string[]): Promise<void> {
   const current = observations.get(page);
   if (!current) throw new Error('Missing browser observations.');
-  current.expectedUnexpectedProtocol = (await snapshot(page)).unexpectedProtocol;
+  const start = current.expectedUnexpectedProtocol.length;
+  await expect.poll(async () => (await snapshot(page)).unexpectedProtocol.length)
+    .toBeGreaterThanOrEqual(start + expected.length);
+  expect((await snapshot(page)).unexpectedProtocol.slice(start)).toEqual(expected);
+  current.expectedUnexpectedProtocol.push(...expected);
+}
+
+async function acknowledgeProtocolViolations(
+  page: Page,
+  expected: ProtocolViolation[],
+): Promise<void> {
+  const current = observations.get(page);
+  if (!current) throw new Error('Missing browser observations.');
+  const start = current.expectedProtocolViolations.length;
+  await expect.poll(async () => ((await snapshot(page)).protocolViolations ?? []).length)
+    .toBeGreaterThanOrEqual(start + expected.length);
+  expect(((await snapshot(page)).protocolViolations ?? []).slice(start)).toEqual(expected);
+  current.expectedProtocolViolations.push(...expected);
+}
+
+async function acknowledgePendingProtocol(
+  page: Page,
+  expected: PendingProtocolRequest[],
+): Promise<void> {
+  const current = observations.get(page);
+  if (!current) throw new Error('Missing browser observations.');
+  await expect.poll(async () => ((await snapshot(page)).pendingProtocol ?? []).length)
+    .toBeGreaterThanOrEqual(expected.length);
+  expect((await snapshot(page)).pendingProtocol ?? []).toEqual(expected);
+  current.expectedPendingProtocol = [...expected];
 }
 
 test.beforeEach(async ({ context, page }) => {
+  const current: Observations = {
+    consoleErrors: [],
+    pageErrors: [],
+    externalRequests: [],
+    webSockets: [],
+    securityEffects: [],
+    expectedConsoleErrors: [],
+    expectedSecurityEffects: [],
+    expectedExternalRequests: [],
+    expectedWebSockets: [],
+    expectedUnexpectedProtocol: [],
+    expectedProtocolViolations: [],
+    expectedPendingProtocol: [],
+  };
+  observations.set(page, current);
+  await page.exposeBinding('__metroRecordSecurityEffect', (_source, effect: unknown) => {
+    if (typeof effect === 'string') current.securityEffects.push(effect);
+  });
   await context.addInitScript(() => {
-    const effects: string[] = [];
-    Object.defineProperty(window, '__metroSecurityEffects', { value: effects });
-    const effectMessageType = 'metro-mcp-apps-security-effect';
-    if (window === window.top) {
-      window.addEventListener('message', event => {
-        const data = event.data as { type?: unknown; effect?: unknown } | null;
-        if (data?.type !== effectMessageType || typeof data.effect !== 'string') return;
-        event.stopImmediatePropagation();
-        effects.push(data.effect);
-      }, { capture: true });
-    }
     const record = (name: string): void => {
-      effects.push(name);
-      if (window !== window.top) {
-        window.parent.postMessage({ type: effectMessageType, effect: name }, '*');
-      }
+      const binding = (globalThis as typeof globalThis & {
+        __metroRecordSecurityEffect?: (effect: string) => Promise<void>;
+      }).__metroRecordSecurityEffect;
+      if (binding) void binding(name);
     };
 
     const propertyOwner = (target: object, key: PropertyKey): object | undefined => {
@@ -367,18 +442,6 @@ test.beforeEach(async ({ context, page }) => {
     }
   });
 
-  const current: Observations = {
-    consoleErrors: [],
-    pageErrors: [],
-    externalRequests: [],
-    webSockets: [],
-    expectedConsoleErrors: [],
-    expectedSecurityEffects: [],
-    expectedExternalRequests: [],
-    expectedWebSockets: [],
-    expectedUnexpectedProtocol: [],
-  };
-  observations.set(page, current);
   page.on('console', message => {
     if (message.type() === 'error') current.consoleErrors.push(message.text());
   });
@@ -399,9 +462,14 @@ test.afterEach(async ({ page }) => {
   expect(current?.externalRequests ?? []).toEqual(current?.expectedExternalRequests ?? []);
   expect(current?.webSockets ?? []).toEqual(current?.expectedWebSockets ?? []);
   expect(await securityEffects(page)).toEqual(current?.expectedSecurityEffects ?? []);
-  expect((await snapshot(page)).unexpectedProtocol).toEqual(
+  const currentSnapshot = await snapshot(page);
+  expect(currentSnapshot.unexpectedProtocol).toEqual(
     current?.expectedUnexpectedProtocol ?? [],
   );
+  expect(currentSnapshot.protocolViolations ?? []).toEqual(
+    current?.expectedProtocolViolations ?? [],
+  );
+  expect(currentSnapshot.pendingProtocol ?? []).toEqual(current?.expectedPendingProtocol ?? []);
 });
 
 for (const toolName of TOOL_NAMES) {
@@ -604,8 +672,14 @@ test('records only expected official-protocol effects', async ({ page }) => {
   ))).toBe(true);
 
   const protocol = current.protocol ?? [];
-  const inbound = protocol.filter(entry => entry.direction === 'app-to-host');
-  const outbound = protocol.filter(entry => entry.direction === 'host-to-app');
+  const inbound = protocol.filter(entry => (
+    entry.direction === 'app-to-host'
+    && (entry.kind === 'request' || entry.kind === 'notification')
+  ));
+  const outbound = protocol.filter(entry => (
+    entry.direction === 'host-to-app'
+    && (entry.kind === 'request' || entry.kind === 'notification')
+  ));
   expect([...new Set(inbound.map(entry => entry.method))].sort()).toEqual([
     'tools/call',
     'ui/initialize',
@@ -643,6 +717,31 @@ test('records only expected official-protocol effects', async ({ page }) => {
   expect(outbound.filter(entry => entry.method === 'ui/notifications/tool-result')).toHaveLength(2);
   expect(outbound.filter(entry => entry.method === 'ui/notifications/host-context-changed'))
     .toHaveLength(1);
+  const requests = protocol.filter(entry => entry.kind === 'request');
+  expect(requests.map(entry => ({
+    direction: entry.direction,
+    sequence: entry.sequence,
+    method: entry.method,
+  }))).toEqual([
+    { direction: 'app-to-host', sequence: 1, method: 'ui/initialize' },
+    { direction: 'host-to-app', sequence: 1, method: 'ui/resource-teardown' },
+    { direction: 'app-to-host', sequence: 2, method: 'ui/initialize' },
+    { direction: 'app-to-host', sequence: 2, method: 'tools/call' },
+    { direction: 'app-to-host', sequence: 2, method: 'ui/request-display-mode' },
+  ]);
+  const successResponses = protocol.filter(entry => entry.kind === 'success-response');
+  expect(successResponses).toHaveLength(5);
+  for (const request of requests) {
+    expect(successResponses.filter(response => (
+      response.direction !== request.direction
+      && response.sequence === request.sequence
+      && response.id === request.id
+    ))).toHaveLength(1);
+  }
+  expect(protocol.some(entry => entry.kind === 'error-response')).toBe(false);
+  expect(protocol.some(entry => entry.kind === 'malformed')).toBe(false);
+  expect(current.protocolViolations ?? []).toEqual([]);
+  expect(current.pendingProtocol ?? []).toEqual([]);
 });
 
 test('records and rejects an unexpected official sandbox-ready notification', async ({ page }) => {
@@ -654,10 +753,199 @@ test('records and rejects an unexpected official sandbox-ready notification', as
     }, '*');
   });
 
-  await acknowledgeUnexpectedProtocol(page, 'ui/notifications/sandbox-proxy-ready');
+  await acknowledgeUnexpectedProtocol(page, ['ui/notifications/sandbox-proxy-ready']);
   expect((await snapshot(page)).protocol ?? []).toContainEqual(expect.objectContaining({
     direction: 'app-to-host',
     method: 'ui/notifications/sandbox-proxy-ready',
+  }));
+});
+
+test('does not let a hybrid security marker hide JSON-RPC from the host', async ({ page }) => {
+  const frame = await selectScenario(page, 'get_station_predictions');
+  await frame.evaluate(() => {
+    window.parent.postMessage({
+      type: 'metro-mcp-apps-security-effect',
+      effect: 'network.hybrid-probe',
+      jsonrpc: '2.0',
+      method: 'ui/notifications/sandbox-proxy-ready',
+    }, '*');
+  });
+
+  await expect.poll(() => securityEffects(page)).toEqual([]);
+  await acknowledgeProtocolViolations(page, [{
+    kind: 'malformed',
+    direction: 'app-to-host',
+    sequence: 1,
+  }]);
+  await acknowledgeConsoleErrors(page, ['Failed to parse message']);
+  const current = await snapshot(page);
+  expect(current.protocol ?? []).toContainEqual(expect.objectContaining({
+    direction: 'app-to-host',
+    kind: 'malformed',
+    method: 'ui/notifications/sandbox-proxy-ready',
+  }));
+  expect(current.bridgeEvents ?? []).toContainEqual({ name: 'error', sequence: 1 });
+});
+
+test('records unsolicited success and error responses as protocol violations', async ({ page }) => {
+  const frame = await selectScenario(page, 'get_station_predictions');
+  await frame.evaluate(() => {
+    window.parent.postMessage({
+      jsonrpc: '2.0',
+      id: 'task6-unsolicited-success',
+      result: { ok: true },
+    }, '*');
+    window.parent.postMessage({
+      jsonrpc: '2.0',
+      id: 'task6-unsolicited-error',
+      error: { code: -32_000, message: 'Task 6 probe' },
+    }, '*');
+    window.parent.postMessage({
+      jsonrpc: '2.0',
+      error: { code: -32_600, message: 'Task 6 idless probe' },
+    }, '*');
+  });
+
+  await acknowledgeProtocolViolations(page, [
+    {
+      kind: 'unsolicited-response',
+      direction: 'app-to-host',
+      sequence: 1,
+      id: 'task6-unsolicited-success',
+    },
+    {
+      kind: 'unsolicited-response',
+      direction: 'app-to-host',
+      sequence: 1,
+      id: 'task6-unsolicited-error',
+    },
+    {
+      kind: 'unsolicited-response',
+      direction: 'app-to-host',
+      sequence: 1,
+    },
+  ]);
+  const protocol = (await snapshot(page)).protocol ?? [];
+  expect(protocol).toContainEqual(expect.objectContaining({
+    kind: 'success-response',
+    id: 'task6-unsolicited-success',
+    result: { ok: true },
+  }));
+  expect(protocol).toContainEqual(expect.objectContaining({
+    kind: 'error-response',
+    id: 'task6-unsolicited-error',
+    error: { code: -32_000, message: 'Task 6 probe' },
+  }));
+  expect(protocol).toContainEqual(expect.objectContaining({
+    kind: 'error-response',
+    error: { code: -32_600, message: 'Task 6 idless probe' },
+  }));
+});
+
+test('records a response with the wrong direction as mismatched', async ({ page }) => {
+  const frame = await selectScenario(page, 'get_station_predictions');
+  const initialize = ((await snapshot(page)).protocol ?? []).find(entry => (
+    entry.direction === 'app-to-host'
+    && entry.kind === 'request'
+    && entry.method === 'ui/initialize'
+  ));
+  expect(initialize?.id).toEqual(expect.anything());
+
+  await frame.evaluate(id => {
+    window.parent.postMessage({ jsonrpc: '2.0', id, result: {} }, '*');
+  }, initialize?.id);
+
+  await acknowledgeProtocolViolations(page, [{
+    kind: 'mismatched-response',
+    direction: 'app-to-host',
+    sequence: 1,
+    id: initialize?.id,
+  }]);
+});
+
+test('records a source-valid duplicate response instead of dropping it', async ({ page }) => {
+  const frame = await selectScenario(page, 'get_station_predictions');
+  await page.evaluate(async () => {
+    const harness = (window as Window & {
+      __metroAppsHarness: { teardownActive(): Promise<void> };
+    }).__metroAppsHarness;
+    await harness.teardownActive();
+  });
+  const completed = await snapshot(page);
+  const response = (completed.protocol ?? []).find(entry => (
+    entry.direction === 'app-to-host'
+    && entry.kind === 'success-response'
+    && entry.sequence === 1
+  ));
+  expect(response?.id).toEqual(expect.anything());
+
+  await frame.evaluate(id => {
+    window.parent.postMessage({ jsonrpc: '2.0', id, result: {} }, '*');
+  }, response?.id);
+
+  await acknowledgeProtocolViolations(page, [{
+    kind: 'duplicate-response',
+    direction: 'app-to-host',
+    sequence: 1,
+    id: response?.id,
+  }]);
+  expect(((await snapshot(page)).protocol ?? []).filter(entry => (
+    entry.direction === 'app-to-host'
+    && entry.kind === 'success-response'
+    && entry.sequence === 1
+    && entry.id === response?.id
+  ))).toHaveLength(2);
+});
+
+test('keeps a source-valid request visible when its response is missing', async ({ page }) => {
+  const frame = await selectScenario(page, 'get_station_predictions');
+  await page.evaluate(async () => {
+    const harness = (window as Window & {
+      __metroAppsHarness: { closeActiveForProbe(): Promise<void> };
+    }).__metroAppsHarness;
+    await harness.closeActiveForProbe();
+  });
+  await frame.evaluate(() => {
+    window.parent.postMessage({
+      jsonrpc: '2.0',
+      id: 'task6-missing-response',
+      method: 'task6/missing-response',
+      params: { probe: true },
+    }, '*');
+  });
+
+  await acknowledgeUnexpectedProtocol(page, ['task6/missing-response']);
+  await acknowledgePendingProtocol(page, [{
+    direction: 'app-to-host',
+    sequence: 1,
+    id: 'task6-missing-response',
+    method: 'task6/missing-response',
+  }]);
+});
+
+test('records malformed source-valid JSON-RPC instead of dropping it', async ({ page }) => {
+  const frame = await selectScenario(page, 'get_station_predictions');
+  await frame.evaluate(() => {
+    window.parent.postMessage({
+      jsonrpc: '2.0',
+      id: 'task6-malformed',
+      method: 42,
+      params: { probe: true },
+    }, '*');
+  });
+
+  await acknowledgeProtocolViolations(page, [{
+    kind: 'malformed',
+    direction: 'app-to-host',
+    sequence: 1,
+    id: 'task6-malformed',
+  }]);
+  await acknowledgeConsoleErrors(page, ['Failed to parse message']);
+  expect((await snapshot(page)).protocol ?? []).toContainEqual(expect.objectContaining({
+    kind: 'malformed',
+    id: 'task6-malformed',
+    method: 42,
+    params: { probe: true },
   }));
 });
 
@@ -674,7 +962,7 @@ test('detects WebSocket construction through both browser oracles', async ({ pag
   }, url);
 
   await acknowledgeSecurityEffects(page, ['network.WebSocket.construct']);
-  await acknowledgeWebSocket(page, url);
+  await acknowledgeWebSockets(page, [url]);
 });
 
 test('detects EventSource construction', async ({ page }) => {
@@ -689,6 +977,84 @@ test('detects EventSource construction', async ({ page }) => {
   });
 
   await acknowledgeSecurityEffects(page, ['network.EventSource.construct']);
+});
+
+test('does not acknowledge an unrelated security effect', async ({ page }) => {
+  const frame = await selectScenario(page, 'get_station_predictions');
+  await frame.evaluate(() => {
+    try {
+      const source = new EventSource('data:text/event-stream,data%3A%20expected%0A%0A');
+      source.close();
+    } catch {
+      // Constructor attempts are the observations under test.
+    }
+    void new XMLHttpRequest();
+  });
+
+  await expect(acknowledgeSecurityEffects(page, ['network.EventSource.construct']))
+    .rejects.toThrow();
+  await acknowledgeSecurityEffects(page, [
+    'network.EventSource.construct',
+    'network.XMLHttpRequest.construct',
+  ]);
+});
+
+test('does not acknowledge an unrelated WebSocket', async ({ page }) => {
+  const frame = await selectScenario(page, 'get_station_predictions');
+  const expectedUrl = 'ws://127.0.0.1:4178/task6-expected-websocket';
+  const unexpectedUrl = 'ws://127.0.0.1:4178/task6-unexpected-websocket';
+  await frame.evaluate(({ first, second }) => {
+    for (const url of [first, second]) {
+      try {
+        const socket = new WebSocket(url);
+        socket.close();
+      } catch {
+        // Constructor attempts are the observations under test.
+      }
+    }
+  }, { first: expectedUrl, second: unexpectedUrl });
+
+  await expect(acknowledgeWebSockets(page, [expectedUrl])).rejects.toThrow();
+  await acknowledgeWebSockets(page, [expectedUrl, unexpectedUrl]);
+  await acknowledgeSecurityEffects(page, [
+    'network.WebSocket.construct',
+    'network.WebSocket.construct',
+  ]);
+});
+
+test('does not acknowledge an unrelated console error', async ({ page }) => {
+  await page.evaluate(() => {
+    console.error('task6 expected console probe');
+    console.error('task6 unrelated console probe');
+  });
+
+  await expect(acknowledgeConsoleErrors(page, ['task6 expected console probe']))
+    .rejects.toThrow();
+  await acknowledgeConsoleErrors(page, [
+    'task6 expected console probe',
+    'task6 unrelated console probe',
+  ]);
+});
+
+test('does not acknowledge an unrelated protocol method', async ({ page }) => {
+  const frame = await selectScenario(page, 'get_station_predictions');
+  await frame.evaluate(() => {
+    window.parent.postMessage({
+      jsonrpc: '2.0',
+      method: 'task6/expected-notification',
+    }, '*');
+    window.parent.postMessage({
+      jsonrpc: '2.0',
+      method: 'task6/unrelated-notification',
+    }, '*');
+  });
+
+  await expect(acknowledgeUnexpectedProtocol(page, ['task6/expected-notification']))
+    .rejects.toThrow();
+  await acknowledgeUnexpectedProtocol(page, [
+    'task6/expected-notification',
+    'task6/unrelated-notification',
+  ]);
 });
 
 for (const [probe, expected] of [
@@ -759,6 +1125,7 @@ test('records storage access without changing normal storage outcomes', async ({
   expect(result).toEqual({ sameObject: true, value: 'preserved' });
   await acknowledgeSecurityEffects(page, [
     'storage.localStorage.get',
+    'storage.localStorage.get',
     'storage.localStorage.method.setItem',
     'storage.localStorage.method.getItem',
     'storage.localStorage.method.removeItem',
@@ -821,7 +1188,7 @@ for (const [property, expected] of [
 
     await acknowledgeSecurityEffects(page, [...expected]);
     if (property === 'geolocation') {
-      await acknowledgeConsoleError(page, 'Geolocation access has been blocked');
+      await acknowledgeConsoleErrors(page, ['Geolocation access has been blocked']);
     }
   });
 }
