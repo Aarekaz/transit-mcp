@@ -6,7 +6,8 @@
   },
   "include": [
     "src/**/*.ts",
-    "../../tests/unit/mcp-app-renderers.test.ts"
+    "../../tests/unit/mcp-app-renderers.test.ts",
+    "../../tests/unit/mcp-app-lifecycle.test.ts"
   ],
   "exclude": []
 }

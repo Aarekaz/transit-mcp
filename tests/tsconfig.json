@@ -14,6 +14,7 @@
   "exclude": [
     "../node_modules",
     "../dist",
-    "unit/mcp-app-renderers.test.ts"
+    "unit/mcp-app-renderers.test.ts",
+    "unit/mcp-app-lifecycle.test.ts"
   ]
 }

@@ -68,14 +68,19 @@ export function renderToolResult(
   container: HTMLElement,
   toolName: string,
   structuredContent: unknown,
-): void {
+): boolean {
   clear(container);
   container.setAttribute('aria-busy', 'false');
   if (!isSupportedToolName(toolName)) {
     container.append(unsupportedTool());
-    return;
+    return false;
   }
 
   const result = narrowToolResult(toolName, structuredContent);
-  container.append(result.ok ? renderModel(result.model) : unsupportedResult(result.viewLabel));
+  if (!result.ok) {
+    container.append(unsupportedResult(result.viewLabel));
+    return false;
+  }
+  container.append(renderModel(result.model));
+  return true;
 }
