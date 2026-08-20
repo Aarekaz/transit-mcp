@@ -38,6 +38,16 @@ const queryRequired = <ElementType extends Element>(
   return element;
 };
 
+const deepFreeze = <Value>(value: Value): Readonly<Value> => {
+  if (value !== null && typeof value === 'object') {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      deepFreeze(nested);
+    }
+    Object.freeze(value);
+  }
+  return value;
+};
+
 afterEach(() => {
   document.body.replaceChildren();
 });
@@ -331,6 +341,51 @@ describe('Transit Board service renderers', () => {
     expect(container.textContent).toContain('Gallery Place');
     expect(container.textContent).not.toContain('Metro Center');
   });
+
+  it.each([
+    ['1'],
+    ['2026-02-31T18:00:00.000Z'],
+  ])('rejects an untrustworthy service timestamp: %s', (lastUpdated) => {
+    const representative = EXPECTED_TOOL_CONTRACTS.get_incidents.structuredContent;
+    const container = mountResult('get_incidents', {
+      ...representative,
+      incidents: [{ ...representative.incidents[0], lastUpdated }],
+    });
+
+    expect(queryRequired(container, '[role="alert"]').textContent).toContain(
+      'This service incident result can’t be displayed',
+    );
+    expect(container.querySelector('time')).toBeNull();
+  });
+
+  it.each([
+    ['get_incidents', '2026-08-13T18:00:00.000Z'],
+    ['get_elevator_incidents', '2026-06-10T14:20:31'],
+  ])('accepts the %s producer timestamp format', (toolName, timestamp) => {
+    const result = toolName === 'get_incidents'
+      ? {
+          ...EXPECTED_TOOL_CONTRACTS.get_incidents.structuredContent,
+          incidents: [{
+            ...EXPECTED_TOOL_CONTRACTS.get_incidents.structuredContent.incidents[0],
+            lastUpdated: timestamp,
+          }],
+        }
+      : {
+          ...EXPECTED_TOOL_CONTRACTS.get_elevator_incidents.structuredContent,
+          elevatorIncidents: [{
+            ...EXPECTED_TOOL_CONTRACTS.get_elevator_incidents.structuredContent
+              .elevatorIncidents[0],
+            outOfServiceAt: timestamp,
+            lastUpdated: timestamp,
+          }],
+        };
+    const container = mountResult(toolName, result);
+
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect([...container.querySelectorAll('time')].some(time => (
+      time.getAttribute('datetime') === timestamp
+    ))).toBe(true);
+  });
 });
 
 describe('Transit Board route renderers', () => {
@@ -616,47 +671,76 @@ describe('Transit Board rendering boundary', () => {
     expect(queryRequired(container, '[data-empty-state]').textContent).toContain(message);
   });
 
-  it('keeps hostile strings inert across the new renderer families', () => {
+  it('keeps all new result models immutable and their hostile strings inert', () => {
     const hostile = '<img src=x onerror=alert(1)>';
     const cases: Array<[string, unknown]> = [
       ['get_incidents', {
-        city: 'dc',
+        ...EXPECTED_TOOL_CONTRACTS.get_incidents.structuredContent,
         incidents: [{
-          id: 'INC-X',
+          ...EXPECTED_TOOL_CONTRACTS.get_incidents.structuredContent.incidents[0],
           description: hostile,
-          linesAffected: ['RD'],
-          severity: 'Major',
-          type: 'Delay',
-          lastUpdated: '2026-08-13T18:00:00.000Z',
+        }],
+      }],
+      ['get_elevator_incidents', {
+        ...EXPECTED_TOOL_CONTRACTS.get_elevator_incidents.structuredContent,
+        elevatorIncidents: [{
+          ...EXPECTED_TOOL_CONTRACTS.get_elevator_incidents.structuredContent
+            .elevatorIncidents[0],
+          stationName: hostile,
         }],
       }],
       ['get_bus_routes', {
-        city: 'dc',
-        totalRoutes: 1,
-        routes: [{ id: 'X', name: hostile, description: null }],
+        ...EXPECTED_TOOL_CONTRACTS.get_bus_routes.structuredContent,
+        routes: [{
+          ...EXPECTED_TOOL_CONTRACTS.get_bus_routes.structuredContent.routes[0],
+          name: hostile,
+        }],
+      }],
+      ['get_bus_stops', {
+        ...EXPECTED_TOOL_CONTRACTS.get_bus_stops.structuredContent,
+        stops: [{
+          ...EXPECTED_TOOL_CONTRACTS.get_bus_stops.structuredContent.stops[0],
+          name: hostile,
+        }],
       }],
       ['get_bus_positions', {
-        city: 'dc',
-        routeFilter: null,
-        totalBuses: 1,
+        ...EXPECTED_TOOL_CONTRACTS.get_bus_positions.structuredContent,
         buses: [{
+          ...EXPECTED_TOOL_CONTRACTS.get_bus_positions.structuredContent.buses[0],
           vehicleId: hostile,
-          route: 'X',
-          direction: 'NORTHBOUND',
-          coordinates: { lat: 38.9, lon: -77 },
-          headsign: null,
-          deviation: null,
-          lastUpdated: '2026-08-13T18:00:00.000Z',
         }],
+      }],
+      ['get_train_positions', {
+        ...EXPECTED_TOOL_CONTRACTS.get_train_positions.structuredContent,
+        trains: [{
+          ...EXPECTED_TOOL_CONTRACTS.get_train_positions.structuredContent.trains[0],
+          destination: hostile,
+        }],
+      }],
+      ['get_route_info', {
+        ...EXPECTED_TOOL_CONTRACTS.get_route_info.structuredContent,
+        description: hostile,
       }],
     ];
 
     for (const [toolName, result] of cases) {
-      const container = mountResult(toolName, result);
+      const original = structuredClone(result);
+      const container = mountResult(toolName, deepFreeze(result));
+      for (const control of container.querySelectorAll<HTMLElement>('button, input, select')) {
+        if (control instanceof HTMLButtonElement) {
+          control.click();
+        } else {
+          control.dispatchEvent(new Event(
+            control instanceof HTMLSelectElement ? 'change' : 'input',
+            { bubbles: true },
+          ));
+        }
+      }
       expect(container.querySelector('img')).toBeNull();
       expect(container.querySelector('[onerror]')).toBeNull();
       expect(container.textContent).toContain(hostile);
       expect(container.querySelector('pre')).toBeNull();
+      expect(result).toEqual(original);
       container.remove();
     }
   });

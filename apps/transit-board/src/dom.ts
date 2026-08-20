@@ -51,6 +51,29 @@ export function button(
   return control;
 }
 
+export function selectFilter(
+  id: string,
+  name: string,
+  labelText: string,
+  allText: string,
+  values: readonly string[],
+): { wrapper: HTMLElement; select: HTMLSelectElement } {
+  const label = element('label', {
+    className: 'field-label',
+    text: labelText,
+    attributes: { for: id },
+  });
+  const select = element('select', {
+    className: 'filter-control',
+    attributes: { id, name },
+  });
+  select.append(element('option', { text: allText, attributes: { value: '' } }));
+  for (const value of values) {
+    select.append(element('option', { text: value, attributes: { value } }));
+  }
+  return { wrapper: element('div', { className: 'filter-bar' }, [label, select]), select };
+}
+
 export function viewHeader(
   city: string,
   title: string,
