@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": []
+  },
+  "include": [
+    "src/**/*.ts",
+    "../../tests/unit/mcp-app-renderers.test.ts",
+    "../../tests/unit/mcp-app-lifecycle.test.ts"
+  ],
+  "exclude": []
+}

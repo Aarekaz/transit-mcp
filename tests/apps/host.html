@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en" data-host-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Metro MCP Apps reference host</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", sans-serif;
+        background: oklch(0.955 0.012 92);
+        color: oklch(0.245 0.018 80);
+        --host-surface: oklch(0.985 0.008 92);
+        --host-muted: oklch(0.48 0.025 80);
+        --host-border: oklch(0.79 0.025 82);
+        --host-accent: oklch(0.49 0.105 62);
+      }
+
+      :root[data-host-theme="dark"] {
+        color-scheme: dark;
+        background: oklch(0.18 0.014 82);
+        color: oklch(0.93 0.012 88);
+        --host-surface: oklch(0.235 0.014 82);
+        --host-muted: oklch(0.71 0.02 87);
+        --host-border: oklch(0.4 0.022 82);
+        --host-accent: oklch(0.78 0.12 78);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-width: 0;
+      }
+
+      button,
+      select {
+        font: inherit;
+      }
+
+      .host-shell {
+        display: grid;
+        gap: clamp(1rem, 3vw, 2rem);
+        min-height: 100vh;
+        padding: clamp(1rem, 4vw, 2.75rem);
+      }
+
+      .host-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: end;
+        gap: 1rem;
+        border-bottom: 1px solid var(--host-border);
+        padding-bottom: 1rem;
+      }
+
+      .host-eyebrow,
+      .host-header h1,
+      .host-header p {
+        margin: 0;
+      }
+
+      .host-eyebrow {
+        color: var(--host-accent);
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .host-header h1 {
+        margin-top: 0.2rem;
+        font-size: clamp(1.4rem, 4vw, 2.2rem);
+        letter-spacing: -0.04em;
+      }
+
+      .host-header p {
+        max-width: 34rem;
+        color: var(--host-muted);
+        font-size: 0.88rem;
+        line-height: 1.45;
+      }
+
+      .host-controls {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(8rem, 1fr));
+        gap: 0.75rem;
+      }
+
+      .host-field {
+        display: grid;
+        gap: 0.3rem;
+        min-width: 0;
+        color: var(--host-muted);
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .host-field select {
+        min-width: 0;
+        width: 100%;
+        min-height: 2.5rem;
+        border: 1px solid var(--host-border);
+        border-radius: 0.25rem;
+        padding: 0.5rem;
+        background: var(--host-surface);
+        color: inherit;
+        font-weight: 500;
+        letter-spacing: 0;
+        text-transform: none;
+      }
+
+      .host-stage {
+        display: grid;
+        min-width: 0;
+        justify-items: center;
+      }
+
+      #app-frame {
+        display: block;
+        width: 736px;
+        max-width: 100%;
+        min-height: 16rem;
+        border: 0;
+        background: transparent;
+      }
+
+      #host-status {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+      }
+
+      @media (max-width: 72rem) {
+        .host-controls {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 40rem) {
+        .host-header,
+        .host-controls {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="host-shell">
+      <header class="host-header">
+        <div>
+          <p class="host-eyebrow">Local protocol fixture</p>
+          <h1>Transit Board reference host</h1>
+        </div>
+        <p>Sandboxed, deterministic MCP Apps lifecycle coverage with local transit fixtures.</p>
+      </header>
+
+      <section class="host-controls" aria-label="Host context controls">
+        <label class="host-field" for="tool-control">
+          Tool
+          <select id="tool-control">
+            <option value="get_station_predictions">get_station_predictions</option>
+            <option value="search_stations">search_stations</option>
+            <option value="get_stations_by_line">get_stations_by_line</option>
+            <option value="get_all_stations">get_all_stations</option>
+            <option value="get_station_transfers">get_station_transfers</option>
+            <option value="get_incidents">get_incidents</option>
+            <option value="get_elevator_incidents">get_elevator_incidents</option>
+            <option value="get_bus_predictions">get_bus_predictions</option>
+            <option value="get_bus_routes">get_bus_routes</option>
+            <option value="get_bus_stops">get_bus_stops</option>
+            <option value="get_bus_positions">get_bus_positions</option>
+            <option value="get_train_positions">get_train_positions</option>
+            <option value="get_route_info">get_route_info</option>
+          </select>
+        </label>
+
+        <label class="host-field" for="state-control">
+          Result
+          <select id="state-control">
+            <option value="ready">Ready</option>
+            <option value="empty">Empty</option>
+            <option value="error">Error</option>
+            <option value="hostile">Hostile text</option>
+          </select>
+        </label>
+
+        <label class="host-field" for="theme-control">
+          Theme
+          <select id="theme-control">
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+
+        <label class="host-field" for="display-control">
+          Display
+          <select id="display-control">
+            <option value="inline">Inline</option>
+            <option value="fullscreen">Fullscreen</option>
+          </select>
+        </label>
+
+        <label class="host-field" for="safe-area-control">
+          Safe area
+          <select id="safe-area-control">
+            <option value="off">Off</option>
+            <option value="on">12 / 16 / 20 / 24 px</option>
+          </select>
+        </label>
+
+        <label class="host-field" for="width-control">
+          Frame width
+          <select id="width-control">
+            <option value="736">736 px</option>
+            <option value="320">320 px</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="host-stage" aria-label="Sandboxed Transit Board">
+        <iframe
+          id="app-frame"
+          title="Metro MCP Transit Board"
+          sandbox="allow-scripts"
+          data-resource="/apps/transit-board.html"
+          src="about:blank"
+        ></iframe>
+      </section>
+
+      <p id="host-status" role="status" data-ready="false" data-scenario="">Preparing host.</p>
+    </main>
+    <script type="module" src="/tests/apps/host.ts"></script>
+  </body>
+</html>

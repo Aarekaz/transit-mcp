@@ -16,6 +16,11 @@ import {
   EXPECTED_PROMPT_NAMES,
   EXPECTED_RESOURCE_NAMES,
   EXPECTED_TOOL_NAMES,
+  TRANSIT_BOARD_MIME,
+  TRANSIT_BOARD_RESOURCE_CONTRACT,
+  TRANSIT_BOARD_RESOURCE_META,
+  TRANSIT_BOARD_TOOL_META,
+  TRANSIT_BOARD_URI,
 } from '../fixtures/mcp-contracts';
 
 function record(value: unknown): Record<string, unknown> {
@@ -72,6 +77,11 @@ describe('assembled MCP Worker', () => {
         cacheScope: 'public',
         supportedVersions: ['2026-07-28'],
         capabilities: {
+          extensions: {
+            'io.modelcontextprotocol/ui': {
+              mimeTypes: [TRANSIT_BOARD_MIME],
+            },
+          },
           tools: {},
           prompts: {},
           resources: {},
@@ -93,6 +103,9 @@ describe('assembled MCP Worker', () => {
 
     expect((tools.tools as Array<{ name: string }>).map(tool => tool.name))
       .toEqual(EXPECTED_TOOL_NAMES);
+    for (const tool of tools.tools as Array<{ _meta?: unknown }>) {
+      expect(tool._meta).toEqual(TRANSIT_BOARD_TOOL_META);
+    }
     expect((resources.resourceTemplates as Array<{ name: string }>).map(item => item.name))
       .toEqual(EXPECTED_RESOURCE_NAMES);
     expect((prompts.prompts as Array<{ name: string }>).map(prompt => prompt.name))
@@ -104,6 +117,66 @@ describe('assembled MCP Worker', () => {
         cacheScope: 'public',
       });
     }
+  });
+
+  it('lists and reads the committed Transit Board asset through authenticated MCP', async () => {
+    const publicAssetResponse = await SELF.fetch(`${TEST_ORIGIN}/apps/transit-board.html`, {
+      headers: { Host: 'metro-mcp.anuragd.me' },
+    });
+    const [listResponse, readResponse] = await Promise.all([
+      SELF.fetch(await modernMcpRequest('resources/list')),
+      SELF.fetch(await modernMcpRequest('resources/read', { uri: TRANSIT_BOARD_URI })),
+    ]);
+    const listed = onlyResult(await readMcpResponse(listResponse));
+    const read = onlyResult(await readMcpResponse(readResponse));
+    const publicHtml = await publicAssetResponse.text();
+
+    expect(publicAssetResponse.status).toBe(200);
+    expect(publicHtml).toMatch(/^<!doctype html>/i);
+    expect(new TextEncoder().encode(publicHtml).byteLength).toBeLessThanOrEqual(1_048_576);
+    expect((listed.resources as unknown[])[0]).toEqual({
+      uri: TRANSIT_BOARD_URI,
+      name: TRANSIT_BOARD_RESOURCE_CONTRACT.name,
+      mimeType: TRANSIT_BOARD_MIME,
+      _meta: TRANSIT_BOARD_RESOURCE_META,
+    });
+    expect(read).toEqual({
+      resultType: 'complete',
+      ttlMs: 86_400_000,
+      cacheScope: 'public',
+      _meta: {
+        'io.modelcontextprotocol/serverInfo': {
+          name: 'metro-mcp',
+          version: '5.0.0',
+        },
+      },
+      contents: [{
+        uri: TRANSIT_BOARD_URI,
+        mimeType: TRANSIT_BOARD_MIME,
+        text: publicHtml,
+        _meta: TRANSIT_BOARD_RESOURCE_META,
+      }],
+    });
+  });
+
+  it('protects Transit Board resource reads before the asset binding is reached', async () => {
+    const request = new Request(`${TEST_ORIGIN}/mcp`, {
+      method: 'POST',
+      headers: {
+        Host: 'metro-mcp.anuragd.me',
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'MCP-Protocol-Version': '2026-07-28',
+        'Mcp-Method': 'resources/read',
+        'Mcp-Name': TRANSIT_BOARD_URI,
+      },
+      body: JSON.stringify(modernEnvelope('resources/read', { uri: TRANSIT_BOARD_URI })),
+    });
+
+    const response = await SELF.fetch(request);
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('www-authenticate')).toContain('resource_metadata=');
   });
 
   it('serves representative modern tool, resource, and prompt calls', async () => {
@@ -129,6 +202,11 @@ describe('assembled MCP Worker', () => {
       resultType: 'complete',
       structuredContent: { city: 'nyc', query: 'Times Sq' },
     });
+    const structuredContent = record(tool.structuredContent);
+    expect(tool.content).toEqual([{
+      type: 'text',
+      text: JSON.stringify(structuredContent),
+    }]);
     expect(tool).not.toHaveProperty('ttlMs');
     expect(resource).toMatchObject({
       resultType: 'complete',
@@ -161,7 +239,14 @@ describe('assembled MCP Worker', () => {
     const ambiguous = onlyResult(await readMcpResponse(ambiguousResponse));
     expect((list.tools as Array<{ name: string }>).map(tool => tool.name))
       .toEqual(EXPECTED_TOOL_NAMES);
+    for (const tool of list.tools as Array<{ _meta?: unknown }>) {
+      expect(tool._meta).toEqual(TRANSIT_BOARD_TOOL_META);
+    }
     expect(call).toMatchObject({ structuredContent: { city: 'nyc', query: 'Times Sq' } });
+    expect(call.content).toEqual([{
+      type: 'text',
+      text: JSON.stringify(record(call.structuredContent)),
+    }]);
     expect(ambiguous).toMatchObject({ isError: true });
     expect(JSON.stringify(ambiguous)).toContain('please call get_station_predictions again');
   });

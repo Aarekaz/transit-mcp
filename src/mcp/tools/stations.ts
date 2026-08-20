@@ -12,6 +12,7 @@ import { formatStationPredictionsForMcp } from '../prediction-format';
 import { getTransitClient } from '../../transit/registry';
 import type { SupportedCity, TransitStation } from '../../transit/base';
 import type { MetroMcpContext, MetroRequestState } from '../context';
+import { TRANSIT_BOARD_TOOL_META } from '../apps';
 import {
   READ_ONLY_LIVE,
   citySchema,
@@ -72,6 +73,7 @@ export function registerStationTools(
       description:
         'Get real-time train arrival predictions for a transit station. Supports DC Metro and NYC Subway.',
       annotations: READ_ONLY_LIVE,
+      _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({
         city: citySchema,
         stationName: z.string().describe(
@@ -194,6 +196,7 @@ export function registerStationTools(
       title: 'Search stations',
       description: 'Search for transit stations by name or code. Supports DC Metro and NYC Subway.',
       annotations: READ_ONLY_LIVE,
+      _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({
         city: citySchema,
         query: z.string().describe('Search query (station name or code)'),
@@ -224,6 +227,7 @@ export function registerStationTools(
       title: 'Stations on a line',
       description: 'Get all stations on a specific transit line. Supports DC Metro and NYC Subway.',
       annotations: READ_ONLY_LIVE,
+      _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({
         city: citySchema,
         lineCode: z.string().describe(
@@ -256,6 +260,7 @@ export function registerStationTools(
       title: 'All stations',
       description: 'Get complete list of all transit stations with coordinates.',
       annotations: READ_ONLY_LIVE,
+      _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({ city: citySchema }),
       outputSchema: z.object({
         city: citySchema,
@@ -304,6 +309,7 @@ export function registerStationTools(
       description:
         'Get transfer connections and nearby stations from a transit station. NYC Subway only.',
       annotations: READ_ONLY_LIVE,
+      _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({
         city: z.enum(['nyc']),
         stationId: z.string().describe('Station ID (e.g., "127" for Times Square)'),

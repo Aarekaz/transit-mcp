@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getTransitClient } from '../../transit/registry';
 import type { WMATAClient } from '../../transit/wmata-client';
 import type { MetroMcpContext } from '../context';
+import { TRANSIT_BOARD_TOOL_META } from '../apps';
 import { READ_ONLY_LIVE, complete, withTransitErrors } from '../shared';
 
 /** Register the DC live train positions tool. */
@@ -16,6 +17,7 @@ export function registerTrainTools(
       title: 'Live train positions',
       description: 'Get real-time positions of all trains on the DC Metro system.',
       annotations: READ_ONLY_LIVE,
+      _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({}),
       outputSchema: z.object({
         city: z.literal('dc'),
