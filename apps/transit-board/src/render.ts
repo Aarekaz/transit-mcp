@@ -1,14 +1,17 @@
 import { clear, element } from './dom';
-import { isTaskTwoToolName, narrowToolResult, type TaskTwoRenderModel } from './model';
+import { isSupportedToolName, narrowToolResult, type TransitRenderModel } from './model';
 import { renderBusArrivals, renderRailArrivals } from './renderers/arrivals';
+import { renderBusRoutes, renderBusStops, renderRouteDetail } from './renderers/routes';
+import { renderElevatorIncidents, renderServiceIncidents } from './renderers/service';
 import {
   renderLineStations,
   renderStationDirectory,
   renderStationSearch,
   renderStationTransfers,
 } from './renderers/stations';
+import { renderBusPositions, renderTrainPositions } from './renderers/vehicles';
 
-function renderModel(model: TaskTwoRenderModel): HTMLElement {
+function renderModel(model: TransitRenderModel): HTMLElement {
   switch (model.kind) {
     case 'rail-arrivals':
       return renderRailArrivals(model);
@@ -22,6 +25,20 @@ function renderModel(model: TaskTwoRenderModel): HTMLElement {
       return renderStationDirectory(model);
     case 'station-transfers':
       return renderStationTransfers(model);
+    case 'service-incidents':
+      return renderServiceIncidents(model);
+    case 'elevator-incidents':
+      return renderElevatorIncidents(model);
+    case 'bus-routes':
+      return renderBusRoutes(model);
+    case 'bus-stops':
+      return renderBusStops(model);
+    case 'bus-positions':
+      return renderBusPositions(model);
+    case 'train-positions':
+      return renderTrainPositions(model);
+    case 'route-detail':
+      return renderRouteDetail(model);
   }
 }
 
@@ -54,7 +71,7 @@ export function renderToolResult(
 ): void {
   clear(container);
   container.setAttribute('aria-busy', 'false');
-  if (!isTaskTwoToolName(toolName)) {
+  if (!isSupportedToolName(toolName)) {
     container.append(unsupportedTool());
     return;
   }

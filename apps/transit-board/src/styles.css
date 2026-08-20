@@ -449,6 +449,144 @@ h2 {
   border-color: light-dark(oklch(0.58 0.14 35), oklch(0.7 0.14 35));
 }
 
+.service-view,
+.vehicle-view,
+.route-detail-view {
+  padding: clamp(0.15rem, 1vw, 0.4rem);
+}
+
+.service-filters {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.service-list,
+.route-list,
+.vehicle-list {
+  display: grid;
+  gap: 0.45rem;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.service-row,
+.vehicle-row,
+.route-detail-panel {
+  display: grid;
+  gap: 0.45rem;
+  min-inline-size: 0;
+  padding: clamp(0.7rem, 2.5vw, 0.95rem);
+  border: 1px solid var(--board-border);
+  background: var(--board-panel);
+}
+
+.service-row p,
+.service-row time,
+.service-row span,
+.vehicle-row p,
+.vehicle-row time,
+.detail-description {
+  margin: 0;
+  color: var(--board-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.service-row-heading,
+.vehicle-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
+.vehicle-heading {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.severity-label,
+.systemwide-label {
+  color: var(--board-accent) !important;
+  font-weight: 750;
+}
+
+.service-location,
+.service-unit {
+  font-weight: 680;
+}
+
+.time-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  padding-block-start: 0.2rem;
+  border-block-start: 1px solid var(--board-border);
+}
+
+.route-row {
+  display: grid;
+  min-inline-size: 0;
+}
+
+.route-select {
+  min-inline-size: 0;
+  inline-size: 100%;
+  min-block-size: 3rem;
+  padding: 0.6rem 0.7rem;
+  border: 0;
+  border-block-start: 1px solid var(--board-border);
+  background: transparent;
+  color: var(--board-ink);
+  font-weight: 700;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
+.route-select:hover,
+.route-select[aria-pressed="true"] {
+  background: color-mix(in oklch, var(--board-accent) 10%, var(--board-panel));
+}
+
+.route-detail-panel {
+  align-content: start;
+}
+
+.route-detail-panel .line-badge {
+  min-inline-size: 1.55rem;
+  min-block-size: 1.55rem;
+  font-size: 0.64rem;
+}
+
+.plot-host {
+  min-inline-size: 0;
+  border: 1px solid var(--board-border);
+  background:
+    linear-gradient(var(--board-border) 1px, transparent 1px) 0 0 / 100% 25%,
+    linear-gradient(90deg, var(--board-border) 1px, transparent 1px) 0 0 / 25% 100%,
+    var(--board-panel);
+}
+
+.vehicle-plot {
+  display: block;
+  inline-size: 100%;
+  max-block-size: 15rem;
+  color: var(--board-accent);
+}
+
+.vehicle-plot circle {
+  fill: currentColor;
+  stroke: var(--board-panel);
+  stroke-width: 1.2;
+}
+
+.vehicle-row .line-badge {
+  color: var(--board-accent);
+}
+
 @media (min-width: 36rem) {
   .directory-layout {
     grid-template-columns: minmax(0, 1.15fr) minmax(13rem, 0.85fr);
@@ -458,6 +596,14 @@ h2 {
   .detail-host {
     position: sticky;
     inset-block-start: 0.5rem;
+  }
+
+  .service-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vehicle-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -489,12 +635,18 @@ h2 {
   .station-code {
     text-align: start;
   }
+
+  .service-row-heading,
+  .vehicle-heading {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .transit-board,
   .station-select,
-  .line-focus {
+  .line-focus,
+  .route-select {
     transition: background-color 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
   }
 }

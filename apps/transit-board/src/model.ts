@@ -1,13 +1,20 @@
-export const TASK_TWO_TOOL_NAMES = [
+export const SUPPORTED_TOOL_NAMES = [
   'get_station_predictions',
-  'get_bus_predictions',
   'search_stations',
   'get_stations_by_line',
   'get_all_stations',
   'get_station_transfers',
+  'get_incidents',
+  'get_elevator_incidents',
+  'get_bus_predictions',
+  'get_bus_routes',
+  'get_bus_stops',
+  'get_bus_positions',
+  'get_train_positions',
+  'get_route_info',
 ] as const;
 
-export type TaskTwoToolName = (typeof TASK_TWO_TOOL_NAMES)[number];
+export type SupportedToolName = (typeof SUPPORTED_TOOL_NAMES)[number];
 export type TransitCity = 'dc' | 'nyc';
 
 export type RailPrediction = {
@@ -96,22 +103,144 @@ export type StationTransfersModel = {
   transfers: StationTransfer[];
 };
 
-export type TaskTwoRenderModel =
+export type ServiceIncident = {
+  id: string;
+  description: string;
+  linesAffected: string[];
+  severity: string;
+  type: string;
+  lastUpdated: string;
+};
+
+export type ElevatorIncident = {
+  id: string;
+  description: string;
+  unitName: string;
+  unitType: string;
+  stationCode: string;
+  stationName: string;
+  locationDescription: string;
+  symptomDescription: string;
+  outOfServiceAt: string;
+  estimatedReturnToService: string | null;
+  lastUpdated: string;
+};
+
+export type BusRoute = {
+  id: string;
+  name: string;
+  description: string | null;
+};
+
+export type BusStop = {
+  id: string;
+  name: string;
+  coordinates: { lat: number; lon: number };
+  routes: string[];
+};
+
+export type SearchLocation = {
+  lat: number;
+  lon: number;
+  radiusMeters: number | null;
+};
+
+export type BusPosition = {
+  vehicleId: string;
+  route: string;
+  direction: string;
+  coordinates: { lat: number; lon: number };
+  headsign: string | null;
+  deviation: number | null;
+  lastUpdated: string;
+};
+
+export type TrainPosition = {
+  trainId: string;
+  trainNumber: string | null;
+  line: string | null;
+  destination: string | null;
+  carCount: number | null;
+  direction: 'Northbound/Eastbound' | 'Southbound/Westbound';
+  circuitId: number | null;
+  secondsAtLocation: number | null;
+  serviceType: string | null;
+};
+
+export type ServiceIncidentsModel = {
+  kind: 'service-incidents';
+  city: TransitCity;
+  incidents: ServiceIncident[];
+};
+
+export type ElevatorIncidentsModel = {
+  kind: 'elevator-incidents';
+  city: 'dc';
+  incidents: ElevatorIncident[];
+};
+
+export type BusRoutesModel = {
+  kind: 'bus-routes';
+  city: 'dc';
+  totalRoutes: number;
+  routes: BusRoute[];
+};
+
+export type BusStopsModel = {
+  kind: 'bus-stops';
+  city: 'dc';
+  totalStops: number;
+  searchLocation: SearchLocation | null;
+  stops: BusStop[];
+};
+
+export type BusPositionsModel = {
+  kind: 'bus-positions';
+  city: 'dc';
+  routeFilter: string | null;
+  totalBuses: number;
+  buses: BusPosition[];
+};
+
+export type TrainPositionsModel = {
+  kind: 'train-positions';
+  city: 'dc';
+  totalTrains: number;
+  trains: TrainPosition[];
+};
+
+export type RouteDetailModel = {
+  kind: 'route-detail';
+  city: 'nyc';
+  routeId: string;
+  shortName: string;
+  longName: string;
+  description: string;
+};
+
+export type TransitRenderModel =
   | RailArrivalsModel
   | BusArrivalsModel
   | StationSearchModel
   | LineStationsModel
   | StationDirectoryModel
-  | StationTransfersModel;
+  | StationTransfersModel
+  | ServiceIncidentsModel
+  | ElevatorIncidentsModel
+  | BusRoutesModel
+  | BusStopsModel
+  | BusPositionsModel
+  | TrainPositionsModel
+  | RouteDetailModel;
 
 export type NarrowResult =
-  | { ok: true; model: TaskTwoRenderModel }
+  | { ok: true; model: TransitRenderModel }
   | { ok: false; viewLabel: string };
 
 type UnknownRecord = Record<string, unknown>;
 
-export function isTaskTwoToolName(toolName: string): toolName is TaskTwoToolName {
-  return TASK_TWO_TOOL_NAMES.some(candidate => candidate === toolName);
+export function isSupportedToolName(toolName: string): toolName is SupportedToolName {
+  return SUPPORTED_TOOL_NAMES.some(candidate => candidate === toolName);
 }
 
 export function isRecord(value: unknown): value is UnknownRecord {
@@ -131,12 +260,29 @@ function nonNegativeInteger(value: unknown): number | undefined {
   return number !== undefined && Number.isInteger(number) && number >= 0 ? number : undefined;
 }
 
+function nullableFiniteNumber(value: unknown): number | null | undefined {
+  return value === null ? null : finiteNumber(value);
+}
+
+function nullableNonNegativeInteger(value: unknown): number | null | undefined {
+  return value === null ? null : nonNegativeInteger(value);
+}
+
 function city(value: unknown): TransitCity | undefined {
   return value === 'dc' || value === 'nyc' ? value : undefined;
 }
 
 function nullableDisplayString(value: unknown): string | null | undefined {
   return value === null ? null : displayString(value);
+}
+
+function timestamp(value: unknown): string | undefined {
+  const text = displayString(value);
+  return text !== undefined && Number.isFinite(Date.parse(text)) ? text : undefined;
+}
+
+function nullableTimestamp(value: unknown): string | null | undefined {
+  return value === null ? null : timestamp(value);
 }
 
 function displayStringArray(value: unknown): string[] | undefined {
@@ -310,6 +456,187 @@ function parseStations(value: unknown): Station[] | undefined {
   return parseArray(value, parseStation);
 }
 
+function parseServiceIncident(value: unknown): ServiceIncident | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const id = displayString(value.id);
+  const description = displayString(value.description);
+  const linesAffected = displayStringArray(value.linesAffected);
+  const severity = displayString(value.severity);
+  const type = displayString(value.type);
+  const lastUpdated = timestamp(value.lastUpdated);
+  if (
+    id === undefined
+    || description === undefined
+    || linesAffected === undefined
+    || severity === undefined
+    || type === undefined
+    || lastUpdated === undefined
+  ) {
+    return undefined;
+  }
+  return { id, description, linesAffected, severity, type, lastUpdated };
+}
+
+function parseElevatorIncident(value: unknown): ElevatorIncident | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const id = displayString(value.id);
+  const description = displayString(value.description);
+  const unitName = displayString(value.unitName);
+  const unitType = displayString(value.unitType);
+  const stationCode = displayString(value.stationCode);
+  const stationName = displayString(value.stationName);
+  const locationDescription = displayString(value.locationDescription);
+  const symptomDescription = displayString(value.symptomDescription);
+  const outOfServiceAt = timestamp(value.outOfServiceAt);
+  const estimatedReturnToService = nullableTimestamp(value.estimatedReturnToService);
+  const lastUpdated = timestamp(value.lastUpdated);
+  if (
+    id === undefined
+    || description === undefined
+    || unitName === undefined
+    || unitType === undefined
+    || stationCode === undefined
+    || stationName === undefined
+    || locationDescription === undefined
+    || symptomDescription === undefined
+    || outOfServiceAt === undefined
+    || estimatedReturnToService === undefined
+    || lastUpdated === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    id,
+    description,
+    unitName,
+    unitType,
+    stationCode,
+    stationName,
+    locationDescription,
+    symptomDescription,
+    outOfServiceAt,
+    estimatedReturnToService,
+    lastUpdated,
+  };
+}
+
+function parseBusRoute(value: unknown): BusRoute | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const id = displayString(value.id);
+  const name = displayString(value.name);
+  const description = nullableDisplayString(value.description);
+  return id !== undefined && name !== undefined && description !== undefined
+    ? { id, name, description }
+    : undefined;
+}
+
+function parseCoordinates(value: unknown): { lat: number; lon: number } | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const lat = finiteNumber(value.lat);
+  const lon = finiteNumber(value.lon);
+  return lat !== undefined && lon !== undefined ? { lat, lon } : undefined;
+}
+
+function parseBusStop(value: unknown): BusStop | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const id = displayString(value.id);
+  const name = displayString(value.name);
+  const coordinates = parseCoordinates(value.coordinates);
+  const routes = displayStringArray(value.routes);
+  return id !== undefined && name !== undefined && coordinates !== undefined && routes !== undefined
+    ? { id, name, coordinates, routes }
+    : undefined;
+}
+
+function parseSearchLocation(value: unknown): SearchLocation | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const lat = finiteNumber(value.lat);
+  const lon = finiteNumber(value.lon);
+  const radiusMeters = nullableFiniteNumber(value.radiusMeters);
+  return lat !== undefined && lon !== undefined && radiusMeters !== undefined
+    ? { lat, lon, radiusMeters }
+    : undefined;
+}
+
+function parseBusPosition(value: unknown): BusPosition | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const vehicleId = displayString(value.vehicleId);
+  const route = displayString(value.route);
+  const direction = displayString(value.direction);
+  const coordinates = parseCoordinates(value.coordinates);
+  const headsign = nullableDisplayString(value.headsign);
+  const deviation = nullableFiniteNumber(value.deviation);
+  const lastUpdated = timestamp(value.lastUpdated);
+  if (
+    vehicleId === undefined
+    || route === undefined
+    || direction === undefined
+    || coordinates === undefined
+    || headsign === undefined
+    || deviation === undefined
+    || lastUpdated === undefined
+  ) {
+    return undefined;
+  }
+  return { vehicleId, route, direction, coordinates, headsign, deviation, lastUpdated };
+}
+
+function parseTrainPosition(value: unknown): TrainPosition | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const trainId = displayString(value.trainId);
+  const trainNumber = nullableDisplayString(value.trainNumber);
+  const line = nullableDisplayString(value.line);
+  const destination = nullableDisplayString(value.destination);
+  const carCount = nullableNonNegativeInteger(value.carCount);
+  const direction = value.direction;
+  const circuitId = nullableNonNegativeInteger(value.circuitId);
+  const secondsAtLocation = nullableNonNegativeInteger(value.secondsAtLocation);
+  const serviceType = nullableDisplayString(value.serviceType);
+  if (
+    trainId === undefined
+    || trainNumber === undefined
+    || line === undefined
+    || destination === undefined
+    || carCount === undefined
+    || (direction !== 'Northbound/Eastbound' && direction !== 'Southbound/Westbound')
+    || circuitId === undefined
+    || secondsAtLocation === undefined
+    || serviceType === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    trainId,
+    trainNumber,
+    line,
+    destination,
+    carCount,
+    direction,
+    circuitId,
+    secondsAtLocation,
+    serviceType,
+  };
+}
+
 function malformed(viewLabel: string): NarrowResult {
   return { ok: false, viewLabel };
 }
@@ -403,7 +730,100 @@ function narrowStationTransfers(value: unknown): NarrowResult {
     : malformed('station transfer');
 }
 
-export function narrowToolResult(toolName: TaskTwoToolName, value: unknown): NarrowResult {
+function narrowServiceIncidents(value: unknown): NarrowResult {
+  if (!isRecord(value)) {
+    return malformed('service incident');
+  }
+  const resultCity = city(value.city);
+  const incidents = parseArray(value.incidents, parseServiceIncident);
+  return resultCity !== undefined && incidents !== undefined
+    ? { ok: true, model: { kind: 'service-incidents', city: resultCity, incidents } }
+    : malformed('service incident');
+}
+
+function narrowElevatorIncidents(value: unknown): NarrowResult {
+  if (!isRecord(value)) {
+    return malformed('elevator incident');
+  }
+  const incidents = parseArray(value.elevatorIncidents, parseElevatorIncident);
+  return value.city === 'dc' && incidents !== undefined
+    ? { ok: true, model: { kind: 'elevator-incidents', city: 'dc', incidents } }
+    : malformed('elevator incident');
+}
+
+function narrowBusRoutes(value: unknown): NarrowResult {
+  if (!isRecord(value)) {
+    return malformed('bus route');
+  }
+  const totalRoutes = nonNegativeInteger(value.totalRoutes);
+  const routes = parseArray(value.routes, parseBusRoute);
+  return value.city === 'dc' && totalRoutes !== undefined && routes !== undefined
+    ? { ok: true, model: { kind: 'bus-routes', city: 'dc', totalRoutes, routes } }
+    : malformed('bus route');
+}
+
+function narrowBusStops(value: unknown): NarrowResult {
+  if (!isRecord(value)) {
+    return malformed('bus stop');
+  }
+  const totalStops = nonNegativeInteger(value.totalStops);
+  const searchLocation = parseSearchLocation(value.searchLocation);
+  const stops = parseArray(value.stops, parseBusStop);
+  return value.city === 'dc'
+    && totalStops !== undefined
+    && searchLocation !== undefined
+    && stops !== undefined
+    ? { ok: true, model: { kind: 'bus-stops', city: 'dc', totalStops, searchLocation, stops } }
+    : malformed('bus stop');
+}
+
+function narrowBusPositions(value: unknown): NarrowResult {
+  if (!isRecord(value)) {
+    return malformed('bus position');
+  }
+  const routeFilter = nullableDisplayString(value.routeFilter);
+  const totalBuses = nonNegativeInteger(value.totalBuses);
+  const buses = parseArray(value.buses, parseBusPosition);
+  return value.city === 'dc'
+    && routeFilter !== undefined
+    && totalBuses !== undefined
+    && buses !== undefined
+    ? { ok: true, model: { kind: 'bus-positions', city: 'dc', routeFilter, totalBuses, buses } }
+    : malformed('bus position');
+}
+
+function narrowTrainPositions(value: unknown): NarrowResult {
+  if (!isRecord(value)) {
+    return malformed('train position');
+  }
+  const totalTrains = nonNegativeInteger(value.totalTrains);
+  const trains = parseArray(value.trains, parseTrainPosition);
+  return value.city === 'dc' && totalTrains !== undefined && trains !== undefined
+    ? { ok: true, model: { kind: 'train-positions', city: 'dc', totalTrains, trains } }
+    : malformed('train position');
+}
+
+function narrowRouteDetail(value: unknown): NarrowResult {
+  if (!isRecord(value)) {
+    return malformed('route detail');
+  }
+  const routeId = displayString(value.routeId);
+  const shortName = displayString(value.shortName);
+  const longName = displayString(value.longName);
+  const description = displayString(value.description);
+  return value.city === 'nyc'
+    && routeId !== undefined
+    && shortName !== undefined
+    && longName !== undefined
+    && description !== undefined
+    ? {
+      ok: true,
+      model: { kind: 'route-detail', city: 'nyc', routeId, shortName, longName, description },
+    }
+    : malformed('route detail');
+}
+
+export function narrowToolResult(toolName: SupportedToolName, value: unknown): NarrowResult {
   switch (toolName) {
     case 'get_station_predictions':
       return narrowRailArrivals(value);
@@ -417,5 +837,19 @@ export function narrowToolResult(toolName: TaskTwoToolName, value: unknown): Nar
       return narrowStationDirectory(value);
     case 'get_station_transfers':
       return narrowStationTransfers(value);
+    case 'get_incidents':
+      return narrowServiceIncidents(value);
+    case 'get_elevator_incidents':
+      return narrowElevatorIncidents(value);
+    case 'get_bus_routes':
+      return narrowBusRoutes(value);
+    case 'get_bus_stops':
+      return narrowBusStops(value);
+    case 'get_bus_positions':
+      return narrowBusPositions(value);
+    case 'get_train_positions':
+      return narrowTrainPositions(value);
+    case 'get_route_info':
+      return narrowRouteDetail(value);
   }
 }

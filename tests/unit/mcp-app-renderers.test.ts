@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { EXPECTED_TOOL_CONTRACTS } from '../fixtures/mcp-contracts';
+import { EXPECTED_TOOL_CONTRACTS, EXPECTED_TOOL_NAMES } from '../fixtures/mcp-contracts';
+import { SUPPORTED_TOOL_NAMES as SUPPORTED_RENDERER_NAMES } from '../../apps/transit-board/src/model';
 import { renderToolResult } from '../../apps/transit-board/src/render';
 
 const directoryResult = {
@@ -251,7 +252,233 @@ describe('Transit Board station and network renderers', () => {
   });
 });
 
+describe('Transit Board service renderers', () => {
+  it('renders service incidents with client-only severity and line filters', () => {
+    const representative = EXPECTED_TOOL_CONTRACTS.get_incidents.structuredContent;
+    const result = {
+      ...representative,
+      incidents: [
+        representative.incidents[0],
+        {
+          id: 'INC-43',
+          description: 'Blue Line single tracking',
+          linesAffected: ['BL'],
+          severity: 'Minor',
+          type: 'Maintenance',
+          lastUpdated: '2026-08-13T18:02:00.000Z',
+        },
+      ],
+    };
+    const container = mountResult('get_incidents', result);
+
+    expect(queryRequired(container, 'section[data-view="service-incidents"]')).toBeTruthy();
+    expect(queryRequired(container, 'h1').textContent).toBe('DC service incidents');
+    expect(container.textContent).toContain('Major');
+    expect(container.textContent).toContain('RD');
+    expect(queryRequired(container, 'time').getAttribute('datetime')).toBe(
+      '2026-08-13T18:00:00.000Z',
+    );
+    const severity = queryRequired<HTMLSelectElement>(container, 'select[name="severity-filter"]');
+    const line = queryRequired<HTMLSelectElement>(container, 'select[name="line-filter"]');
+    expect(severity.labels?.[0]?.textContent).toContain('Severity');
+    expect(line.labels?.[0]?.textContent).toContain('Line');
+
+    severity.value = 'Minor';
+    severity.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(container.querySelectorAll('[data-incident-row]')).toHaveLength(1);
+    expect(container.textContent).toContain('Blue Line single tracking');
+    expect(container.textContent).not.toContain('Red Line delay');
+
+    severity.value = '';
+    line.value = 'RD';
+    line.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(container.querySelectorAll('[data-incident-row]')).toHaveLength(1);
+    expect(container.textContent).toContain('Red Line delay');
+  });
+
+  it('renders elevator outages with a station filter and operational details', () => {
+    const representative = EXPECTED_TOOL_CONTRACTS.get_elevator_incidents.structuredContent;
+    const result = {
+      ...representative,
+      elevatorIncidents: [
+        representative.elevatorIncidents[0],
+        {
+          ...representative.elevatorIncidents[0],
+          id: 'EL-2',
+          unitName: 'ES-2',
+          unitType: 'ESCALATOR',
+          stationCode: 'B01',
+          stationName: 'Gallery Place',
+          locationDescription: 'Arena entrance',
+          symptomDescription: 'Out of service',
+          description: 'Unscheduled outage',
+          estimatedReturnToService: '2026-08-13T22:00:00.000Z',
+        },
+      ],
+    };
+    const container = mountResult('get_elevator_incidents', result);
+
+    expect(queryRequired(container, 'section[data-view="elevator-incidents"]')).toBeTruthy();
+    expect(queryRequired(container, 'h1').textContent).toBe('DC elevator and escalator outages');
+    expect(container.textContent).toContain('12th St entrance');
+    expect(container.textContent).toContain('Return time unavailable');
+    const filter = queryRequired<HTMLInputElement>(container, 'input[name="station-filter"]');
+    expect(filter.labels?.[0]?.textContent).toContain('Station');
+
+    filter.value = 'gallery';
+    filter.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(container.querySelectorAll('[data-elevator-row]')).toHaveLength(1);
+    expect(container.textContent).toContain('Gallery Place');
+    expect(container.textContent).not.toContain('Metro Center');
+  });
+});
+
+describe('Transit Board route renderers', () => {
+  it('filters and selects bus routes without mutating the source result', () => {
+    const representative = EXPECTED_TOOL_CONTRACTS.get_bus_routes.structuredContent;
+    const result = {
+      ...representative,
+      totalRoutes: 2,
+      routes: [
+        representative.routes[0],
+        { id: 'X2', name: 'Benning Road-H Street', description: 'Limited-stop service' },
+      ],
+    };
+    const original = structuredClone(result);
+    const container = mountResult('get_bus_routes', result);
+
+    expect(queryRequired(container, 'section[data-view="bus-routes"]')).toBeTruthy();
+    expect(queryRequired(container, 'h1').textContent).toBe('DC bus routes');
+    const filter = queryRequired<HTMLInputElement>(container, 'input[name="route-search"]');
+    filter.value = 'X2';
+    filter.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(container.querySelectorAll('[data-route-row]')).toHaveLength(1);
+    const route = queryRequired<HTMLButtonElement>(container, '[data-route-row] button');
+    expect(route.type).toBe('button');
+    route.click();
+    expect(route.getAttribute('aria-pressed')).toBe('true');
+    expect(queryRequired(container, '[data-route-detail]').textContent).toContain(
+      'Limited-stop service',
+    );
+    expect(result).toEqual(original);
+  });
+
+  it('renders bus-stop search context with filterable, selectable stops', () => {
+    const representative = EXPECTED_TOOL_CONTRACTS.get_bus_stops.structuredContent;
+    const result = {
+      ...representative,
+      totalStops: 2,
+      searchLocation: { lat: 38.9, lon: -77.03, radiusMeters: 750 },
+      stops: [
+        representative.stops[0],
+        {
+          id: '1001196',
+          name: '14TH ST NW + H ST NW',
+          coordinates: { lat: 38.9002, lon: -77.031 },
+          routes: ['X2'],
+        },
+      ],
+    };
+    const container = mountResult('get_bus_stops', result);
+
+    expect(queryRequired(container, 'section[data-view="bus-stops"]')).toBeTruthy();
+    expect(container.textContent).toContain('750 m around 38.9, -77.03');
+    const filter = queryRequired<HTMLInputElement>(container, 'input[name="stop-search"]');
+    filter.value = '1001196';
+    filter.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(container.querySelectorAll('[data-stop-row]')).toHaveLength(1);
+    const stop = queryRequired<HTMLButtonElement>(container, '[data-stop-row] button');
+    stop.click();
+    expect(queryRequired(container, '[data-stop-detail]').textContent).toContain('38.9002');
+    expect(queryRequired(container, '[data-stop-detail]').textContent).toContain('X2');
+  });
+
+  it('renders only the route-detail fields the server actually produces', () => {
+    const result = EXPECTED_TOOL_CONTRACTS.get_route_info.structuredContent;
+    const container = mountResult('get_route_info', result);
+
+    expect(queryRequired(container, 'section[data-view="route-detail"]')).toBeTruthy();
+    expect(queryRequired(container, 'h1').textContent).toBe('A · 8 Avenue Express');
+    expect(container.textContent).toContain('Express service in Manhattan and Brooklyn.');
+    expect(container.textContent).toContain('Route A');
+    expect(container.textContent).not.toContain('Stops');
+    expect(container.querySelector('pre')).toBeNull();
+  });
+});
+
+describe('Transit Board vehicle renderers', () => {
+  it('filters live buses by route and plots finite, clamped coordinates accessibly', () => {
+    const representative = EXPECTED_TOOL_CONTRACTS.get_bus_positions.structuredContent;
+    const result = {
+      ...representative,
+      routeFilter: null,
+      totalBuses: 3,
+      buses: [
+        representative.buses[0],
+        {
+          ...representative.buses[0],
+          vehicleId: 'V200',
+          route: 'X2',
+          coordinates: { lat: 1e308, lon: -1e308 },
+          headsign: null,
+          deviation: null,
+        },
+        {
+          ...representative.buses[0],
+          vehicleId: 'V300',
+          route: '30N',
+          coordinates: { lat: -1e308, lon: 1e308 },
+        },
+      ],
+    };
+    const container = mountResult('get_bus_positions', result);
+
+    expect(queryRequired(container, 'section[data-view="bus-positions"]')).toBeTruthy();
+    expect(queryRequired(container, 'svg[role="img"] title').textContent).toContain(
+      'Live bus position plot',
+    );
+    expect(queryRequired(container, 'svg desc').textContent).toContain('normalized');
+    for (const point of container.querySelectorAll<SVGCircleElement>('circle[data-vehicle-point]')) {
+      const x = Number(point.getAttribute('cx'));
+      const y = Number(point.getAttribute('cy'));
+      expect(Number.isFinite(x)).toBe(true);
+      expect(Number.isFinite(y)).toBe(true);
+      expect(x).toBeGreaterThanOrEqual(8);
+      expect(x).toBeLessThanOrEqual(92);
+      expect(y).toBeGreaterThanOrEqual(8);
+      expect(y).toBeLessThanOrEqual(92);
+    }
+    const filter = queryRequired<HTMLSelectElement>(container, 'select[name="route-filter"]');
+    filter.value = 'X2';
+    filter.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(container.querySelectorAll('[data-vehicle-row]')).toHaveLength(1);
+    expect(container.querySelectorAll('circle[data-vehicle-point]')).toHaveLength(1);
+    expect(container.textContent).toContain('V200');
+    expect(container.textContent).not.toContain('V100');
+  });
+
+  it('filters trains by line and plots only actual circuit positions', () => {
+    const result = EXPECTED_TOOL_CONTRACTS.get_train_positions.structuredContent;
+    const container = mountResult('get_train_positions', result);
+
+    expect(queryRequired(container, 'section[data-view="train-positions"]')).toBeTruthy();
+    expect(container.querySelectorAll('[data-vehicle-row]')).toHaveLength(2);
+    expect(container.querySelectorAll('circle[data-vehicle-point]')).toHaveLength(1);
+    expect(queryRequired(container, 'svg desc').textContent).toContain('circuit identifiers');
+    const filter = queryRequired<HTMLSelectElement>(container, 'select[name="line-filter"]');
+    filter.value = 'RD';
+    filter.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(container.querySelectorAll('[data-vehicle-row]')).toHaveLength(1);
+    expect(container.textContent).toContain('Circuit 1234');
+    expect(container.textContent).toContain('Normal');
+  });
+});
+
 describe('Transit Board rendering boundary', () => {
+  it('supports exactly the canonical thirteen tool names in wire order', () => {
+    expect(SUPPORTED_RENDERER_NAMES).toEqual(EXPECTED_TOOL_NAMES);
+  });
+
   it('keeps hostile transit text inert while preserving it for the rider', () => {
     const hostile = '<img src=x onerror=alert(1)>';
     const container = mountResult('search_stations', {
@@ -316,6 +543,44 @@ describe('Transit Board rendering boundary', () => {
       },
       label: 'station transfer',
     },
+    {
+      toolName: 'get_incidents',
+      result: {
+        ...EXPECTED_TOOL_CONTRACTS.get_incidents.structuredContent,
+        incidents: [{
+          ...EXPECTED_TOOL_CONTRACTS.get_incidents.structuredContent.incidents[0],
+          lastUpdated: 'not-a-timestamp',
+        }],
+      },
+      label: 'service incident',
+    },
+    {
+      toolName: 'get_bus_positions',
+      result: {
+        ...EXPECTED_TOOL_CONTRACTS.get_bus_positions.structuredContent,
+        buses: [{
+          ...EXPECTED_TOOL_CONTRACTS.get_bus_positions.structuredContent.buses[0],
+          coordinates: { lat: Number.NaN, lon: Number.POSITIVE_INFINITY },
+        }],
+      },
+      label: 'bus position',
+    },
+    {
+      toolName: 'get_train_positions',
+      result: {
+        ...EXPECTED_TOOL_CONTRACTS.get_train_positions.structuredContent,
+        trains: [{
+          ...EXPECTED_TOOL_CONTRACTS.get_train_positions.structuredContent.trains[0],
+          circuitId: Number.POSITIVE_INFINITY,
+        }],
+      },
+      label: 'train position',
+    },
+    {
+      toolName: 'get_route_info',
+      result: { city: 'nyc', routeId: 'A', shortName: 'A', longName: '8 Avenue Express' },
+      label: 'route detail',
+    },
   ])('rejects malformed $label item fields', ({ toolName, result, label }) => {
     const container = mountResult(toolName, result);
     expect(queryRequired(container, '[role="alert"]').textContent).toContain(
@@ -324,24 +589,76 @@ describe('Transit Board rendering boundary', () => {
   });
 
   it.each([
-    'get_incidents',
-    'get_elevator_incidents',
-    'get_bus_routes',
-    'get_bus_stops',
-    'get_bus_positions',
-    'get_train_positions',
-    'get_route_info',
-  ])('keeps the Task 3 tool %s intentionally unsupported', (toolName) => {
-    const fixture = EXPECTED_TOOL_CONTRACTS[
-      toolName as keyof typeof EXPECTED_TOOL_CONTRACTS
-    ].structuredContent;
-    const container = mountResult(toolName, fixture);
+    ['get_incidents', { city: 'dc', incidents: [] }, 'No active service incidents'],
+    [
+      'get_elevator_incidents',
+      { city: 'dc', elevatorIncidents: [] },
+      'No elevator or escalator outages',
+    ],
+    ['get_bus_routes', { city: 'dc', totalRoutes: 0, routes: [] }, 'No bus routes are available'],
+    [
+      'get_bus_stops',
+      { city: 'dc', totalStops: 0, searchLocation: null, stops: [] },
+      'No bus stops are available',
+    ],
+    [
+      'get_bus_positions',
+      { city: 'dc', routeFilter: null, totalBuses: 0, buses: [] },
+      'No live bus positions are available',
+    ],
+    [
+      'get_train_positions',
+      { city: 'dc', totalTrains: 0, trains: [] },
+      'No live train positions are available',
+    ],
+  ])('renders the %s empty state', (toolName, result, message) => {
+    const container = mountResult(toolName, result);
+    expect(queryRequired(container, '[data-empty-state]').textContent).toContain(message);
+  });
 
-    expect(queryRequired(container, '[data-view="unsupported-tool"]').textContent).toContain(
-      'This transit view is not available yet',
-    );
-    expect(container.querySelector('pre')).toBeNull();
-    expect(container.textContent).not.toContain(JSON.stringify(fixture));
+  it('keeps hostile strings inert across the new renderer families', () => {
+    const hostile = '<img src=x onerror=alert(1)>';
+    const cases: Array<[string, unknown]> = [
+      ['get_incidents', {
+        city: 'dc',
+        incidents: [{
+          id: 'INC-X',
+          description: hostile,
+          linesAffected: ['RD'],
+          severity: 'Major',
+          type: 'Delay',
+          lastUpdated: '2026-08-13T18:00:00.000Z',
+        }],
+      }],
+      ['get_bus_routes', {
+        city: 'dc',
+        totalRoutes: 1,
+        routes: [{ id: 'X', name: hostile, description: null }],
+      }],
+      ['get_bus_positions', {
+        city: 'dc',
+        routeFilter: null,
+        totalBuses: 1,
+        buses: [{
+          vehicleId: hostile,
+          route: 'X',
+          direction: 'NORTHBOUND',
+          coordinates: { lat: 38.9, lon: -77 },
+          headsign: null,
+          deviation: null,
+          lastUpdated: '2026-08-13T18:00:00.000Z',
+        }],
+      }],
+    ];
+
+    for (const [toolName, result] of cases) {
+      const container = mountResult(toolName, result);
+      expect(container.querySelector('img')).toBeNull();
+      expect(container.querySelector('[onerror]')).toBeNull();
+      expect(container.textContent).toContain(hostile);
+      expect(container.querySelector('pre')).toBeNull();
+      container.remove();
+    }
   });
 
 });
