@@ -5,6 +5,12 @@ import {
   type McpUiHostContext,
 } from '@modelcontextprotocol/ext-apps/app-bridge';
 import {
+  JSONRPCErrorResponseSchema,
+  JSONRPCNotificationSchema,
+  JSONRPCRequestSchema,
+  JSONRPCResultResponseSchema,
+} from '@modelcontextprotocol/sdk/types.js';
+import {
   TOOL_CASES,
   TOOL_NAMES,
   resultFor,
@@ -47,6 +53,15 @@ type ProtocolViolation = {
   id?: unknown;
 };
 
+type BridgeEvent = {
+  name: 'error';
+  sequence: number;
+  message: string;
+} | {
+  name: 'sandboxready';
+  sequence: number;
+};
+
 type HarnessRecords = {
   calls: ToolCallRecord[];
   deliveries: DeliveryRecord[];
@@ -59,7 +74,7 @@ type HarnessSnapshot = HarnessRecords & {
   state: FixtureState;
   protocol: ProtocolRecord[];
   unexpectedProtocol: string[];
-  bridgeEvents: { name: string; sequence: number }[];
+  bridgeEvents: BridgeEvent[];
   protocolViolations: ProtocolViolation[];
   pendingProtocol: PendingProtocolRequest[];
 };
@@ -85,7 +100,7 @@ let operation = Promise.resolve();
 let records: HarnessRecords = freshRecords();
 const protocol: ProtocolRecord[] = [];
 const unexpectedProtocol: string[] = [];
-const bridgeEvents: { name: string; sequence: number }[] = [];
+const bridgeEvents: BridgeEvent[] = [];
 const protocolViolations: ProtocolViolation[] = [];
 const pendingProtocol: PendingProtocolRequest[] = [];
 const completedProtocol: PendingProtocolRequest[] = [];
@@ -116,22 +131,10 @@ function recordProtocol(
   const candidate = typeof message === 'object' && message !== null && !Array.isArray(message)
     ? message as Record<string, unknown>
     : {};
-  const hasOnlyKeys = (...allowed: string[]): boolean => (
-    Object.keys(candidate).every(key => allowed.includes(key))
-  );
-  const hasId = typeof candidate.id === 'string'
-    || (typeof candidate.id === 'number' && Number.isInteger(candidate.id));
-  const hasOptionalId = !('id' in candidate) || hasId;
-  const hasParams = !('params' in candidate)
-    || (typeof candidate.params === 'object' && candidate.params !== null && !Array.isArray(candidate.params));
   const base = { direction, sequence };
   let record: ProtocolRecord;
 
-  if (candidate.jsonrpc === '2.0'
-    && typeof candidate.method === 'string'
-    && hasId
-    && hasParams
-    && hasOnlyKeys('jsonrpc', 'id', 'method', 'params')) {
+  if (JSONRPCRequestSchema.safeParse(message).success) {
     record = {
       ...base,
       kind: 'request',
@@ -139,41 +142,25 @@ function recordProtocol(
       method: candidate.method,
       ...('params' in candidate ? { params: structuredClone(candidate.params) } : {}),
     };
-  } else if (candidate.jsonrpc === '2.0'
-    && typeof candidate.method === 'string'
-    && !('id' in candidate)
-    && hasParams
-    && hasOnlyKeys('jsonrpc', 'method', 'params')) {
+  } else if (JSONRPCNotificationSchema.safeParse(message).success) {
     record = {
       ...base,
       kind: 'notification',
       method: candidate.method,
       ...('params' in candidate ? { params: structuredClone(candidate.params) } : {}),
     };
-  } else if (candidate.jsonrpc === '2.0'
-    && hasId
-    && typeof candidate.result === 'object'
-    && candidate.result !== null
-    && !Array.isArray(candidate.result)
-    && hasOnlyKeys('jsonrpc', 'id', 'result')) {
+  } else if (JSONRPCResultResponseSchema.safeParse(message).success) {
     record = {
       ...base,
       kind: 'success-response',
       id: candidate.id,
       result: structuredClone(candidate.result),
     };
-  } else if (candidate.jsonrpc === '2.0'
-    && hasOptionalId
-    && typeof candidate.error === 'object'
-    && candidate.error !== null
-    && !Array.isArray(candidate.error)
-    && Number.isInteger((candidate.error as Record<string, unknown>).code)
-    && typeof (candidate.error as Record<string, unknown>).message === 'string'
-    && hasOnlyKeys('jsonrpc', 'id', 'error')) {
+  } else if (JSONRPCErrorResponseSchema.safeParse(message).success) {
     record = {
       ...base,
       kind: 'error-response',
-      id: candidate.id,
+      ...('id' in candidate ? { id: structuredClone(candidate.id) } : {}),
       error: structuredClone(candidate.error),
     };
   } else {
@@ -396,8 +383,12 @@ async function mountScenario(
     { hostContext: initialContext },
   );
   activeBridge = bridge;
-  bridge.onerror = () => {
-    bridgeEvents.push({ name: 'error', sequence });
+  bridge.onerror = error => {
+    bridgeEvents.push({
+      name: 'error',
+      sequence,
+      message: error instanceof Error ? error.message : String(error),
+    });
   };
 
   bridge.oncalltool = async params => {

@@ -19,7 +19,7 @@ type HarnessSnapshot = {
   displayRequests: string[];
   sizeChanges: { width?: number; height?: number }[];
   unexpectedProtocol: string[];
-  bridgeEvents?: { name: string; sequence: number }[];
+  bridgeEvents: BridgeEvent[];
   protocol?: {
     direction: 'app-to-host' | 'host-to-app';
     kind?: 'request' | 'notification' | 'success-response' | 'error-response' | 'malformed';
@@ -37,6 +37,21 @@ type HarnessSnapshot = {
     id: string | number;
     method: string;
   }[];
+};
+
+type BridgeEvent = {
+  name: 'error';
+  sequence: number;
+  message: string;
+} | {
+  name: 'sandboxready';
+  sequence: number;
+};
+
+type ExpectedBridgeEvent = {
+  name: BridgeEvent['name'];
+  sequence: number;
+  messageIncludes?: string;
 };
 
 type ProtocolViolation = {
@@ -66,6 +81,7 @@ type Observations = {
   expectedUnexpectedProtocol: string[];
   expectedProtocolViolations: ProtocolViolation[];
   expectedPendingProtocol: PendingProtocolRequest[];
+  expectedBridgeEvents: BridgeEvent[];
 };
 
 const observations = new WeakMap<Page, Observations>();
@@ -220,6 +236,33 @@ async function acknowledgePendingProtocol(
   current.expectedPendingProtocol = [...expected];
 }
 
+async function acknowledgeBridgeEvents(
+  page: Page,
+  expected: ExpectedBridgeEvent[],
+): Promise<void> {
+  const current = observations.get(page);
+  if (!current) throw new Error('Missing browser observations.');
+  const start = current.expectedBridgeEvents.length;
+  await expect.poll(async () => (await snapshot(page)).bridgeEvents.length)
+    .toBeGreaterThanOrEqual(start + expected.length);
+  const actual = (await snapshot(page)).bridgeEvents.slice(start);
+  expect(actual).toHaveLength(expected.length);
+  expected.forEach((event, index) => {
+    expect(actual[index]?.name).toBe(event.name);
+    expect(actual[index]?.sequence).toBe(event.sequence);
+    if (event.messageIncludes === undefined) {
+      expect(actual[index]).toEqual({ name: event.name, sequence: event.sequence });
+    } else {
+      expect(actual[index]).toEqual(expect.objectContaining({
+        name: event.name,
+        sequence: event.sequence,
+        message: expect.stringContaining(event.messageIncludes),
+      }));
+    }
+  });
+  current.expectedBridgeEvents.push(...actual);
+}
+
 test.beforeEach(async ({ context, page }) => {
   const current: Observations = {
     consoleErrors: [],
@@ -234,6 +277,7 @@ test.beforeEach(async ({ context, page }) => {
     expectedUnexpectedProtocol: [],
     expectedProtocolViolations: [],
     expectedPendingProtocol: [],
+    expectedBridgeEvents: [],
   };
   observations.set(page, current);
   await page.exposeBinding('__metroRecordSecurityEffect', (_source, effect: unknown) => {
@@ -470,6 +514,7 @@ test.afterEach(async ({ page }) => {
     current?.expectedProtocolViolations ?? [],
   );
   expect(currentSnapshot.pendingProtocol ?? []).toEqual(current?.expectedPendingProtocol ?? []);
+  expect(currentSnapshot.bridgeEvents).toEqual(current?.expectedBridgeEvents ?? []);
 });
 
 for (const toolName of TOOL_NAMES) {
@@ -742,6 +787,7 @@ test('records only expected official-protocol effects', async ({ page }) => {
   expect(protocol.some(entry => entry.kind === 'malformed')).toBe(false);
   expect(current.protocolViolations ?? []).toEqual([]);
   expect(current.pendingProtocol ?? []).toEqual([]);
+  expect(current.bridgeEvents).toEqual([]);
 });
 
 test('records and rejects an unexpected official sandbox-ready notification', async ({ page }) => {
@@ -750,10 +796,12 @@ test('records and rejects an unexpected official sandbox-ready notification', as
     window.parent.postMessage({
       jsonrpc: '2.0',
       method: 'ui/notifications/sandbox-proxy-ready',
+      params: {},
     }, '*');
   });
 
   await acknowledgeUnexpectedProtocol(page, ['ui/notifications/sandbox-proxy-ready']);
+  await acknowledgeBridgeEvents(page, [{ name: 'sandboxready', sequence: 1 }]);
   expect((await snapshot(page)).protocol ?? []).toContainEqual(expect.objectContaining({
     direction: 'app-to-host',
     method: 'ui/notifications/sandbox-proxy-ready',
@@ -778,13 +826,73 @@ test('does not let a hybrid security marker hide JSON-RPC from the host', async 
     sequence: 1,
   }]);
   await acknowledgeConsoleErrors(page, ['Failed to parse message']);
+  await acknowledgeBridgeEvents(page, [{
+    name: 'error',
+    sequence: 1,
+    messageIncludes: 'Invalid JSON-RPC message received',
+  }]);
   const current = await snapshot(page);
   expect(current.protocol ?? []).toContainEqual(expect.objectContaining({
     direction: 'app-to-host',
     kind: 'malformed',
     method: 'ui/notifications/sandbox-proxy-ready',
   }));
-  expect(current.bridgeEvents ?? []).toContainEqual({ name: 'error', sequence: 1 });
+  expect(current.bridgeEvents).toContainEqual(expect.objectContaining({
+    name: 'error',
+    sequence: 1,
+    message: expect.stringContaining('Invalid JSON-RPC message received'),
+  }));
+});
+
+test('surfaces Apps-invalid params even when generic JSON-RPC ledgers are clean', async ({ page }) => {
+  const frame = await selectScenario(page, 'get_station_predictions');
+  await frame.evaluate(() => {
+    window.parent.postMessage({
+      jsonrpc: '2.0',
+      method: 'ui/notifications/size-changed',
+      params: { width: 'not-a-number', height: 275 },
+    }, '*');
+  });
+
+  await expect.poll(async () => (await snapshot(page)).bridgeEvents.length).toBe(1);
+  await acknowledgeBridgeEvents(page, [{
+    name: 'error',
+    sequence: 1,
+    messageIncludes: 'Uncaught error in notification handler',
+  }]);
+  const current = await snapshot(page);
+  expect(current.bridgeEvents).toEqual([{
+    name: 'error',
+    sequence: 1,
+    message: expect.stringContaining('Uncaught error in notification handler'),
+  }]);
+  expect(current.unexpectedProtocol).toEqual([]);
+  expect(current.protocolViolations ?? []).toEqual([]);
+  expect(current.pendingProtocol ?? []).toEqual([]);
+});
+
+test('does not acknowledge an unrelated AppBridge error', async ({ page }) => {
+  const frame = await selectScenario(page, 'get_station_predictions');
+  await frame.evaluate(() => {
+    window.parent.postMessage({
+      jsonrpc: '2.0',
+      method: 'ui/notifications/size-changed',
+      params: { width: 'first-invalid-width', height: 275 },
+    }, '*');
+    window.parent.postMessage({
+      jsonrpc: '2.0',
+      method: 'ui/notifications/size-changed',
+      params: { width: 320, height: 'second-invalid-height' },
+    }, '*');
+  });
+
+  const oneError = [{
+    name: 'error' as const,
+    sequence: 1,
+    messageIncludes: 'Uncaught error in notification handler',
+  }];
+  await expect(acknowledgeBridgeEvents(page, oneError)).rejects.toThrow();
+  await acknowledgeBridgeEvents(page, [...oneError, ...oneError]);
 });
 
 test('records unsolicited success and error responses as protocol violations', async ({ page }) => {
@@ -825,6 +933,23 @@ test('records unsolicited success and error responses as protocol violations', a
       sequence: 1,
     },
   ]);
+  await acknowledgeBridgeEvents(page, [
+    {
+      name: 'error',
+      sequence: 1,
+      messageIncludes: 'Received a response for an unknown message ID',
+    },
+    {
+      name: 'error',
+      sequence: 1,
+      messageIncludes: 'Received a response for an unknown message ID',
+    },
+    {
+      name: 'error',
+      sequence: 1,
+      messageIncludes: 'Received a response for an unknown message ID',
+    },
+  ]);
   const protocol = (await snapshot(page)).protocol ?? [];
   expect(protocol).toContainEqual(expect.objectContaining({
     kind: 'success-response',
@@ -861,6 +986,11 @@ test('records a response with the wrong direction as mismatched', async ({ page 
     sequence: 1,
     id: initialize?.id,
   }]);
+  await acknowledgeBridgeEvents(page, [{
+    name: 'error',
+    sequence: 1,
+    messageIncludes: 'Received a response for an unknown message ID',
+  }]);
 });
 
 test('records a source-valid duplicate response instead of dropping it', async ({ page }) => {
@@ -888,6 +1018,11 @@ test('records a source-valid duplicate response instead of dropping it', async (
     direction: 'app-to-host',
     sequence: 1,
     id: response?.id,
+  }]);
+  await acknowledgeBridgeEvents(page, [{
+    name: 'error',
+    sequence: 1,
+    messageIncludes: 'Received a response for an unknown message ID',
   }]);
   expect(((await snapshot(page)).protocol ?? []).filter(entry => (
     entry.direction === 'app-to-host'
@@ -941,12 +1076,138 @@ test('records malformed source-valid JSON-RPC instead of dropping it', async ({ 
     id: 'task6-malformed',
   }]);
   await acknowledgeConsoleErrors(page, ['Failed to parse message']);
+  await acknowledgeBridgeEvents(page, [{
+    name: 'error',
+    sequence: 1,
+    messageIncludes: 'Invalid JSON-RPC message received',
+  }]);
   expect((await snapshot(page)).protocol ?? []).toContainEqual(expect.objectContaining({
     kind: 'malformed',
     id: 'task6-malformed',
     method: 42,
     params: { probe: true },
   }));
+});
+
+test('classifies safe, null, unsafe, and explicit-undefined values like the installed SDK', async ({ page }) => {
+  const frame = await selectScenario(page, 'get_station_predictions');
+  await page.evaluate(async () => {
+    const harness = (window as Window & {
+      __metroAppsHarness: { closeActiveForProbe(): Promise<void> };
+    }).__metroAppsHarness;
+    await harness.closeActiveForProbe();
+  });
+  const before = await snapshot(page);
+  const safeInteger = Number.MAX_SAFE_INTEGER;
+  const unsafeInteger = Number.MAX_SAFE_INTEGER + 1;
+
+  await frame.evaluate(({ safe, unsafe }) => {
+    const post = (message: object): void => window.parent.postMessage(message, '*');
+    post({
+      jsonrpc: '2.0',
+      id: safe,
+      method: 'task6/sdk-safe-id',
+      params: undefined,
+    });
+    post({
+      jsonrpc: '2.0',
+      id: 'task6-sdk-string-id',
+      method: 'task6/sdk-string-id',
+      params: undefined,
+    });
+    post({ jsonrpc: '2.0', id: unsafe, method: 'task6/sdk-unsafe-id' });
+    post({ jsonrpc: '2.0', id: null, method: 'task6/sdk-null-id' });
+    post({
+      jsonrpc: '2.0',
+      method: 'task6/sdk-undefined-params',
+      params: undefined,
+    });
+    post({
+      jsonrpc: '2.0',
+      id: undefined,
+      error: { code: -32_600, message: 'Task 6 explicit undefined ID' },
+    });
+    post({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32_600, message: 'Task 6 null ID' },
+    });
+    post({
+      jsonrpc: '2.0',
+      id: 'task6-sdk-unsafe-code',
+      error: { code: unsafe, message: 'Task 6 unsafe error code' },
+    });
+    post({ jsonrpc: '2.0', id: safe - 1, result: { ok: true } });
+    post({ jsonrpc: '2.0', id: unsafe, result: { ok: true } });
+  }, { safe: safeInteger, unsafe: unsafeInteger });
+
+  await expect.poll(async () => (await snapshot(page)).protocol?.length)
+    .toBe((before.protocol?.length ?? 0) + 10);
+  const current = await snapshot(page);
+  const delta = (current.protocol ?? []).slice(before.protocol?.length ?? 0);
+  expect(delta.map(record => ({
+    kind: record.kind,
+    ...('id' in record ? { id: record.id } : {}),
+    ...('method' in record ? { method: record.method } : {}),
+  }))).toStrictEqual([
+    { kind: 'request', id: safeInteger, method: 'task6/sdk-safe-id' },
+    { kind: 'request', id: 'task6-sdk-string-id', method: 'task6/sdk-string-id' },
+    { kind: 'malformed', id: unsafeInteger, method: 'task6/sdk-unsafe-id' },
+    { kind: 'malformed', id: null, method: 'task6/sdk-null-id' },
+    { kind: 'notification', method: 'task6/sdk-undefined-params' },
+    { kind: 'error-response', id: undefined },
+    { kind: 'malformed', id: null },
+    { kind: 'malformed', id: 'task6-sdk-unsafe-code' },
+    { kind: 'success-response', id: safeInteger - 1 },
+    { kind: 'malformed', id: unsafeInteger },
+  ]);
+  expect(Object.hasOwn(delta[0] ?? {}, 'params')).toBe(true);
+  expect(delta[0]?.params).toBeUndefined();
+  expect(Object.hasOwn(delta[1] ?? {}, 'params')).toBe(true);
+  expect(delta[1]?.params).toBeUndefined();
+  expect(Object.hasOwn(delta[4] ?? {}, 'params')).toBe(true);
+  expect(delta[4]?.params).toBeUndefined();
+  expect(Object.hasOwn(delta[5] ?? {}, 'id')).toBe(true);
+  expect(delta[5]?.id).toBeUndefined();
+
+  await acknowledgeUnexpectedProtocol(page, [
+    'task6/sdk-safe-id',
+    'task6/sdk-string-id',
+    'task6/sdk-undefined-params',
+  ]);
+  await acknowledgeProtocolViolations(page, [
+    { kind: 'malformed', direction: 'app-to-host', sequence: 1, id: unsafeInteger },
+    { kind: 'malformed', direction: 'app-to-host', sequence: 1, id: null },
+    { kind: 'unsolicited-response', direction: 'app-to-host', sequence: 1 },
+    { kind: 'malformed', direction: 'app-to-host', sequence: 1, id: null },
+    {
+      kind: 'malformed',
+      direction: 'app-to-host',
+      sequence: 1,
+      id: 'task6-sdk-unsafe-code',
+    },
+    {
+      kind: 'unsolicited-response',
+      direction: 'app-to-host',
+      sequence: 1,
+      id: safeInteger - 1,
+    },
+    { kind: 'malformed', direction: 'app-to-host', sequence: 1, id: unsafeInteger },
+  ]);
+  await acknowledgePendingProtocol(page, [
+    {
+      direction: 'app-to-host',
+      sequence: 1,
+      id: safeInteger,
+      method: 'task6/sdk-safe-id',
+    },
+    {
+      direction: 'app-to-host',
+      sequence: 1,
+      id: 'task6-sdk-string-id',
+      method: 'task6/sdk-string-id',
+    },
+  ]);
 });
 
 test('detects WebSocket construction through both browser oracles', async ({ page }) => {
