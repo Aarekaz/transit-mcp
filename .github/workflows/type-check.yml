@@ -19,6 +19,12 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Build MCP Apps bundle
+        run: bun run build:apps
+
+      - name: Verify committed MCP Apps bundle
+        run: git diff --exit-code -- public/apps/transit-board.html
+
       - name: Type-check
         run: bun run type-check
 
