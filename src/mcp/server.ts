@@ -11,6 +11,10 @@ import {
   type MetroRequestState,
 } from './context';
 import { PRIVATE_NO_CACHE, PUBLIC_24H } from './shared';
+import {
+  TRANSIT_BOARD_MIME,
+  registerTransitBoardApp,
+} from './apps';
 import { registerPrompts } from './prompts';
 import { registerResources } from './resources';
 import { registerBusTools } from './tools/buses';
@@ -62,6 +66,13 @@ function buildMetroMcpServer(context: MetroMcpContext): {
   const server = new McpServer(
     { name: 'metro-mcp', version: SERVER_VERSION },
     {
+      capabilities: {
+        extensions: {
+          'io.modelcontextprotocol/ui': {
+            mimeTypes: [TRANSIT_BOARD_MIME],
+          },
+        },
+      },
       cacheHints: {
         'server/discover': PUBLIC_24H,
         'tools/list': PUBLIC_24H,
@@ -76,6 +87,7 @@ function buildMetroMcpServer(context: MetroMcpContext): {
   );
 
   registerMetroFeatures(server, normalizedContext, stateCodec);
+  registerTransitBoardApp(server, normalizedContext);
   registerResources(server, normalizedContext);
   registerPrompts(server);
   return { server, stateCodec };

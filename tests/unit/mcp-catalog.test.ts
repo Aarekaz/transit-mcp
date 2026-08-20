@@ -23,6 +23,11 @@ import {
   EXPECTED_RESOURCE_NAMES,
   EXPECTED_TOOL_CONTRACTS,
   EXPECTED_TOOL_NAMES,
+  TRANSIT_BOARD_MIME,
+  TRANSIT_BOARD_RESOURCE_CONTRACT,
+  TRANSIT_BOARD_RESOURCE_META,
+  TRANSIT_BOARD_TOOL_META,
+  TRANSIT_BOARD_URI,
 } from '../fixtures/mcp-contracts';
 import { createMockEnv } from '../setup';
 
@@ -40,12 +45,29 @@ type RegisteredTool = {
   title?: string;
   description?: string;
   annotations?: unknown;
+  _meta?: unknown;
   inputSchema: unknown;
   outputSchema: {
     safeParse: (value: unknown) => { success: boolean };
   };
   handler: (
     args: Record<string, unknown>,
+    context: ServerContext,
+  ) => Promise<unknown> | unknown;
+};
+
+type RegisteredResource = {
+  name: string;
+  metadata?: {
+    mimeType?: string;
+    _meta?: unknown;
+  };
+  cacheHint?: {
+    ttlMs?: number;
+    cacheScope?: string;
+  };
+  readCallback: (
+    uri: URL,
     context: ServerContext,
   ) => Promise<unknown> | unknown;
 };
@@ -106,6 +128,7 @@ type ToolWireContract = {
   title?: string;
   description?: string;
   annotations?: unknown;
+  _meta?: unknown;
   inputSchema: JsonSchema;
   outputSchema?: JsonSchema;
 };
@@ -222,6 +245,14 @@ function registeredResourceTemplates(
   return (server as unknown as {
     _registeredResourceTemplates: Record<string, RegisteredResourceTemplate>;
   })._registeredResourceTemplates;
+}
+
+function registeredResources(
+  server = createMetroMcpServer(testContext()),
+): Record<string, RegisteredResource> {
+  return (server as unknown as {
+    _registeredResources: Record<string, RegisteredResource>;
+  })._registeredResources;
 }
 
 function registeredPrompts(
@@ -376,6 +407,58 @@ describe('golden MCP catalog', () => {
     expect(tools.map(tool => tool.name)).toEqual(EXPECTED_TOOL_NAMES);
   });
 
+  it('advertises the exact stable Apps extension through server/discover', async () => {
+    const message = await requestOverSdkWire(
+      metroServerFactory(),
+      'server/discover',
+      {},
+      { modern: true },
+    );
+
+    expect(message.error).toBeUndefined();
+    expect(message.result).toMatchObject({
+      resultType: 'complete',
+      ttlMs: 86_400_000,
+      cacheScope: 'public',
+      capabilities: {
+        extensions: {
+          'io.modelcontextprotocol/ui': {
+            mimeTypes: [TRANSIT_BOARD_MIME],
+          },
+        },
+        tools: {},
+        resources: {},
+        prompts: {},
+      },
+    });
+    expect((message.result?.capabilities as Record<string, unknown>).extensions).toEqual({
+      'io.modelcontextprotocol/ui': {
+        mimeTypes: [TRANSIT_BOARD_MIME],
+      },
+    });
+  });
+
+  it.each([
+    ['modern', true],
+    ['legacy', false],
+  ] as const)('adds the same exact Apps metadata to every %s tools/list entry', async (
+    _era,
+    modern,
+  ) => {
+    const message = await requestOverSdkWire(
+      metroServerFactory(),
+      'tools/list',
+      {},
+      { modern },
+    );
+    const tools = message.result?.tools as ToolWireContract[];
+
+    expect(tools.map(tool => tool.name)).toEqual(EXPECTED_TOOL_NAMES);
+    for (const tool of tools) {
+      expect(tool._meta).toEqual(TRANSIT_BOARD_TOOL_META);
+    }
+  });
+
   it('preserves golden metadata and top-level schema requiredness on the SDK wire', async () => {
     const tools = await listToolsOverSdkWire();
 
@@ -488,6 +571,109 @@ describe('golden MCP catalog', () => {
 });
 
 describe('SDK v2 resource contracts', () => {
+  it('registers one immutable Transit Board resource with public cache metadata', () => {
+    const resources = registeredResources();
+
+    expect(Object.keys(resources)).toEqual([TRANSIT_BOARD_URI]);
+    expect(resources[TRANSIT_BOARD_URI]).toMatchObject({
+      name: TRANSIT_BOARD_RESOURCE_CONTRACT.name,
+      metadata: {
+        mimeType: TRANSIT_BOARD_MIME,
+        _meta: TRANSIT_BOARD_RESOURCE_META,
+      },
+      cacheHint: TRANSIT_BOARD_RESOURCE_CONTRACT.cacheHint,
+    });
+  });
+
+  it('lists and reads the complete Transit Board HTML through the SDK wire', async () => {
+    const html = '<!doctype html><html><body><main>Transit Board</main></body></html>';
+    const assetsFetch = vi.fn().mockResolvedValue(new Response(html, { status: 200 }));
+    const context = testContext();
+    context.env = createMockEnv({
+      ASSETS: { fetch: assetsFetch } as unknown as Fetcher,
+    });
+
+    const listMessage = await requestOverSdkWire(
+      metroServerFactory(context),
+      'resources/list',
+      {},
+      { modern: true },
+    );
+    expect(listMessage.error).toBeUndefined();
+    expect((listMessage.result?.resources as unknown[])[0]).toEqual({
+      uri: TRANSIT_BOARD_URI,
+      name: TRANSIT_BOARD_RESOURCE_CONTRACT.name,
+      mimeType: TRANSIT_BOARD_MIME,
+      _meta: TRANSIT_BOARD_RESOURCE_META,
+    });
+
+    const readMessage = await requestOverSdkWire(
+      metroServerFactory(context),
+      'resources/read',
+      { uri: TRANSIT_BOARD_URI },
+      { modern: true },
+    );
+    expect(readMessage.error).toBeUndefined();
+    expect(readMessage.result).toEqual({
+      resultType: 'complete',
+      ttlMs: 86_400_000,
+      cacheScope: 'public',
+      _meta: {
+        'io.modelcontextprotocol/serverInfo': {
+          name: 'metro-mcp',
+          version: '5.0.0',
+        },
+      },
+      contents: [{
+        uri: TRANSIT_BOARD_URI,
+        mimeType: TRANSIT_BOARD_MIME,
+        text: html,
+        _meta: TRANSIT_BOARD_RESOURCE_META,
+      }],
+    });
+    expect(assetsFetch).toHaveBeenCalledTimes(1);
+    const assetRequest = new Request(assetsFetch.mock.calls[0]![0]);
+    expect(assetRequest.url).toBe('https://assets.metro-mcp.invalid/apps/transit-board.html');
+  });
+
+  it.each([
+    [
+      'a missing asset',
+      () => vi.fn().mockResolvedValue(
+        new Response('private missing detail', { status: 404 }),
+      ),
+      'private missing detail',
+    ],
+    [
+      'an asset binding failure',
+      () => vi.fn().mockRejectedValue(new Error('private binding detail')),
+      'private binding detail',
+    ],
+  ])('fails safely for %s without exposing upstream detail', async (
+    _description,
+    createAssetsFetch,
+    privateDetail,
+  ) => {
+    const assetsFetch = createAssetsFetch();
+    const context = testContext();
+    context.env = createMockEnv({
+      ASSETS: { fetch: assetsFetch } as unknown as Fetcher,
+    });
+
+    const message = await requestOverSdkWire(
+      metroServerFactory(context),
+      'resources/read',
+      { uri: TRANSIT_BOARD_URI },
+      { modern: true },
+    );
+
+    expect(message.error).toEqual({
+      code: -32603,
+      message: 'Transit Board application asset is unavailable',
+    });
+    expect(JSON.stringify(message)).not.toContain(privateDetail);
+  });
+
   it('describes live incidents as current stateless read-only data', () => {
     const incidents = registeredResourceTemplates().incidents;
 
@@ -682,7 +868,15 @@ describe('SDK v2 resource contracts', () => {
       ttlMs: 86_400_000,
       cacheScope: 'public',
     });
-    expect(listMessage.result?.resources).toEqual(incidents.listedResources);
+    expect(listMessage.result?.resources).toEqual([
+      {
+        uri: TRANSIT_BOARD_URI,
+        name: TRANSIT_BOARD_RESOURCE_CONTRACT.name,
+        mimeType: TRANSIT_BOARD_MIME,
+        _meta: TRANSIT_BOARD_RESOURCE_META,
+      },
+      ...incidents.listedResources,
+    ]);
 
     const resource = registeredResourceTemplates().incidents!;
     const signal = new AbortController().signal;
@@ -879,7 +1073,13 @@ describe('SDK v2 prompt contracts', () => {
 });
 
 describe('SDK v2 tools/call wire behavior', () => {
-  it('returns matching text and structured content from an assembled valid call', async () => {
+  it.each([
+    ['modern', true],
+    ['legacy', false],
+  ] as const)('returns matching text and structured content from an assembled valid %s call', async (
+    _era,
+    modern,
+  ) => {
     getTransitClientMock.mockReturnValue({
       getBusRoutes: vi.fn().mockResolvedValue([{
         RouteID: '30N',
@@ -892,16 +1092,17 @@ describe('SDK v2 tools/call wire behavior', () => {
       metroServerFactory(),
       'tools/call',
       { name: 'get_bus_routes', arguments: {} },
+      { modern },
     );
 
     expect(message.error).toBeUndefined();
-    expect(message.result).toEqual({
-      content: [{
-        type: 'text',
-        text: JSON.stringify(EXPECTED_TOOL_CONTRACTS.get_bus_routes.structuredContent),
-      }],
-      structuredContent: EXPECTED_TOOL_CONTRACTS.get_bus_routes.structuredContent,
-    });
+    expect(message.result?.content).toEqual([{
+      type: 'text',
+      text: JSON.stringify(EXPECTED_TOOL_CONTRACTS.get_bus_routes.structuredContent),
+    }]);
+    expect(message.result?.structuredContent).toEqual(
+      EXPECTED_TOOL_CONTRACTS.get_bus_routes.structuredContent,
+    );
   });
 
   it('returns an SDK output validation error for malformed callback output', async () => {

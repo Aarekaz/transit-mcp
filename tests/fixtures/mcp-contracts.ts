@@ -14,6 +14,35 @@ export const EXPECTED_TOOL_NAMES = [
   'get_route_info',
 ] as const;
 
+export const TRANSIT_BOARD_URI = 'ui://metro-mcp/transit-board.html';
+export const TRANSIT_BOARD_MIME = 'text/html;profile=mcp-app';
+export const TRANSIT_BOARD_TOOL_META = {
+  ui: {
+    resourceUri: TRANSIT_BOARD_URI,
+    visibility: ['model', 'app'],
+  },
+} as const;
+
+export const TRANSIT_BOARD_RESOURCE_META = {
+  ui: {
+    csp: {
+      connectDomains: [],
+      resourceDomains: [],
+      frameDomains: [],
+      baseUriDomains: [],
+    },
+    prefersBorder: false,
+  },
+} as const;
+
+export const TRANSIT_BOARD_RESOURCE_CONTRACT = {
+  name: 'transit-board-app',
+  uri: TRANSIT_BOARD_URI,
+  mimeType: TRANSIT_BOARD_MIME,
+  cacheHint: { ttlMs: 86_400_000, cacheScope: 'public' },
+  _meta: TRANSIT_BOARD_RESOURCE_META,
+} as const;
+
 export const EXPECTED_RESOURCE_NAMES = ['station', 'route', 'incidents'] as const;
 
 export const EXPECTED_PROMPT_NAMES = [

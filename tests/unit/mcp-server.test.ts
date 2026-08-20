@@ -5,7 +5,11 @@ import {
 import { describe, expect, it } from 'vitest';
 import type { MetroMcpContext, MetroRequestState } from '../../src/mcp/context';
 import { createMetroMcpServer } from '../../src/mcp/server';
-import { EXPECTED_TOOL_NAMES } from '../fixtures/mcp-contracts';
+import {
+  EXPECTED_TOOL_NAMES,
+  TRANSIT_BOARD_MIME,
+  TRANSIT_BOARD_TOOL_META,
+} from '../fixtures/mcp-contracts';
 import { createMockEnv } from '../setup';
 
 function testContext(overrides: Partial<MetroMcpContext> = {}): MetroMcpContext {
@@ -150,9 +154,36 @@ describe('createMetroMcpServer', () => {
 
   it('registers the complete transit tool catalog in deterministic order', () => {
     const server = createMetroMcpServer(testContext()) as unknown as {
-      _registeredTools: Record<string, unknown>;
+      _registeredTools: Record<string, { _meta?: unknown }>;
     };
 
     expect(Object.keys(server._registeredTools)).toEqual(EXPECTED_TOOL_NAMES);
+    for (const tool of Object.values(server._registeredTools)) {
+      expect(tool._meta).toEqual(TRANSIT_BOARD_TOOL_META);
+    }
+    expect(new Set(
+      Object.values(server._registeredTools).map(tool => tool._meta),
+    ).size).toBe(1);
+    const meta = Object.values(server._registeredTools)[0]!._meta as {
+      ui: { visibility: readonly string[] };
+    };
+    expect(Object.isFrozen(meta)).toBe(true);
+    expect(Object.isFrozen(meta.ui)).toBe(true);
+    expect(Object.isFrozen(meta.ui.visibility)).toBe(true);
+  });
+
+  it('configures only the stable Apps extension alongside registered features', () => {
+    const { server } = createMetroMcpServer(testContext());
+
+    expect(server.getCapabilities()).toEqual({
+      extensions: {
+        'io.modelcontextprotocol/ui': {
+          mimeTypes: [TRANSIT_BOARD_MIME],
+        },
+      },
+      tools: { listChanged: true },
+      resources: { listChanged: true },
+      prompts: { listChanged: true },
+    });
   });
 });
