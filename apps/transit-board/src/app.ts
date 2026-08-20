@@ -25,7 +25,9 @@ export type TransitBoardHost = {
   connect(transport: AppTransport): Promise<void>;
   close(): Promise<void>;
   readonly transport: AppTransport | undefined;
-  setupSizeChangedNotifications(): () => void;
+  sendSizeChanged(
+    params: Parameters<App['sendSizeChanged']>[0],
+  ): ReturnType<App['sendSizeChanged']>;
   getHostContext(): McpUiHostContext | undefined;
   callServerTool(params: Parameters<App['callServerTool']>[0]): ReturnType<App['callServerTool']>;
   requestDisplayMode(
@@ -55,53 +57,83 @@ const HOST_COLOR_STYLE_MAP = {
   '--color-ring-primary': '--focus-ring',
 } as const;
 
-const colorComponent = String.raw`(?:[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:%|deg|grad|rad|turn)?|none)`;
-const colorFunction = new RegExp(
-  String.raw`^(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch)\(\s*${colorComponent}(?:\s*(?:[,/]|\s)\s*${colorComponent})*\s*\)$`,
-  'i',
-);
-const colorSpaceFunction = new RegExp(
-  String.raw`^color\(\s*(?:srgb|srgb-linear|display-p3|a98-rgb|prophoto-rgb|rec2020|xyz|xyz-d50|xyz-d65)(?:\s+${colorComponent}){3}(?:\s*\/\s*${colorComponent})?\s*\)$`,
-  'i',
-);
-const fontFamilyToken = String.raw`(?:"[A-Za-z0-9 ._-]+"|'[A-Za-z0-9 ._-]+'|[A-Za-z][A-Za-z0-9_-]*(?:[ \t]+[A-Za-z][A-Za-z0-9_-]*)*)`;
-const fontFamilyList = new RegExp(
-  String.raw`^[ \t]*${fontFamilyToken}(?:[ \t]*,[ \t]*${fontFamilyToken})*[ \t]*$`,
-);
+const unsafeCssFunction = /\b(?:url|src|image|image-set|cross-fade|paint|element|var|env|attr|expression)\s*\(/i;
+const unsafeCssSyntax = /[\\;{}!]|\/\*|\*\//;
+const cssControlCharacter = /[\u0000-\u001f\u007f]/u;
+const cssWideKeyword = /^(?:inherit|initial|unset|revert|revert-layer)$/i;
+
+function isBalancedFunction(value: string, name: string): boolean {
+  if (!value.toLowerCase().startsWith(`${name}(`) || !value.endsWith(')')) {
+    return false;
+  }
+  let depth = 0;
+  for (const character of value) {
+    if (character === '(') {
+      depth += 1;
+    } else if (character === ')') {
+      depth -= 1;
+      if (depth < 0) {
+        return false;
+      }
+    }
+  }
+  return depth === 0;
+}
+
+function unquotedCss(value: string): { balanced: boolean; value: string } {
+  let quote: '"' | "'" | null = null;
+  let unquoted = '';
+  for (const character of value) {
+    if (quote !== null) {
+      if (character === quote) {
+        quote = null;
+      }
+      unquoted += ' ';
+    } else if (character === '"' || character === "'") {
+      quote = character;
+      unquoted += ' ';
+    } else {
+      unquoted += character;
+    }
+  }
+  return { balanced: quote === null, value: unquoted };
+}
 
 function isSafeColor(value: string): boolean {
   const candidate = value.trim();
   if (
     candidate.length === 0
-    || candidate.length > 160
-    || /(?:url|image-set|image|cross-fade|paint|var|env|expression|calc|attr)\s*\(|@import/i.test(candidate)
+    || candidate.length > 256
+    || cssControlCharacter.test(candidate)
+    || unsafeCssSyntax.test(candidate)
+    || unsafeCssFunction.test(candidate)
+    || /^(?:currentcolor|inherit|initial|unset|revert|revert-layer)$/i.test(candidate)
   ) {
-    return false;
-  }
-  if (/^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i.test(candidate)) {
-    return true;
-  }
-  if (colorFunction.test(candidate) || colorSpaceFunction.test(candidate)) {
-    return true;
-  }
-  if (!/^[a-z]+$/i.test(candidate) || /^(?:currentcolor|inherit|initial|revert|unset)$/i.test(candidate)) {
     return false;
   }
   const probe = document.createElement('span');
   probe.style.color = candidate;
-  return probe.style.color !== '';
+  return probe.style.color !== '' || isBalancedFunction(candidate, 'color-mix');
 }
 
 function isSafeFontFamily(value: string): boolean {
-  if (value.length > 200 || !fontFamilyList.test(value)) {
+  const candidate = value.trim();
+  const unquoted = unquotedCss(candidate);
+  if (
+    candidate.length === 0
+    || candidate.length > 512
+    || cssControlCharacter.test(candidate)
+    || unsafeCssSyntax.test(candidate)
+    || !unquoted.balanced
+    || unsafeCssFunction.test(unquoted.value)
+    || /[()]/.test(unquoted.value)
+    || cssWideKeyword.test(candidate)
+  ) {
     return false;
   }
-  return value.split(',').every((token) => {
-    const candidate = token.trim();
-    return candidate.startsWith('"')
-      || candidate.startsWith("'")
-      || !/^(?:inherit|initial|unset|revert|revert-layer)$/i.test(candidate);
-  });
+  const probe = document.createElement('span');
+  probe.style.fontFamily = candidate;
+  return probe.style.fontFamily !== '';
 }
 
 function stateView(
@@ -164,6 +196,75 @@ function mergeHostContext(
   };
 }
 
+function setupTransitBoardResizeNotifications(
+  app: TransitBoardHost,
+  eventTarget: Window,
+  measurementRoot: HTMLElement,
+): () => void {
+  let disposed = false;
+  let observer: ResizeObserver | null = null;
+  let previousWidth = 0;
+  let previousHeight = 0;
+  const pendingFrames = new Set<number>();
+
+  const schedule = (): void => {
+    if (disposed || pendingFrames.size > 0) {
+      return;
+    }
+    const frameId = eventTarget.requestAnimationFrame(() => {
+      pendingFrames.delete(frameId);
+      if (disposed) {
+        return;
+      }
+      const originalHeight = measurementRoot.style.height;
+      measurementRoot.style.height = 'max-content';
+      const height = Math.ceil(measurementRoot.getBoundingClientRect().height);
+      measurementRoot.style.height = originalHeight;
+      const width = Math.ceil(eventTarget.innerWidth);
+      if (width === previousWidth && height === previousHeight) {
+        return;
+      }
+      previousWidth = width;
+      previousHeight = height;
+      try {
+        void app.sendSizeChanged({ width, height }).catch(() => {
+          // Size notifications are best effort and never outlive this lifecycle in the UI.
+        });
+      } catch {
+        // Treat a synchronous transport shutdown like an already-settled notification.
+      }
+    });
+    pendingFrames.add(frameId);
+  };
+
+  const dispose = (): void => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
+    observer?.disconnect();
+    observer = null;
+    for (const frameId of pendingFrames) {
+      eventTarget.cancelAnimationFrame(frameId);
+    }
+    pendingFrames.clear();
+  };
+
+  schedule();
+  try {
+    observer = new ResizeObserver(schedule);
+    observer.observe(measurementRoot);
+    const body = measurementRoot.ownerDocument.body;
+    if (body) {
+      observer.observe(body);
+    }
+  } catch (error) {
+    dispose();
+    throw error;
+  }
+  return dispose;
+}
+
 export async function createTransitBoardApp(
   dependencies: TransitBoardDependencies,
 ): Promise<TransitBoardController> {
@@ -183,7 +284,6 @@ export async function createTransitBoardApp(
   let renderGeneration = 0;
   let fullscreenButton: HTMLButtonElement | null = null;
   let resizeDisposer: (() => void) | null = null;
-  let resizeSettled: Promise<void> = Promise.resolve();
   let closePromise: Promise<void> | null = null;
   let teardownStarted = false;
 
@@ -237,6 +337,8 @@ export async function createTransitBoardApp(
       }
       if (typeof value === 'string' && isSafeColor(value)) {
         mount.style.setProperty(localName, value);
+      } else {
+        mount.style.removeProperty(localName);
       }
     }
     const fontFamily = variables['--font-sans'];
@@ -244,6 +346,8 @@ export async function createTransitBoardApp(
       mount.style.removeProperty('--font-ui');
     } else if (typeof fontFamily === 'string' && isSafeFontFamily(fontFamily)) {
       mount.style.setProperty('--font-ui', fontFamily);
+    } else {
+      mount.style.removeProperty('--font-ui');
     }
   };
 
@@ -432,7 +536,7 @@ export async function createTransitBoardApp(
   };
 
   const closeApp = (): Promise<void> => {
-    closePromise ??= resizeSettled.then(() => app.close());
+    closePromise ??= app.close();
     return closePromise;
   };
 
@@ -495,10 +599,7 @@ export async function createTransitBoardApp(
     if (teardownStarted) {
       return { teardown };
     }
-    resizeDisposer = app.setupSizeChangedNotifications();
-    resizeSettled = new Promise(resolve => {
-      eventTarget.requestAnimationFrame(() => resolve());
-    });
+    resizeDisposer = setupTransitBoardResizeNotifications(app, eventTarget, root);
     applyHostContext(app.getHostContext() ?? {});
     flushPendingResult();
     if (pendingResult === null && resultHost.querySelector('[data-state="loading"]')) {

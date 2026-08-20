@@ -59,8 +59,7 @@ class FakeApp {
   transport: object | undefined;
   handlersAtConnect: Record<string, boolean> | undefined;
   closeCount = 0;
-  resizeSetupCount = 0;
-  resizeDisposeCount = 0;
+  readonly sizeChanges: Array<{ width?: number; height?: number }> = [];
   nextResult: ToolResult = {
     content: [{ type: 'text', text: '{}' }],
     structuredContent: {},
@@ -131,15 +130,8 @@ class FakeApp {
     return { mode: this.displayModeResult ?? params.mode };
   }
 
-  setupSizeChangedNotifications(): () => void {
-    this.resizeSetupCount += 1;
-    let disposed = false;
-    return () => {
-      if (!disposed) {
-        disposed = true;
-        this.resizeDisposeCount += 1;
-      }
-    };
+  async sendSizeChanged(params: { width?: number; height?: number }): Promise<void> {
+    this.sizeChanges.push(params);
   }
 
   async close(): Promise<void> {
@@ -206,16 +198,110 @@ const startLifecycle = async (
   return { app, mount, controller };
 };
 
+type ResizeObserverProbe = {
+  callback: ResizeObserverCallback;
+  disconnectCount: number;
+  observed: Element[];
+  trigger(): void;
+};
+
+const installResizeSchedulerProbe = (): {
+  cancelledFrameIds: number[];
+  frames: Map<number, FrameRequestCallback>;
+  observers: ResizeObserverProbe[];
+  flushFrames(): void;
+  restore(): void;
+} => {
+  const resizeObserverDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+  const animationFrameDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'requestAnimationFrame',
+  );
+  const cancelFrameDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'cancelAnimationFrame',
+  );
+  const frames = new Map<number, FrameRequestCallback>();
+  const cancelledFrameIds: number[] = [];
+  const observers: ResizeObserverProbe[] = [];
+  let nextFrameId = 1;
+  class ProbeResizeObserver {
+    readonly probe: ResizeObserverProbe;
+
+    constructor(callback: ResizeObserverCallback) {
+      this.probe = {
+        callback,
+        disconnectCount: 0,
+        observed: [],
+        trigger: () => callback([], this as unknown as ResizeObserver),
+      };
+      observers.push(this.probe);
+    }
+
+    observe(target: Element): void {
+      this.probe.observed.push(target);
+    }
+
+    unobserve(): void {}
+
+    disconnect(): void {
+      this.probe.disconnectCount += 1;
+    }
+  }
+  Object.defineProperty(globalThis, 'ResizeObserver', {
+    configurable: true,
+    value: ProbeResizeObserver,
+  });
+  Object.defineProperty(globalThis, 'requestAnimationFrame', {
+    configurable: true,
+    value: (callback: FrameRequestCallback) => {
+      const frameId = nextFrameId;
+      nextFrameId += 1;
+      frames.set(frameId, callback);
+      return frameId;
+    },
+  });
+  Object.defineProperty(globalThis, 'cancelAnimationFrame', {
+    configurable: true,
+    value: (frameId: number) => {
+      cancelledFrameIds.push(frameId);
+      frames.delete(frameId);
+    },
+  });
+  const restoreProperty = (name: 'ResizeObserver' | 'requestAnimationFrame' | 'cancelAnimationFrame', descriptor: PropertyDescriptor | undefined): void => {
+    if (descriptor) {
+      Object.defineProperty(globalThis, name, descriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, name);
+    }
+  };
+  return {
+    cancelledFrameIds,
+    frames,
+    observers,
+    flushFrames: () => {
+      for (const [frameId, callback] of [...frames]) {
+        frames.delete(frameId);
+        callback(performance.now());
+      }
+    },
+    restore: () => {
+      restoreProperty('ResizeObserver', resizeObserverDescriptor);
+      restoreProperty('requestAnimationFrame', animationFrameDescriptor);
+      restoreProperty('cancelAnimationFrame', cancelFrameDescriptor);
+    },
+  };
+};
+
 describe('Transit Board Apps lifecycle', () => {
-  it('constructs the real SDK App without implicit resize and uses its public disposer', async () => {
+  it('constructs the real SDK App without implicit resize and preserves public size notifications', async () => {
     expect(typeof createTransitBoardSdkApp).toBe('function');
     const sdkApp = createTransitBoardSdkApp?.();
     if (!sdkApp) {
       throw new Error('Expected the production SDK App factory');
     }
-    const observed: Element[] = [];
+    const sentMethods: string[] = [];
     let observerCount = 0;
-    let disconnectCount = 0;
     const resizeObserverDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
     const animationFrameDescriptor = Object.getOwnPropertyDescriptor(
       globalThis,
@@ -225,13 +311,9 @@ describe('Transit Board Apps lifecycle', () => {
       constructor(_callback: ResizeObserverCallback) {
         observerCount += 1;
       }
-      observe(target: Element): void {
-        observed.push(target);
-      }
+      observe(): void {}
       unobserve(): void {}
-      disconnect(): void {
-        disconnectCount += 1;
-      }
+      disconnect(): void {}
     }
     Object.defineProperty(globalThis, 'ResizeObserver', {
       configurable: true,
@@ -250,6 +332,9 @@ describe('Transit Board Apps lifecycle', () => {
         onclose: undefined as SdkTransport['onclose'],
         async start(): Promise<void> {},
         async send(message: TransportMessage): Promise<void> {
+          if ('method' in message) {
+            sentMethods.push(message.method);
+          }
           if ('method' in message && message.method === 'ui/initialize' && 'id' in message) {
             queueMicrotask(() => {
               transport.onmessage?.({
@@ -272,11 +357,9 @@ describe('Transit Board Apps lifecycle', () => {
 
       await sdkApp.connect(transport);
       expect(observerCount).toBe(0);
-      const dispose = sdkApp.setupSizeChangedNotifications();
-      expect(observerCount).toBe(1);
-      expect(observed).toEqual([document.documentElement, document.body]);
-      dispose();
-      expect(disconnectCount).toBe(1);
+      await sdkApp.sendSizeChanged({ width: 320, height: 180 });
+      expect(sentMethods).toContain('ui/notifications/size-changed');
+      expect(observerCount).toBe(0);
       await sdkApp.close();
     } finally {
       if (resizeObserverDescriptor) {
@@ -327,40 +410,15 @@ describe('Transit Board Apps lifecycle', () => {
     expect(sdkApp.transport).toBeUndefined();
   });
 
-  it('drains the real SDK initial resize frame before terminal teardown closes transport', async () => {
+  it('cancels the initial Metro resize frame synchronously before closing the real SDK', async () => {
     expect(typeof createTransitBoardSdkApp).toBe('function');
     expect(typeof createTransitBoardApp).toBe('function');
     const sdkApp = createTransitBoardSdkApp?.();
     if (!sdkApp || !createTransitBoardApp) {
       throw new Error('Expected the production SDK lifecycle exports');
     }
-    const frameCallbacks: FrameRequestCallback[] = [];
-    let disconnectCount = 0;
+    const probe = installResizeSchedulerProbe();
     let closeCount = 0;
-    const resizeObserverDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
-    const animationFrameDescriptor = Object.getOwnPropertyDescriptor(
-      globalThis,
-      'requestAnimationFrame',
-    );
-    class ProbeResizeObserver {
-      constructor(_callback: ResizeObserverCallback) {}
-      observe(): void {}
-      unobserve(): void {}
-      disconnect(): void {
-        disconnectCount += 1;
-      }
-    }
-    Object.defineProperty(globalThis, 'ResizeObserver', {
-      configurable: true,
-      value: ProbeResizeObserver,
-    });
-    Object.defineProperty(globalThis, 'requestAnimationFrame', {
-      configurable: true,
-      value: (callback: FrameRequestCallback) => {
-        frameCallbacks.push(callback);
-        return frameCallbacks.length;
-      },
-    });
     try {
       type SdkTransport = Exclude<Parameters<App['connect']>[0], undefined>;
       type TransportMessage = Parameters<SdkTransport['send']>[0];
@@ -399,27 +457,154 @@ describe('Transit Board Apps lifecycle', () => {
       });
 
       const teardownPromise = controller.teardown();
-      expect(() => {
-        for (const callback of frameCallbacks.splice(0)) {
-          callback(performance.now());
-        }
-      }).not.toThrow();
+      const closeCountBeforeFrameFlush = closeCount;
+      const queuedFramesAfterTeardown = probe.frames.size;
+      probe.flushFrames();
       await teardownPromise;
 
-      expect(disconnectCount).toBe(1);
+      expect(closeCountBeforeFrameFlush).toBe(1);
+      expect(queuedFramesAfterTeardown).toBe(0);
+      expect(probe.cancelledFrameIds).toHaveLength(1);
+      expect(probe.observers).toHaveLength(1);
+      expect(probe.observers[0]?.observed).toEqual([document.documentElement, document.body]);
+      expect(probe.observers[0]?.disconnectCount).toBe(1);
       expect(closeCount).toBe(1);
       expect(sdkApp.transport).toBeUndefined();
     } finally {
-      if (resizeObserverDescriptor) {
-        Object.defineProperty(globalThis, 'ResizeObserver', resizeObserverDescriptor);
-      } else {
-        Reflect.deleteProperty(globalThis, 'ResizeObserver');
+      probe.restore();
+    }
+  });
+
+  it('cancels a later observer-queued Metro resize frame before closing the real SDK', async () => {
+    expect(typeof createTransitBoardSdkApp).toBe('function');
+    expect(typeof createTransitBoardApp).toBe('function');
+    const sdkApp = createTransitBoardSdkApp?.();
+    if (!sdkApp || !createTransitBoardApp) {
+      throw new Error('Expected the production SDK lifecycle exports');
+    }
+    const probe = installResizeSchedulerProbe();
+    let closeCount = 0;
+    let sizeNotificationCount = 0;
+    try {
+      type SdkTransport = Exclude<Parameters<App['connect']>[0], undefined>;
+      type TransportMessage = Parameters<SdkTransport['send']>[0];
+      const transport = {
+        onmessage: undefined as SdkTransport['onmessage'],
+        onerror: undefined as SdkTransport['onerror'],
+        onclose: undefined as SdkTransport['onclose'],
+        async start(): Promise<void> {},
+        async send(message: TransportMessage): Promise<void> {
+          if ('method' in message && message.method === 'ui/initialize' && 'id' in message) {
+            queueMicrotask(() => {
+              transport.onmessage?.({
+                jsonrpc: '2.0',
+                id: message.id,
+                result: {
+                  protocolVersion: '2026-01-26',
+                  hostInfo: { name: 'later-resize-probe', version: '1.0.0' },
+                  hostCapabilities: {},
+                  hostContext: {},
+                },
+              });
+            });
+          } else if ('method' in message && message.method === 'ui/notifications/size-changed') {
+            sizeNotificationCount += 1;
+          }
+        },
+        async close(): Promise<void> {
+          closeCount += 1;
+          transport.onclose?.();
+        },
+      } as SdkTransport;
+      const controller = await createTransitBoardApp({
+        app: sdkApp as unknown as FakeApp,
+        transport,
+        mount: createMount(),
+        root: document.documentElement,
+        eventTarget: window,
+      });
+
+      probe.flushFrames();
+      await Promise.resolve();
+      expect(sizeNotificationCount).toBe(1);
+      probe.observers[0]?.trigger();
+      expect(probe.frames.size).toBe(1);
+
+      await controller.teardown();
+      const queuedFramesAfterTeardown = probe.frames.size;
+      probe.flushFrames();
+      await Promise.resolve();
+
+      expect(queuedFramesAfterTeardown).toBe(0);
+      expect(sizeNotificationCount).toBe(1);
+      expect(probe.cancelledFrameIds).toHaveLength(1);
+      expect(probe.observers[0]?.disconnectCount).toBe(1);
+      expect(closeCount).toBe(1);
+    } finally {
+      probe.restore();
+    }
+  });
+
+  for (const trigger of ['host teardown', 'pagehide'] as const) {
+    it(`cancels queued resize work synchronously on ${trigger}`, async () => {
+      const probe = installResizeSchedulerProbe();
+      try {
+        const { app, controller } = await startLifecycle(completeContext('get_incidents'));
+        if (trigger === 'host teardown') {
+          const response = app.onteardown?.({}, {} as Parameters<TeardownHandler>[1]);
+          expect(response).toEqual({});
+        } else {
+          window.dispatchEvent(new Event('pagehide'));
+        }
+        const queuedFramesAfterTrigger = probe.frames.size;
+        probe.flushFrames();
+        await new Promise(resolve => window.setTimeout(resolve, 0));
+
+        expect(queuedFramesAfterTrigger).toBe(0);
+        expect(probe.cancelledFrameIds).toHaveLength(1);
+        expect(probe.observers).toHaveLength(1);
+        expect(probe.observers[0]?.disconnectCount).toBe(1);
+        expect(app.sizeChanges).toHaveLength(0);
+        expect(app.closeCount).toBe(1);
+        await controller.teardown();
+        expect(probe.observers[0]?.disconnectCount).toBe(1);
+        expect(app.closeCount).toBe(1);
+      } finally {
+        probe.restore();
       }
-      if (animationFrameDescriptor) {
-        Object.defineProperty(globalThis, 'requestAnimationFrame', animationFrameDescriptor);
-      } else {
-        Reflect.deleteProperty(globalThis, 'requestAnimationFrame');
-      }
+    });
+  }
+
+  it('cancels queued resize work synchronously when post-connect setup fails', async () => {
+    if (!createTransitBoardApp) {
+      throw new Error('Expected app.ts to export createTransitBoardApp');
+    }
+    const probe = installResizeSchedulerProbe();
+    try {
+      const app = new FakeApp(completeContext('get_incidents'));
+      app.contextError = new Error('context unavailable');
+      const lifecyclePromise = createTransitBoardApp({
+        app,
+        transport: { kind: 'test-transport' },
+        mount: createMount(),
+        root: document.documentElement,
+        eventTarget: window,
+      });
+      const rejection = expect(lifecyclePromise).rejects.toThrow('context unavailable');
+      await Promise.resolve();
+      await Promise.resolve();
+      const queuedFramesAfterFailure = probe.frames.size;
+      probe.flushFrames();
+      await rejection;
+
+      expect(queuedFramesAfterFailure).toBe(0);
+      expect(probe.cancelledFrameIds).toHaveLength(1);
+      expect(probe.observers).toHaveLength(1);
+      expect(probe.observers[0]?.disconnectCount).toBe(1);
+      expect(app.sizeChanges).toHaveLength(0);
+      expect(app.closeCount).toBe(1);
+    } finally {
+      probe.restore();
     }
   });
 
@@ -602,10 +787,10 @@ describe('Transit Board Apps lifecycle', () => {
           '--color-background-primary': 'rgb(1, 2, 3)',
           '--color-background-secondary': '#101820',
           '--color-text-primary': 'rgb(240, 241, 242)',
-          '--color-text-secondary': 'hsl(210 10% 70%)',
-          '--color-text-info': 'color(display-p3 0.2 0.5 0.9)',
+          '--color-text-secondary': 'hsl(210, 10%, 70%)',
+          '--color-text-info': 'rgb(40, 80, 160)',
           '--color-border-primary': 'transparent',
-          '--color-ring-primary': 'oklch(0.72 0.16 240)',
+          '--color-ring-primary': '#4488cc',
           '--font-sans': 'Transit Sans, sans-serif',
           '--not-a-host-variable': 'url(javascript:alert(1))',
         },
@@ -620,28 +805,55 @@ describe('Transit Board Apps lifecycle', () => {
     expect(mount.style.getPropertyValue('--board-canvas')).toBe('rgb(1, 2, 3)');
     expect(mount.style.getPropertyValue('--board-panel')).toBe('#101820');
     expect(mount.style.getPropertyValue('--board-ink')).toBe('rgb(240, 241, 242)');
-    expect(mount.style.getPropertyValue('--board-muted')).toBe('hsl(210 10% 70%)');
-    expect(mount.style.getPropertyValue('--board-accent')).toBe('color(display-p3 0.2 0.5 0.9)');
+    expect(mount.style.getPropertyValue('--board-muted')).toBe('hsl(210, 10%, 70%)');
+    expect(mount.style.getPropertyValue('--board-accent')).toBe('rgb(40, 80, 160)');
     expect(mount.style.getPropertyValue('--board-border')).toBe('transparent');
-    expect(mount.style.getPropertyValue('--focus-ring')).toBe('oklch(0.72 0.16 240)');
+    expect(mount.style.getPropertyValue('--focus-ring')).toBe('#4488cc');
     expect(mount.style.getPropertyValue('--font-ui')).toBe('Transit Sans, sans-serif');
     expect(mount.style.getPropertyValue('--not-a-host-variable')).toBe('');
 
+    app.onhostcontextchanged?.({
+      styles: {
+        variables: {
+          '--color-background-primary': 'color-mix(in srgb, red 25%, blue)',
+          '--font-sans': '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        },
+      },
+    } as unknown as McpUiHostContext);
+    expect(mount.style.getPropertyValue('--board-canvas')).toBe(
+      'color-mix(in srgb, red 25%, blue)',
+    );
+    expect(mount.style.getPropertyValue('--font-ui')).toBe(
+      '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    );
+
+    app.onhostcontextchanged?.({
+      styles: { variables: { '--font-sans': '"Noto Sans 日本語", sans-serif' } },
+    } as unknown as McpUiHostContext);
+    expect(mount.style.getPropertyValue('--font-ui')).toBe('"Noto Sans 日本語", sans-serif');
+
+    app.onhostcontextchanged?.({
+      styles: { variables: { '--font-sans': '"inherit", sans-serif' } },
+    } as unknown as McpUiHostContext);
+    expect(mount.style.getPropertyValue('--font-ui')).toBe('"inherit", sans-serif');
+
     const adversarialValues = [
-      ['--color-background-primary', 'image-set("https://example.invalid/pixel.png" 1x)', '--board-canvas', 'rgb(1, 2, 3)'],
-      ['--color-background-secondary', 'image("https://example.invalid/panel.png")', '--board-panel', '#101820'],
-      ['--color-text-primary', 'var(--attacker-color)', '--board-ink', 'rgb(240, 241, 242)'],
-      ['--color-text-secondary', 'env(attacker-color)', '--board-muted', 'hsl(210 10% 70%)'],
-      ['--color-text-info', 'linear-gradient(red, blue)', '--board-accent', 'color(display-p3 0.2 0.5 0.9)'],
-      ['--color-border-primary', 'cross-fade(url(https://example.invalid/a), red)', '--board-border', 'transparent'],
-      ['--color-ring-primary', 'paint(attacker)', '--focus-ring', 'oklch(0.72 0.16 240)'],
-      ['--font-sans', 'url(https://example.invalid/font.woff2)', '--font-ui', 'Transit Sans, sans-serif'],
-      ['--font-sans', 'local(Transit Sans)', '--font-ui', 'Transit Sans, sans-serif'],
-      ['--font-sans', 'var(--host-font)', '--font-ui', 'Transit Sans, sans-serif'],
-      ['--font-sans', 'env(host-font)', '--font-ui', 'Transit Sans, sans-serif'],
-      ['--font-sans', 'inherit', '--font-ui', 'Transit Sans, sans-serif'],
-      ['--font-sans', 'initial, sans-serif', '--font-ui', 'Transit Sans, sans-serif'],
-      ['--font-sans', 'revert-layer', '--font-ui', 'Transit Sans, sans-serif'],
+      ['--color-background-primary', 'image-set("https://example.invalid/pixel.png" 1x)', '--board-canvas', ''],
+      ['--color-background-secondary', 'image("https://example.invalid/panel.png")', '--board-panel', ''],
+      ['--color-text-primary', 'var(--attacker-color)', '--board-ink', ''],
+      ['--color-text-secondary', 'env(attacker-color)', '--board-muted', ''],
+      ['--color-text-info', 'linear-gradient(red, blue)', '--board-accent', ''],
+      ['--color-text-info', 'color-mix(in srgb, red, expression(alert(1)))', '--board-accent', ''],
+      ['--color-border-primary', 'cross-fade(url(https://example.invalid/a), red)', '--board-border', ''],
+      ['--color-ring-primary', 'paint(attacker)', '--focus-ring', ''],
+      ['--font-sans', 'url(https://example.invalid/font.woff2)', '--font-ui', ''],
+      ['--font-sans', 'local(Transit Sans)', '--font-ui', ''],
+      ['--font-sans', 'var(--host-font)', '--font-ui', ''],
+      ['--font-sans', 'env(host-font)', '--font-ui', ''],
+      ['--font-sans', 'inherit', '--font-ui', ''],
+      ['--font-sans', 'initial', '--font-ui', ''],
+      ['--font-sans', 'revert-layer', '--font-ui', ''],
+      ['--font-sans', 'Transit\nSans', '--font-ui', ''],
     ] as const;
     for (const [hostName, value, localName, expected] of adversarialValues) {
       app.onhostcontextchanged?.({
@@ -737,8 +949,6 @@ describe('Transit Board Apps lifecycle', () => {
     expect(queryRequired(mount, '[role="status"]').textContent).toBe(
       'Connecting to Transit Board.',
     );
-    expect(app.resizeSetupCount).toBe(0);
-    expect(app.resizeDisposeCount).toBe(0);
     expect(app.closeCount).toBe(1);
     await controller.teardown();
     expect(app.closeCount).toBe(1);
@@ -769,8 +979,6 @@ describe('Transit Board Apps lifecycle', () => {
     expect(queryRequired(mount, '[role="status"]').textContent).toBe(
       'Connecting to Transit Board.',
     );
-    expect(app.resizeSetupCount).toBe(0);
-    expect(app.resizeDisposeCount).toBe(0);
     expect(app.closeCount).toBe(1);
   });
 
@@ -801,8 +1009,6 @@ describe('Transit Board Apps lifecycle', () => {
     expect(queryRequired(mount, '[role="status"]').textContent).toBe(
       'Connecting to Transit Board.',
     );
-    expect(app.resizeSetupCount).toBe(0);
-    expect(app.resizeDisposeCount).toBe(0);
     expect(app.closeCount).toBe(1);
     await controller.teardown();
     expect(app.closeCount).toBe(1);
@@ -824,8 +1030,6 @@ describe('Transit Board Apps lifecycle', () => {
       eventTarget: window,
     })).rejects.toThrow('context unavailable');
 
-    expect(app.resizeSetupCount).toBe(1);
-    expect(app.resizeDisposeCount).toBe(1);
     expect(app.closeCount).toBe(1);
     expect(app.ontoolinput).toBeUndefined();
     expect(app.onteardown).toBeUndefined();
@@ -856,7 +1060,6 @@ describe('Transit Board Apps lifecycle', () => {
 
       expect(mount.dataset.displayMode).toBe('inline');
       expect(queryRequired(mount, '[role="status"]').textContent).toBe(statusBefore);
-      expect(app.resizeDisposeCount).toBe(1);
       expect(app.closeCount).toBe(1);
     });
   }
@@ -887,22 +1090,17 @@ describe('Transit Board Apps lifecycle', () => {
     expect(mount.querySelector('[data-view="service-incidents"]')).toBeNull();
     expect(queryRequired(mount, '[role="status"]').textContent).toBe(statusBefore);
     expect(refresh.disabled).toBe(true);
-    expect(app.resizeDisposeCount).toBe(1);
     expect(app.closeCount).toBe(1);
   });
 
   it('tears down resize and transport exactly once on repeated pagehide', async () => {
     const { app, controller } = await startLifecycle(completeContext('get_incidents'));
-    expect(app.resizeSetupCount).toBe(1);
-
     window.dispatchEvent(new Event('pagehide'));
     window.dispatchEvent(new Event('pagehide'));
     await new Promise(resolve => window.setTimeout(resolve, 0));
 
-    expect(app.resizeDisposeCount).toBe(1);
     expect(app.closeCount).toBe(1);
     await controller.teardown();
-    expect(app.resizeDisposeCount).toBe(1);
     expect(app.closeCount).toBe(1);
   });
 
@@ -930,8 +1128,6 @@ describe('Transit Board Apps lifecycle', () => {
     expect(mount.textContent).not.toContain('secret-must-not-render');
 
     await controller.teardown();
-    expect(app.resizeSetupCount).toBe(1);
-    expect(app.resizeDisposeCount).toBe(1);
     expect(app.closeCount).toBe(1);
     expect(app.ontoolinput).toBeUndefined();
     expect(app.ontoolresult).toBeUndefined();
@@ -962,8 +1158,6 @@ describe('Transit Board Apps lifecycle', () => {
 
     window.dispatchEvent(new Event('pagehide'));
     await new Promise(resolve => window.setTimeout(resolve, 0));
-    expect(app.resizeSetupCount).toBe(1);
-    expect(app.resizeDisposeCount).toBe(1);
     expect(app.closeCount).toBe(1);
     await controller.teardown();
     expect(app.closeCount).toBe(1);
