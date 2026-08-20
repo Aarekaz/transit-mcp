@@ -25,6 +25,7 @@ type CreateTransitBoardApp = (dependencies: {
   mount: HTMLElement;
   root?: HTMLElement;
   eventTarget?: Window;
+  supportsColor?: (value: string) => boolean;
 }) => Promise<TransitBoardController>;
 
 type LifecycleModule = {
@@ -180,6 +181,7 @@ afterEach(async () => {
 const startLifecycle = async (
   context: McpUiHostContext,
   configure?: (app: FakeApp) => void,
+  supportsColor?: (value: string) => boolean,
 ): Promise<{ app: FakeApp; mount: HTMLElement; controller: TransitBoardController }> => {
   if (!createTransitBoardApp) {
     throw new Error('Expected app.ts to export createTransitBoardApp');
@@ -193,6 +195,7 @@ const startLifecycle = async (
     mount,
     root: document.documentElement,
     eventTarget: window,
+    supportsColor,
   });
   activeControllers.push(controller);
   return { app, mount, controller };
@@ -777,7 +780,12 @@ describe('Transit Board Apps lifecycle', () => {
   });
 
   it('applies only controlled host theme, style, safe-area, and display-mode values', async () => {
-    const { app, mount } = await startLifecycle(completeContext('get_incidents'));
+    const supportedModernColor = 'color-mix(in srgb, red 25%, blue)';
+    const { app, mount } = await startLifecycle(
+      completeContext('get_incidents'),
+      undefined,
+      value => value === supportedModernColor,
+    );
     app.onhostcontextchanged?.({
       theme: 'dark',
       displayMode: 'fullscreen',
@@ -815,13 +823,13 @@ describe('Transit Board Apps lifecycle', () => {
     app.onhostcontextchanged?.({
       styles: {
         variables: {
-          '--color-background-primary': 'color-mix(in srgb, red 25%, blue)',
+          '--color-background-primary': supportedModernColor,
           '--font-sans': '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         },
       },
     } as unknown as McpUiHostContext);
     expect(mount.style.getPropertyValue('--board-canvas')).toBe(
-      'color-mix(in srgb, red 25%, blue)',
+      supportedModernColor,
     );
     expect(mount.style.getPropertyValue('--font-ui')).toBe(
       '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
@@ -844,6 +852,9 @@ describe('Transit Board Apps lifecycle', () => {
       ['--color-text-secondary', 'env(attacker-color)', '--board-muted', ''],
       ['--color-text-info', 'linear-gradient(red, blue)', '--board-accent', ''],
       ['--color-text-info', 'color-mix(in srgb, red, expression(alert(1)))', '--board-accent', ''],
+      ['--color-background-primary', 'color-mix(foo)', '--board-canvas', ''],
+      ['--color-background-primary', 'color-mix(in srgb, red, inherit)', '--board-canvas', ''],
+      ['--color-background-primary', 'color-mix(in srgb, red, initial)', '--board-canvas', ''],
       ['--color-border-primary', 'cross-fade(url(https://example.invalid/a), red)', '--board-border', ''],
       ['--color-ring-primary', 'paint(attacker)', '--focus-ring', ''],
       ['--font-sans', 'url(https://example.invalid/font.woff2)', '--font-ui', ''],

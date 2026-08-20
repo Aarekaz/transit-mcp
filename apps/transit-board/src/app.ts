@@ -45,6 +45,7 @@ export type TransitBoardDependencies = {
   mount: HTMLElement;
   root?: HTMLElement;
   eventTarget?: Window;
+  supportsColor?: (value: string) => boolean;
 };
 
 const HOST_COLOR_STYLE_MAP = {
@@ -61,24 +62,6 @@ const unsafeCssFunction = /\b(?:url|src|image|image-set|cross-fade|paint|element
 const unsafeCssSyntax = /[\\;{}!]|\/\*|\*\//;
 const cssControlCharacter = /[\u0000-\u001f\u007f]/u;
 const cssWideKeyword = /^(?:inherit|initial|unset|revert|revert-layer)$/i;
-
-function isBalancedFunction(value: string, name: string): boolean {
-  if (!value.toLowerCase().startsWith(`${name}(`) || !value.endsWith(')')) {
-    return false;
-  }
-  let depth = 0;
-  for (const character of value) {
-    if (character === '(') {
-      depth += 1;
-    } else if (character === ')') {
-      depth -= 1;
-      if (depth < 0) {
-        return false;
-      }
-    }
-  }
-  return depth === 0;
-}
 
 function unquotedCss(value: string): { balanced: boolean; value: string } {
   let quote: '"' | "'" | null = null;
@@ -99,7 +82,15 @@ function unquotedCss(value: string): { balanced: boolean; value: string } {
   return { balanced: quote === null, value: unquoted };
 }
 
-function isSafeColor(value: string): boolean {
+function browserSupportsColor(value: string): boolean {
+  try {
+    return typeof CSS !== 'undefined' && CSS.supports('color', value);
+  } catch {
+    return false;
+  }
+}
+
+function isSafeColor(value: string, supportsColor: (value: string) => boolean): boolean {
   const candidate = value.trim();
   if (
     candidate.length === 0
@@ -113,7 +104,14 @@ function isSafeColor(value: string): boolean {
   }
   const probe = document.createElement('span');
   probe.style.color = candidate;
-  return probe.style.color !== '' || isBalancedFunction(candidate, 'color-mix');
+  if (probe.style.color !== '') {
+    return true;
+  }
+  try {
+    return supportsColor(candidate);
+  } catch {
+    return false;
+  }
 }
 
 function isSafeFontFamily(value: string): boolean {
@@ -274,6 +272,7 @@ export async function createTransitBoardApp(
     mount,
     root = document.documentElement,
     eventTarget = window,
+    supportsColor = browserSupportsColor,
   } = dependencies;
   let hostContext: McpUiHostContext = {};
   let originToolName: string | null = null;
@@ -335,7 +334,7 @@ export async function createTransitBoardApp(
         mount.style.removeProperty(localName);
         continue;
       }
-      if (typeof value === 'string' && isSafeColor(value)) {
+      if (typeof value === 'string' && isSafeColor(value, supportsColor)) {
         mount.style.setProperty(localName, value);
       } else {
         mount.style.removeProperty(localName);
