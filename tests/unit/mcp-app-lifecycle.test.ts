@@ -16,6 +16,7 @@ type CallToolParams = Parameters<App['callServerTool']>[0];
 type ToolResult = Awaited<ReturnType<App['callServerTool']>>;
 
 type TransitBoardController = {
+  refresh(): Promise<void>;
   teardown(): Promise<void>;
 };
 
@@ -25,7 +26,6 @@ type CreateTransitBoardApp = (dependencies: {
   mount: HTMLElement;
   root?: HTMLElement;
   eventTarget?: Window;
-  supportsColor?: (value: string) => boolean;
 }) => Promise<TransitBoardController>;
 
 type LifecycleModule = {
@@ -181,7 +181,6 @@ afterEach(async () => {
 const startLifecycle = async (
   context: McpUiHostContext,
   configure?: (app: FakeApp) => void,
-  supportsColor?: (value: string) => boolean,
 ): Promise<{ app: FakeApp; mount: HTMLElement; controller: TransitBoardController }> => {
   if (!createTransitBoardApp) {
     throw new Error('Expected app.ts to export createTransitBoardApp');
@@ -195,7 +194,6 @@ const startLifecycle = async (
     mount,
     root: document.documentElement,
     eventTarget: window,
-    supportsColor,
   });
   activeControllers.push(controller);
   return { app, mount, controller };
@@ -780,12 +778,8 @@ describe('Transit Board Apps lifecycle', () => {
   });
 
   it('applies only controlled host theme, style, safe-area, and display-mode values', async () => {
-    const supportedModernColor = 'color-mix(in srgb, red 25%, blue)';
-    const { app, mount } = await startLifecycle(
-      completeContext('get_incidents'),
-      undefined,
-      value => value === supportedModernColor,
-    );
+    const supportedRuntimeColor = 'rebeccapurple';
+    const { app, mount } = await startLifecycle(completeContext('get_incidents'));
     app.onhostcontextchanged?.({
       theme: 'dark',
       displayMode: 'fullscreen',
@@ -823,13 +817,13 @@ describe('Transit Board Apps lifecycle', () => {
     app.onhostcontextchanged?.({
       styles: {
         variables: {
-          '--color-background-primary': supportedModernColor,
+          '--color-background-primary': supportedRuntimeColor,
           '--font-sans': '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         },
       },
     } as unknown as McpUiHostContext);
     expect(mount.style.getPropertyValue('--board-canvas')).toBe(
-      supportedModernColor,
+      supportedRuntimeColor,
     );
     expect(mount.style.getPropertyValue('--font-ui')).toBe(
       '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
@@ -852,7 +846,6 @@ describe('Transit Board Apps lifecycle', () => {
       ['--color-text-secondary', 'env(attacker-color)', '--board-muted', ''],
       ['--color-text-info', 'linear-gradient(red, blue)', '--board-accent', ''],
       ['--color-text-info', 'color-mix(in srgb, red, expression(alert(1)))', '--board-accent', ''],
-      ['--color-background-primary', 'color-mix(foo)', '--board-canvas', ''],
       ['--color-background-primary', 'color-mix(in srgb, red, inherit)', '--board-canvas', ''],
       ['--color-background-primary', 'color-mix(in srgb, red, initial)', '--board-canvas', ''],
       ['--color-border-primary', 'cross-fade(url(https://example.invalid/a), red)', '--board-border', ''],
@@ -877,6 +870,54 @@ describe('Transit Board Apps lifecycle', () => {
       styles: { variables: { '--color-background-primary': undefined } },
     } as unknown as McpUiHostContext);
     expect(mount.style.getPropertyValue('--board-canvas')).toBe('');
+  });
+
+  it('keeps native color parsing authoritative when callers supply an obsolete override', async () => {
+    if (!createTransitBoardApp) {
+      throw new Error('Expected app.ts to export createTransitBoardApp');
+    }
+    const mount = createMount();
+    const app = new FakeApp(completeContext('get_incidents'));
+    const dependencies = {
+      app,
+      transport: { kind: 'test-transport' },
+      mount,
+      root: document.documentElement,
+      eventTarget: window,
+      supportsColor: () => true,
+    };
+    const cssDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'CSS');
+    Object.defineProperty(globalThis, 'CSS', {
+      configurable: true,
+      value: { supports: () => false },
+    });
+    try {
+      const parserProbe = document.createElement('span');
+      parserProbe.style.color = 'totally-not-a-color';
+      expect(parserProbe.style.color).toBe('');
+      expect(CSS.supports('color', 'totally-not-a-color')).toBe(false);
+      const controller = await createTransitBoardApp(dependencies);
+      activeControllers.push(controller);
+
+      for (const value of [
+        'totally-not-a-color',
+        'color-mix(foo)',
+        'color-mix(in srgb, red, inherit)',
+        'light-dark(revert, red)',
+        'linear-gradient(red, blue)',
+      ]) {
+        app.onhostcontextchanged?.({
+          styles: { variables: { '--color-background-primary': value } },
+        } as unknown as McpUiHostContext);
+        expect(mount.style.getPropertyValue('--board-canvas')).toBe('');
+      }
+    } finally {
+      if (cssDescriptor) {
+        Object.defineProperty(globalThis, 'CSS', cssDescriptor);
+      } else {
+        Reflect.deleteProperty(globalThis, 'CSS');
+      }
+    }
   });
 
   it('offers fullscreen only when the host advertises it and applies the returned mode', async () => {
@@ -934,6 +975,39 @@ describe('Transit Board Apps lifecycle', () => {
     await resultPromise;
     await new Promise(resolve => window.setTimeout(resolve, 0));
 
+    expect(mount.querySelector('[data-state="cancelled"]')).not.toBeNull();
+    expect(queryRequired(mount, '[role="status"]').textContent).toBe(
+      'Transit request cancelled.',
+    );
+  });
+
+  it('disables refresh and preserves cancellation when clicked after cancellation', async () => {
+    const { app, mount } = await startLifecycle(completeContext('get_incidents'));
+    app.ontoolinput?.({ arguments: { city: 'dc' } });
+    app.ontoolcancelled?.({ reason: 'Cancelled by rider.' });
+    const refresh = queryRequired<HTMLButtonElement>(mount, '[data-action="refresh"]');
+
+    expect(refresh.disabled).toBe(true);
+    refresh.click();
+    await Promise.resolve();
+
+    expect(app.calls).toHaveLength(0);
+    expect(mount.querySelector('[data-state="cancelled"]')).not.toBeNull();
+    expect(queryRequired(mount, '[role="status"]').textContent).toBe(
+      'Transit request cancelled.',
+    );
+  });
+
+  it('ignores a direct controller refresh after cancellation', async () => {
+    const { app, mount, controller } = await startLifecycle(
+      completeContext('get_incidents'),
+    );
+    app.ontoolinput?.({ arguments: { city: 'dc' } });
+    app.ontoolcancelled?.({ reason: 'Cancelled by rider.' });
+
+    await controller.refresh();
+
+    expect(app.calls).toHaveLength(0);
     expect(mount.querySelector('[data-state="cancelled"]')).not.toBeNull();
     expect(queryRequired(mount, '[role="status"]').textContent).toBe(
       'Transit request cancelled.',
@@ -1117,18 +1191,7 @@ describe('Transit Board Apps lifecycle', () => {
 
   it('announces cancellation and errors, then disconnects handlers and transport on teardown', async () => {
     const { app, mount, controller } = await startLifecycle(completeContext('get_incidents'));
-    app.ontoolcancelled?.({ reason: '<img src=x onerror=alert(1)>' });
-    expect(queryRequired(mount, '[data-state="cancelled"]').textContent).toContain(
-      '<img src=x onerror=alert(1)>',
-    );
-    expect(mount.querySelector('img')).toBeNull();
-    expect(queryRequired(mount, '[role="status"]').textContent).toContain('Transit request cancelled');
-
     app.ontoolinput?.({ arguments: { city: 'dc' } });
-    app.ontoolresult?.({
-      content: [{ type: 'text', text: JSON.stringify({ city: 'dc', incidents: [] }) }],
-      structuredContent: { city: 'dc', incidents: [] },
-    });
     app.callError = new Error('Bearer secret-must-not-render');
     queryRequired<HTMLButtonElement>(mount, '[data-action="refresh"]').click();
     await Promise.resolve();
@@ -1137,6 +1200,13 @@ describe('Transit Board Apps lifecycle', () => {
       'Transit data could not be refreshed',
     );
     expect(mount.textContent).not.toContain('secret-must-not-render');
+
+    app.ontoolcancelled?.({ reason: '<img src=x onerror=alert(1)>' });
+    expect(queryRequired(mount, '[data-state="cancelled"]').textContent).toContain(
+      '<img src=x onerror=alert(1)>',
+    );
+    expect(mount.querySelector('img')).toBeNull();
+    expect(queryRequired(mount, '[role="status"]').textContent).toContain('Transit request cancelled');
 
     await controller.teardown();
     expect(app.closeCount).toBe(1);

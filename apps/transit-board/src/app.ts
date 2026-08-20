@@ -36,6 +36,7 @@ export type TransitBoardHost = {
 };
 
 export type TransitBoardController = {
+  refresh(): Promise<void>;
   teardown(): Promise<void>;
 };
 
@@ -45,7 +46,6 @@ export type TransitBoardDependencies = {
   mount: HTMLElement;
   root?: HTMLElement;
   eventTarget?: Window;
-  supportsColor?: (value: string) => boolean;
 };
 
 const HOST_COLOR_STYLE_MAP = {
@@ -58,10 +58,11 @@ const HOST_COLOR_STYLE_MAP = {
   '--color-ring-primary': '--focus-ring',
 } as const;
 
-const unsafeCssFunction = /\b(?:url|src|image|image-set|cross-fade|paint|element|var|env|attr|expression)\s*\(/i;
+const unsafeCssFunction = /\b(?:url|src|image|image-set|cross-fade|paint|element|var|env|attr|expression|(?:repeating-)?(?:linear|radial|conic)-gradient)\s*\(/i;
 const unsafeCssSyntax = /[\\;{}!]|\/\*|\*\//;
 const cssControlCharacter = /[\u0000-\u001f\u007f]/u;
 const cssWideKeyword = /^(?:inherit|initial|unset|revert|revert-layer)$/i;
+const unsafeColorKeyword = /\b(?:currentcolor|inherit|initial|unset|revert|revert-layer)\b/i;
 
 function unquotedCss(value: string): { balanced: boolean; value: string } {
   let quote: '"' | "'" | null = null;
@@ -90,7 +91,7 @@ function browserSupportsColor(value: string): boolean {
   }
 }
 
-function isSafeColor(value: string, supportsColor: (value: string) => boolean): boolean {
+function isSafeColor(value: string): boolean {
   const candidate = value.trim();
   if (
     candidate.length === 0
@@ -98,7 +99,7 @@ function isSafeColor(value: string, supportsColor: (value: string) => boolean): 
     || cssControlCharacter.test(candidate)
     || unsafeCssSyntax.test(candidate)
     || unsafeCssFunction.test(candidate)
-    || /^(?:currentcolor|inherit|initial|unset|revert|revert-layer)$/i.test(candidate)
+    || unsafeColorKeyword.test(candidate)
   ) {
     return false;
   }
@@ -107,11 +108,7 @@ function isSafeColor(value: string, supportsColor: (value: string) => boolean): 
   if (probe.style.color !== '') {
     return true;
   }
-  try {
-    return supportsColor(candidate);
-  } catch {
-    return false;
-  }
+  return browserSupportsColor(candidate);
 }
 
 function isSafeFontFamily(value: string): boolean {
@@ -272,7 +269,6 @@ export async function createTransitBoardApp(
     mount,
     root = document.documentElement,
     eventTarget = window,
-    supportsColor = browserSupportsColor,
   } = dependencies;
   let hostContext: McpUiHostContext = {};
   let originToolName: string | null = null;
@@ -318,6 +314,7 @@ export async function createTransitBoardApp(
 
   const updateRefreshAvailability = (): void => {
     refreshButton.disabled = refreshInFlight
+      || toolLifecycleCancelled
       || originalArguments === null
       || originToolName === null
       || !isSupportedToolName(originToolName);
@@ -334,7 +331,7 @@ export async function createTransitBoardApp(
         mount.style.removeProperty(localName);
         continue;
       }
-      if (typeof value === 'string' && isSafeColor(value, supportsColor)) {
+      if (typeof value === 'string' && isSafeColor(value)) {
         mount.style.setProperty(localName, value);
       } else {
         mount.style.removeProperty(localName);
@@ -477,6 +474,7 @@ export async function createTransitBoardApp(
   async function refresh(): Promise<void> {
     if (
       refreshInFlight
+      || toolLifecycleCancelled
       || teardownStarted
       || originalArguments === null
       || originToolName === null
@@ -567,6 +565,7 @@ export async function createTransitBoardApp(
     toolLifecycleCancelled = true;
     pendingResult = null;
     renderGeneration += 1;
+    updateRefreshAvailability();
     resultHost.replaceChildren(stateView(
       'cancelled',
       'Transit request cancelled',
@@ -596,7 +595,7 @@ export async function createTransitBoardApp(
   try {
     await app.connect(transport);
     if (teardownStarted) {
-      return { teardown };
+      return { refresh, teardown };
     }
     resizeDisposer = setupTransitBoardResizeNotifications(app, eventTarget, root);
     applyHostContext(app.getHostContext() ?? {});
@@ -625,7 +624,7 @@ export async function createTransitBoardApp(
     throw error;
   }
 
-  return { teardown };
+  return { refresh, teardown };
 }
 
 export function createTransitBoardSdkApp(): App {
