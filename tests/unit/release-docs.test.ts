@@ -134,11 +134,28 @@ describe('release operator documentation', () => {
   it('documents reproducible browser verification and the inert public bundle boundary', () => {
     expect(appsVerification).toContain('bun run build:apps');
     expect(appsVerification).toContain('bun run test:apps');
+    expect(appsVerification).toContain(
+      'git diff --exit-code -- public/apps/transit-board.html',
+    );
+    expect(appsVerification).toContain('git diff --check origin/main...HEAD');
     expect(appsVerification).toContain('public/apps/transit-board.html');
     expect(appsVerification).toMatch(/publicly readable[^.]*inert/i);
     expect(appsVerification).toMatch(/no direct (?:browser )?network/i);
     expect(appsVerification).toMatch(/no (?:browser )?storage/i);
     expect(appsVerification).toMatch(/no (?:browser )?permissions/i);
+    for (const policy of [
+      'secrets',
+      'innerHTML',
+      'external URLs/assets',
+      'fetch/XHR/WebSocket/EventSource',
+      'storage/permission APIs',
+      'new Wrangler bindings',
+      'package-lock files',
+      'v1 server imports',
+      'OAuth/legacy-route changes',
+    ]) {
+      expect(appsVerification).toContain(policy);
+    }
   });
 
   it('pins the browser runner and places the Chromium gate before the Worker dry-run', () => {

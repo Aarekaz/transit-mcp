@@ -22,17 +22,25 @@ type DeliveryRecord = {
   params: unknown;
 };
 
+type ProtocolRecord = {
+  direction: 'app-to-host' | 'host-to-app';
+  method: string;
+  sequence: number;
+  params?: unknown;
+};
+
 type HarnessRecords = {
   calls: ToolCallRecord[];
   deliveries: DeliveryRecord[];
   displayRequests: string[];
   sizeChanges: { width?: number; height?: number }[];
-  unexpectedProtocol: string[];
 };
 
 type HarnessSnapshot = HarnessRecords & {
   tool: ToolName;
   state: FixtureState;
+  protocol: ProtocolRecord[];
+  unexpectedProtocol: string[];
 };
 
 const required = <ElementType extends Element>(selector: string): ElementType => {
@@ -54,6 +62,17 @@ let activeBridge: AppBridge | null = null;
 let mountSequence = 0;
 let operation = Promise.resolve();
 let records: HarnessRecords = freshRecords();
+const protocol: ProtocolRecord[] = [];
+const unexpectedProtocol: string[] = [];
+const frameSources = new Set<MessageEventSource>();
+const frameSequences = new Map<MessageEventSource, number>();
+const expectedInboundMethods = new Set([
+  'ui/initialize',
+  'ui/notifications/initialized',
+  'ui/notifications/size-changed',
+  'tools/call',
+  'ui/request-display-mode',
+]);
 
 function freshRecords(): HarnessRecords {
   return {
@@ -61,9 +80,36 @@ function freshRecords(): HarnessRecords {
     deliveries: [],
     displayRequests: [],
     sizeChanges: [],
-    unexpectedProtocol: [],
   };
 }
+
+function recordProtocol(
+  direction: ProtocolRecord['direction'],
+  sequence: number,
+  message: unknown,
+): void {
+  if (typeof message !== 'object' || message === null) return;
+  const candidate = message as { jsonrpc?: unknown; method?: unknown; params?: unknown };
+  if (candidate.jsonrpc !== '2.0' || typeof candidate.method !== 'string') return;
+  protocol.push({
+    direction,
+    method: candidate.method,
+    sequence,
+    ...('params' in candidate ? { params: structuredClone(candidate.params) } : {}),
+  });
+  if (direction === 'app-to-host' && !expectedInboundMethods.has(candidate.method)) {
+    unexpectedProtocol.push(candidate.method);
+  }
+}
+
+window.addEventListener('message', event => {
+  if (!event.source || !frameSources.has(event.source)) return;
+  recordProtocol(
+    'app-to-host',
+    frameSequences.get(event.source) ?? mountSequence,
+    event.data,
+  );
+});
 
 function isToolName(value: string): value is ToolName {
   return TOOL_NAMES.some(toolName => toolName === value);
@@ -214,7 +260,7 @@ async function mountScenario(
       ...(calledArguments === undefined ? {} : { arguments: calledArguments }),
     });
     if (!isToolName(calledTool)) {
-      records.unexpectedProtocol.push(`tools/call:${calledTool}`);
+      unexpectedProtocol.push(`tools/call:${calledTool}`);
       return {
         content: [{ type: 'text', text: 'Unsupported local fixture tool.' }],
         isError: true,
@@ -241,10 +287,10 @@ async function mountScenario(
     }
   });
   bridge.addEventListener('requestteardown', () => {
-    records.unexpectedProtocol.push('ui/notifications/request-teardown');
+    unexpectedProtocol.push('ui/notifications/request-teardown');
   });
   bridge.addEventListener('loggingmessage', () => {
-    records.unexpectedProtocol.push('notifications/message');
+    unexpectedProtocol.push('notifications/message');
   });
 
   const initialized = new Promise<void>((resolve, reject) => {
@@ -267,7 +313,15 @@ async function mountScenario(
 
   const target = frame.contentWindow;
   if (!target) throw new Error('Sandbox frame window is unavailable.');
-  await bridge.connect(new PostMessageTransport(target, target));
+  frameSources.add(target);
+  frameSequences.set(target, sequence);
+  const transport = new PostMessageTransport(target, target);
+  const send = transport.send.bind(transport);
+  transport.send = async (message, options) => {
+    recordProtocol('host-to-app', sequence, message);
+    await send(message, options);
+  };
+  await bridge.connect(transport);
   const resource = frame.dataset.resource;
   if (resource !== '/apps/transit-board.html') {
     throw new Error('Sandbox resource path is invalid.');
@@ -329,6 +383,8 @@ Object.defineProperty(window, '__metroAppsHarness', {
         tool: selectedTool(),
         state: selectedState(),
         ...records,
+        protocol,
+        unexpectedProtocol,
       });
     },
   },

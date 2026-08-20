@@ -116,7 +116,13 @@ function emptyStructuredFor(toolName: ToolName): Record<string, unknown> {
     case 'get_train_positions':
       return { ...structured, totalTrains: 0, trains: [] };
     case 'get_route_info':
-      return { city: structured.city };
+      return {
+        city: 'nyc',
+        routeId: '',
+        shortName: '',
+        longName: '',
+        description: '',
+      };
   }
 }
 

@@ -174,15 +174,24 @@ export function renderBusStops(model: BusStopsModel): HTMLElement {
 }
 
 export function renderRouteDetail(model: RouteDetailModel): HTMLElement {
-  return element('section', {
+  const section = element('section', {
     className: 'transit-view route-detail-view',
     attributes: { 'data-view': 'route-detail' },
-  }, [
-    viewHeader(model.city, `${model.shortName} · ${model.longName}`, 'directory'),
+  }, [viewHeader(
+    model.city,
+    model.empty ? 'NYC route detail' : `${model.shortName} · ${model.longName}`,
+    'directory',
+  )]);
+  if (model.empty) {
+    section.append(emptyState('No route detail is available.'));
+    return section;
+  }
+  section.append(
     element('article', { className: 'route-detail-panel' }, [
       element('p', { className: 'detail-kicker', text: `Route ${model.routeId}` }),
       element('h2', { text: 'Service description' }),
       element('p', { className: 'detail-description', text: model.description }),
     ]),
-  ]);
+  );
+  return section;
 }

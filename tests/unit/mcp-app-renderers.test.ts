@@ -459,6 +459,45 @@ describe('Transit Board route renderers', () => {
     expect(container.textContent).not.toContain('Stops');
     expect(container.querySelector('pre')).toBeNull();
   });
+
+  it('renders the schema-valid all-empty route detail as a dedicated empty view', () => {
+    const container = mountResult('get_route_info', {
+      city: 'nyc',
+      routeId: '',
+      shortName: '',
+      longName: '',
+      description: '',
+    });
+
+    expect(queryRequired(container, 'section[data-view="route-detail"]')).toBeTruthy();
+    expect(queryRequired(container, '[data-empty-state]').textContent).toContain(
+      'No route detail is available',
+    );
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it.each([
+    {
+      city: 'nyc',
+      routeId: '',
+      shortName: 'A',
+      longName: '',
+      description: '',
+    },
+    {
+      city: 'nyc',
+      routeId: '',
+      shortName: '',
+      longName: '',
+    },
+  ])('keeps partial or missing route detail malformed', result => {
+    const container = mountResult('get_route_info', result);
+
+    expect(queryRequired(container, '[role="alert"]').textContent).toContain(
+      'This route detail result can’t be displayed',
+    );
+    expect(container.querySelector('[data-empty-state]')).toBeNull();
+  });
 });
 
 describe('Transit Board vehicle renderers', () => {

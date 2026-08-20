@@ -1,8 +1,6 @@
-import { existsSync } from 'node:fs';
 import { defineConfig } from '@playwright/test';
 
 const baseURL = 'http://127.0.0.1:4178';
-const localChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
 export default defineConfig({
   testDir: './tests/apps',
@@ -18,7 +16,6 @@ export default defineConfig({
   use: {
     baseURL,
     browserName: 'chromium',
-    channel: !process.env.CI && existsSync(localChrome) ? 'chrome' : undefined,
     viewport: { width: 1_280, height: 960 },
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
@@ -26,7 +23,7 @@ export default defineConfig({
   webServer: {
     command: 'bunx vite --host 127.0.0.1 --port 4178 --strictPort',
     url: `${baseURL}/@vite/client`,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 30_000,
   },
 });

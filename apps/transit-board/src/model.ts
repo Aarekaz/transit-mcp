@@ -209,14 +209,21 @@ export type TrainPositionsModel = {
   trains: TrainPosition[];
 };
 
-export type RouteDetailModel = {
-  kind: 'route-detail';
-  city: 'nyc';
-  routeId: string;
-  shortName: string;
-  longName: string;
-  description: string;
-};
+export type RouteDetailModel =
+  | {
+      kind: 'route-detail';
+      city: 'nyc';
+      empty: true;
+    }
+  | {
+      kind: 'route-detail';
+      city: 'nyc';
+      empty: false;
+      routeId: string;
+      shortName: string;
+      longName: string;
+      description: string;
+    };
 
 export type TransitRenderModel =
   | RailArrivalsModel
@@ -852,6 +859,14 @@ function narrowRouteDetail(value: unknown): NarrowResult {
   if (!isRecord(value)) {
     return malformed('route detail');
   }
+  const empty = value.city === 'nyc'
+    && value.routeId === ''
+    && value.shortName === ''
+    && value.longName === ''
+    && value.description === '';
+  if (empty) {
+    return { ok: true, model: { kind: 'route-detail', city: 'nyc', empty: true } };
+  }
   const routeId = displayString(value.routeId);
   const shortName = displayString(value.shortName);
   const longName = displayString(value.longName);
@@ -863,7 +878,15 @@ function narrowRouteDetail(value: unknown): NarrowResult {
     && description !== undefined
     ? {
       ok: true,
-      model: { kind: 'route-detail', city: 'nyc', routeId, shortName, longName, description },
+      model: {
+        kind: 'route-detail',
+        city: 'nyc',
+        empty: false,
+        routeId,
+        shortName,
+        longName,
+        description,
+      },
     }
     : malformed('route detail');
 }
