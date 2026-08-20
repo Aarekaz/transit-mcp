@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const readme = readFileSync(new URL('../../README.md', import.meta.url).pathname, 'utf8');
@@ -6,6 +6,18 @@ const securityGuide = readFileSync(
   new URL('../../docs/SECURITY.md', import.meta.url).pathname,
   'utf8',
 );
+const readOptionalProjectFile = (path: string): string => {
+  const file = new URL(`../../${path}`, import.meta.url).pathname;
+  return existsSync(file) ? readFileSync(file, 'utf8') : '';
+};
+const appsVerification = readOptionalProjectFile('docs/mcp-apps-verification.md');
+const appsHostHtml = readOptionalProjectFile('tests/apps/host.html');
+const appsHostSource = readOptionalProjectFile('tests/apps/host.ts');
+const packageJson = JSON.parse(readOptionalProjectFile('package.json')) as {
+  scripts: Record<string, string>;
+  devDependencies: Record<string, string>;
+};
+const workflow = readOptionalProjectFile('.github/workflows/type-check.yml');
 
 describe('release operator documentation', () => {
   it('shows every required preview secret command with the named environment', () => {
@@ -92,5 +104,72 @@ describe('release operator documentation', () => {
       /pre-registered configured clients[^.]*not governed by the DCR TTL[^.]*persist until revoked or removed/i,
     );
     expect(securityGuide).toMatch(/CIMD[^.]*resolved metadata[^.]*not a stored DCR record/i);
+  });
+
+  it('documents the thirteen-tool Apps enhancement and its fallback boundary', () => {
+    expect(readme).toContain('docs/mcp-apps-verification.md');
+    expect(appsVerification).toMatch(/Apps-capable host/i);
+    expect(appsVerification).toMatch(/text fallback/i);
+    expect(appsVerification).toMatch(/Codex[^.]*fallback/i);
+
+    for (const toolName of [
+      'get_station_predictions',
+      'search_stations',
+      'get_stations_by_line',
+      'get_all_stations',
+      'get_station_transfers',
+      'get_incidents',
+      'get_elevator_incidents',
+      'get_bus_predictions',
+      'get_bus_routes',
+      'get_bus_stops',
+      'get_bus_positions',
+      'get_train_positions',
+      'get_route_info',
+    ]) {
+      expect(appsVerification).toContain(`\`${toolName}\``);
+    }
+  });
+
+  it('documents reproducible browser verification and the inert public bundle boundary', () => {
+    expect(appsVerification).toContain('bun run build:apps');
+    expect(appsVerification).toContain('bun run test:apps');
+    expect(appsVerification).toContain('public/apps/transit-board.html');
+    expect(appsVerification).toMatch(/publicly readable[^.]*inert/i);
+    expect(appsVerification).toMatch(/no direct (?:browser )?network/i);
+    expect(appsVerification).toMatch(/no (?:browser )?storage/i);
+    expect(appsVerification).toMatch(/no (?:browser )?permissions/i);
+  });
+
+  it('pins the browser runner and places the Chromium gate before the Worker dry-run', () => {
+    expect(packageJson.devDependencies['@playwright/test']).toBe('1.62.1');
+    expect(packageJson.scripts['test:apps']).toBe(
+      'playwright test --config playwright.apps.config.ts',
+    );
+
+    const artifactCheck = workflow.indexOf(
+      'git diff --exit-code -- public/apps/transit-board.html',
+    );
+    const browserInstall = workflow.indexOf(
+      'bunx playwright install --with-deps chromium',
+    );
+    const browserTest = workflow.indexOf('bun run test:apps');
+    const workerDryRun = workflow.indexOf('bunx wrangler deploy --dry-run');
+    expect(browserInstall).toBeGreaterThan(artifactCheck);
+    expect(browserTest).toBeGreaterThan(browserInstall);
+    expect(workerDryRun).toBeGreaterThan(browserTest);
+  });
+
+  it('defines a sandboxed official-protocol host with no live provider or OAuth boundary', () => {
+    expect(appsHostHtml).toMatch(
+      /<iframe[^>]+id="app-frame"[^>]+sandbox="allow-scripts"[^>]+data-resource="\/apps\/transit-board\.html"/,
+    );
+    expect(appsHostSource).toMatch(
+      /from ['"]@modelcontextprotocol\/ext-apps\/app-bridge['"]/,
+    );
+    expect(appsHostSource).toContain('new AppBridge(');
+    expect(appsHostSource).toContain('new PostMessageTransport(');
+    expect(appsHostSource).not.toMatch(/\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/);
+    expect(appsHostSource).not.toMatch(/(?:WMATA_API_KEY|GITHUB_CLIENT_SECRET|JWT_SECRET|OAuth)/i);
   });
 });

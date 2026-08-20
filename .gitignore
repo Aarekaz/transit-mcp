@@ -17,6 +17,7 @@ package-lock.json
 
 # Build output
 dist
+output/playwright/
 
 .wrangler
 test-mcp.sh

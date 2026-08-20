@@ -25,11 +25,17 @@ jobs:
       - name: Verify committed MCP Apps bundle
         run: git diff --exit-code -- public/apps/transit-board.html
 
+      - name: Install Chromium
+        run: bunx playwright install --with-deps chromium
+
       - name: Type-check
         run: bun run type-check
 
       - name: Unit and Workerd tests
         run: bun run test
+
+      - name: MCP Apps browser acceptance
+        run: bun run test:apps
 
       - name: Worker bundle dry-run
         run: bunx wrangler deploy --dry-run --outdir /tmp/metro-mcp-dry-run

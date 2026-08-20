@@ -11,12 +11,13 @@
     "build": "bun run build:apps && bun run type-check",
     "test:unit": "vitest run --config vitest.config.ts",
     "test:workers": "vitest run --config vitest.workers.config.ts",
+    "test:apps": "playwright test --config playwright.apps.config.ts",
     "test": "bun run build:apps && bun run test:unit && bun run test:workers",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
     "lint": "bun run type-check",
-    "type-check": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit && tsc -p apps/transit-board/tsconfig.json --noEmit"
+    "type-check": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit && tsc -p apps/transit-board/tsconfig.json --noEmit && tsc -p tests/apps/tsconfig.json --noEmit"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "0.10.3",
@@ -31,9 +32,10 @@
     "@cloudflare/vitest-pool-workers": "0.16.20",
     "@cloudflare/workers-types": "^4.20241218.0",
     "@modelcontextprotocol/conformance": "0.2.0-alpha.11",
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "@playwright/test": "1.62.1",
     "@vitest/coverage-v8": "4.1.10",
     "@vitest/ui": "4.1.10",
-    "@modelcontextprotocol/ext-apps": "1.7.5",
     "happy-dom": "20.11.6",
     "typescript": "^5.6.3",
     "vite": "8.2.1",

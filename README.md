@@ -10,7 +10,7 @@
 
 A unified remote Model Context Protocol (MCP) server supporting multiple US transit systems. Currently supports Washington DC Metro (WMATA) and New York City Subway (MTA). Built for seamless integration with MCP-compatible clients like Claude Desktop, Cursor, Codex, and any client that supports Streamable HTTP MCP servers.
 
-**Quick Links:** [Quick Start](#quick-start) • [What You Can Do](#what-you-can-do) • [Deployment](#deployment) • [Client Integration](#mcp-client-integration)
+**Quick Links:** [Quick Start](#quick-start) • [What You Can Do](#what-you-can-do) • [Transit Board](#mcp-apps-transit-board) • [Deployment](#deployment) • [Client Integration](#mcp-client-integration)
 
 ---
 
@@ -242,6 +242,21 @@ The server exposes the following tools through the MCP protocol:
 
 **Total: 13 MCP tools** (11 core + 2 new NYC-specific tools)
 
+## MCP Apps: Transit Board
+
+All 13 tools above reference one self-contained Transit Board MCP App. An Apps-capable host can render each result as a dedicated arrivals, service, station/network, route, or vehicle view. Hosts without Apps support receive the same `content` text fallback and `structuredContent` contract; the enhancement does not add tools or change transit calls.
+
+The compiled app is committed at `public/apps/transit-board.html`. That public asset contains application code only: no transit result, identity, token, secret, or configuration value is embedded in it. The sandboxed view makes no direct browser network request, uses no browser storage, and requests no browser permissions. Refresh is the only server interaction and goes through the host to the originating allowlisted tool with its original arguments.
+
+Build and run the deterministic local Apps acceptance suite with:
+
+```bash
+bun run build:apps
+bun run test:apps
+```
+
+See [`docs/mcp-apps-verification.md`](docs/mcp-apps-verification.md) for the exact host boundary, all thirteen view mappings, Chromium coverage, and the distinction between Apps rendering and fallback-client acceptance. For this release, Codex validates MCP discovery and ordinary tool results as a fallback client; inline Apps rendering in Codex is not claimed.
+
 ## Technical Details
 
 ### MCP Protocol
@@ -321,11 +336,11 @@ read -rsp 'Short-lived MCP token: ' MCP_CONFORMANCE_TOKEN && export MCP_CONFORMA
 unset MCP_CONFORMANCE_TOKEN
 ```
 
-See [`docs/mcp-2026-verification.md`](docs/mcp-2026-verification.md) for the automated and approval-gated acceptance record.
+See [`docs/mcp-2026-verification.md`](docs/mcp-2026-verification.md) for the core protocol acceptance record and [`docs/mcp-apps-verification.md`](docs/mcp-apps-verification.md) for the Transit Board browser boundary.
 
 Rollback restores the prior Worker version and its prior bindings. Do not delete the original `MetroMcpAgent` Durable Object namespace or add a deletion migration during the stabilization window; protocol session state is disposable, but retaining the class and original `v1` migration keeps rollback possible.
 
-MCP Apps and embedded interactive UI are intentionally deferred to the next PR.
+Rolling back Transit Board removes the Apps metadata/resource, browser source and build dependencies while leaving transit providers, OAuth, routing, bindings, and the version unchanged.
 
 ## Contributing
 

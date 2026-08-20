@@ -22,7 +22,7 @@ describe('MCP Apps build pipeline', () => {
       build: 'bun run build:apps && bun run type-check',
       dev: 'bun run build:apps && wrangler dev',
       deploy: 'bun run build:apps && wrangler deploy',
-      'type-check': 'tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit && tsc -p apps/transit-board/tsconfig.json --noEmit',
+      'type-check': 'tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit && tsc -p apps/transit-board/tsconfig.json --noEmit && tsc -p tests/apps/tsconfig.json --noEmit',
       test: 'bun run build:apps && bun run test:unit && bun run test:workers',
     });
     expect(existsSync(projectPath('package-lock.json'))).toBe(false);
