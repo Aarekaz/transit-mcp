@@ -24,6 +24,8 @@ export type TransitBoardHost = {
   onteardown: TeardownHandler | undefined;
   connect(transport: AppTransport): Promise<void>;
   close(): Promise<void>;
+  readonly transport: AppTransport | undefined;
+  setupSizeChangedNotifications(): () => void;
   getHostContext(): McpUiHostContext | undefined;
   callServerTool(params: Parameters<App['callServerTool']>[0]): ReturnType<App['callServerTool']>;
   requestDisplayMode(
@@ -43,17 +45,64 @@ export type TransitBoardDependencies = {
   eventTarget?: Window;
 };
 
-const HOST_STYLE_MAP = {
+const HOST_COLOR_STYLE_MAP = {
   '--color-background-primary': '--board-canvas',
   '--color-background-secondary': '--board-panel',
   '--color-text-primary': '--board-ink',
   '--color-text-secondary': '--board-muted',
+  '--color-text-info': '--board-accent',
   '--color-border-primary': '--board-border',
   '--color-ring-primary': '--focus-ring',
-  '--font-sans': '--font-ui',
 } as const;
 
-const unsafeCssValue = /(?:url|expression)\s*\(|@import/i;
+const colorComponent = String.raw`(?:[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:%|deg|grad|rad|turn)?|none)`;
+const colorFunction = new RegExp(
+  String.raw`^(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch)\(\s*${colorComponent}(?:\s*(?:[,/]|\s)\s*${colorComponent})*\s*\)$`,
+  'i',
+);
+const colorSpaceFunction = new RegExp(
+  String.raw`^color\(\s*(?:srgb|srgb-linear|display-p3|a98-rgb|prophoto-rgb|rec2020|xyz|xyz-d50|xyz-d65)(?:\s+${colorComponent}){3}(?:\s*\/\s*${colorComponent})?\s*\)$`,
+  'i',
+);
+const fontFamilyToken = String.raw`(?:"[A-Za-z0-9 ._-]+"|'[A-Za-z0-9 ._-]+'|[A-Za-z][A-Za-z0-9_-]*(?:[ \t]+[A-Za-z][A-Za-z0-9_-]*)*)`;
+const fontFamilyList = new RegExp(
+  String.raw`^[ \t]*${fontFamilyToken}(?:[ \t]*,[ \t]*${fontFamilyToken})*[ \t]*$`,
+);
+
+function isSafeColor(value: string): boolean {
+  const candidate = value.trim();
+  if (
+    candidate.length === 0
+    || candidate.length > 160
+    || /(?:url|image-set|image|cross-fade|paint|var|env|expression|calc|attr)\s*\(|@import/i.test(candidate)
+  ) {
+    return false;
+  }
+  if (/^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i.test(candidate)) {
+    return true;
+  }
+  if (colorFunction.test(candidate) || colorSpaceFunction.test(candidate)) {
+    return true;
+  }
+  if (!/^[a-z]+$/i.test(candidate) || /^(?:currentcolor|inherit|initial|revert|unset)$/i.test(candidate)) {
+    return false;
+  }
+  const probe = document.createElement('span');
+  probe.style.color = candidate;
+  return probe.style.color !== '';
+}
+
+function isSafeFontFamily(value: string): boolean {
+  if (value.length > 200 || !fontFamilyList.test(value)) {
+    return false;
+  }
+  return value.split(',').every((token) => {
+    const candidate = token.trim();
+    return candidate.startsWith('"')
+      || candidate.startsWith("'")
+      || !/^(?:inherit|initial|unset|revert|revert-layer)$/i.test(candidate);
+  });
+}
 
 function stateView(
   state: 'loading' | 'error' | 'cancelled',
@@ -129,9 +178,13 @@ export async function createTransitBoardApp(
   let originToolName: string | null = null;
   let originalArguments: Readonly<Record<string, unknown>> | null = null;
   let pendingResult: { result: ToolResult; successMessage: string } | null = null;
+  let toolLifecycleCancelled = false;
   let refreshInFlight = false;
   let renderGeneration = 0;
   let fullscreenButton: HTMLButtonElement | null = null;
+  let resizeDisposer: (() => void) | null = null;
+  let resizeSettled: Promise<void> = Promise.resolve();
+  let closePromise: Promise<void> | null = null;
   let teardownStarted = false;
 
   clear(mount);
@@ -176,25 +229,37 @@ export async function createTransitBoardApp(
     if (!variables) {
       return;
     }
-    for (const [hostName, localName] of Object.entries(HOST_STYLE_MAP)) {
+    for (const [hostName, localName] of Object.entries(HOST_COLOR_STYLE_MAP)) {
       const value = variables[hostName as keyof typeof variables];
       if (value === undefined) {
         mount.style.removeProperty(localName);
         continue;
       }
-      if (typeof value === 'string' && value.trim() !== '' && !unsafeCssValue.test(value)) {
+      if (typeof value === 'string' && isSafeColor(value)) {
         mount.style.setProperty(localName, value);
       }
+    }
+    const fontFamily = variables['--font-sans'];
+    if (fontFamily === undefined) {
+      mount.style.removeProperty('--font-ui');
+    } else if (typeof fontFamily === 'string' && isSafeFontFamily(fontFamily)) {
+      mount.style.setProperty('--font-ui', fontFamily);
     }
   };
 
   async function requestFullscreen(): Promise<void> {
+    if (teardownStarted) {
+      return;
+    }
     const target = hostContext.displayMode === 'fullscreen' ? 'inline' : 'fullscreen';
     if (hostContext.availableDisplayModes?.includes(target) !== true) {
       return;
     }
     try {
       const result = await app.requestDisplayMode({ mode: target });
+      if (teardownStarted) {
+        return;
+      }
       applyHostContext({ displayMode: result.mode });
       const message = result.mode === 'fullscreen'
         ? 'Fullscreen mode enabled.'
@@ -203,7 +268,9 @@ export async function createTransitBoardApp(
           : 'Inline mode enabled.';
       setStatus(message, false);
     } catch {
-      setStatus('Display mode could not be changed.', false);
+      if (!teardownStarted) {
+        setStatus('Display mode could not be changed.', false);
+      }
     }
   }
 
@@ -231,6 +298,9 @@ export async function createTransitBoardApp(
   };
 
   const applyHostContext = (update: McpUiHostContext): void => {
+    if (teardownStarted) {
+      return;
+    }
     hostContext = mergeHostContext(hostContext, update);
     if (originToolName === null && typeof hostContext.toolInfo?.tool.name === 'string') {
       originToolName = hostContext.toolInfo.tool.name;
@@ -258,6 +328,9 @@ export async function createTransitBoardApp(
   };
 
   const renderResult = (result: ToolResult, successMessage: string): void => {
+    if (teardownStarted) {
+      return;
+    }
     if (result.isError) {
       resultHost.replaceChildren(stateView(
         'error',
@@ -290,7 +363,7 @@ export async function createTransitBoardApp(
   };
 
   const flushPendingResult = (): void => {
-    if (pendingResult === null || originToolName === null) {
+    if (teardownStarted || pendingResult === null || originToolName === null) {
       return;
     }
     const pending = pendingResult;
@@ -301,6 +374,7 @@ export async function createTransitBoardApp(
   async function refresh(): Promise<void> {
     if (
       refreshInFlight
+      || teardownStarted
       || originalArguments === null
       || originToolName === null
       || !isSupportedToolName(originToolName)
@@ -352,28 +426,43 @@ export async function createTransitBoardApp(
     app.ontoolcancelled = undefined;
     app.onhostcontextchanged = undefined;
     app.onteardown = undefined;
+    const disposeResize = resizeDisposer;
+    resizeDisposer = null;
+    disposeResize?.();
+  };
+
+  const closeApp = (): Promise<void> => {
+    closePromise ??= resizeSettled.then(() => app.close());
+    return closePromise;
   };
 
   const teardown = async (): Promise<void> => {
-    if (teardownStarted) {
-      return;
+    if (!teardownStarted) {
+      teardownStarted = true;
+      clearHandlersAndListeners();
     }
-    teardownStarted = true;
-    clearHandlersAndListeners();
-    await app.close();
+    await closeApp();
   };
 
   app.ontoolinput = ({ arguments: argumentsFromHost }): void => {
-    if (originalArguments === null && argumentsFromHost !== undefined) {
+    if (!teardownStarted && originalArguments === null && argumentsFromHost !== undefined) {
       originalArguments = Object.freeze({ ...argumentsFromHost });
       updateRefreshAvailability();
     }
   };
   app.ontoolresult = (result): void => {
+    if (teardownStarted || toolLifecycleCancelled) {
+      return;
+    }
     renderGeneration += 1;
     renderResult(result, 'Transit data ready.');
   };
   app.ontoolcancelled = ({ reason }): void => {
+    if (teardownStarted) {
+      return;
+    }
+    toolLifecycleCancelled = true;
+    pendingResult = null;
     renderGeneration += 1;
     resultHost.replaceChildren(stateView(
       'cancelled',
@@ -383,6 +472,9 @@ export async function createTransitBoardApp(
     setStatus('Transit request cancelled.', false);
   };
   app.onhostcontextchanged = (context): void => {
+    if (teardownStarted) {
+      return;
+    }
     applyHostContext(context);
     flushPendingResult();
   };
@@ -391,7 +483,7 @@ export async function createTransitBoardApp(
       teardownStarted = true;
       clearHandlersAndListeners();
       eventTarget.setTimeout(() => {
-        void app.close();
+        void closeApp();
       }, 0);
     }
     return {};
@@ -400,23 +492,48 @@ export async function createTransitBoardApp(
 
   try {
     await app.connect(transport);
+    if (teardownStarted) {
+      return { teardown };
+    }
+    resizeDisposer = app.setupSizeChangedNotifications();
+    resizeSettled = new Promise(resolve => {
+      eventTarget.requestAnimationFrame(() => resolve());
+    });
     applyHostContext(app.getHostContext() ?? {});
     flushPendingResult();
     if (pendingResult === null && resultHost.querySelector('[data-state="loading"]')) {
       setStatus('Waiting for transit data.', true);
     }
   } catch (error) {
-    resultHost.replaceChildren(stateView(
-      'error',
-      'Transit Board could not connect',
-      'The host connection could not be established.',
-    ));
-    setStatus('Transit Board connection failed.', false);
-    clearHandlersAndListeners();
+    if (!teardownStarted) {
+      resultHost.replaceChildren(stateView(
+        'error',
+        'Transit Board could not connect',
+        'The host connection could not be established.',
+      ));
+      setStatus('Transit Board connection failed.', false);
+      teardownStarted = true;
+      clearHandlersAndListeners();
+      if (app.transport !== undefined) {
+        try {
+          await closeApp();
+        } catch {
+          // Preserve the initialization error; teardown remains terminal.
+        }
+      }
+    }
     throw error;
   }
 
   return { teardown };
+}
+
+export function createTransitBoardSdkApp(): App {
+  return new App(
+    { name: 'Metro MCP Transit Board', version: '5.0.0' },
+    { availableDisplayModes: ['inline', 'fullscreen'] },
+    { autoResize: false, strict: true },
+  );
 }
 
 async function startTransitBoard(): Promise<void> {
@@ -424,11 +541,7 @@ async function startTransitBoard(): Promise<void> {
   if (!mount) {
     throw new Error('Transit Board mount point is unavailable.');
   }
-  const app = new App(
-    { name: 'Metro MCP Transit Board', version: '5.0.0' },
-    { availableDisplayModes: ['inline', 'fullscreen'] },
-    { autoResize: true, strict: true },
-  );
+  const app = createTransitBoardSdkApp();
   await createTransitBoardApp({
     app,
     transport: new PostMessageTransport(window.parent, window.parent),

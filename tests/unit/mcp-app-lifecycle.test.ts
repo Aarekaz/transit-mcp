@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 
-import type {
+import {
   App,
-  McpUiHostContext,
+  type McpUiHostContext,
 } from '@modelcontextprotocol/ext-apps';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { EXPECTED_TOOL_CONTRACTS } from '../fixtures/mcp-contracts';
@@ -29,6 +29,7 @@ type CreateTransitBoardApp = (dependencies: {
 
 type LifecycleModule = {
   createTransitBoardApp?: CreateTransitBoardApp;
+  createTransitBoardSdkApp?: () => App;
 };
 
 const completeContext = (
@@ -55,8 +56,11 @@ class FakeApp {
   readonly calls: CallToolParams[] = [];
   readonly displayModeRequests: Array<{ mode: 'inline' | 'fullscreen' | 'pip' }> = [];
   connectedWith: object | undefined;
+  transport: object | undefined;
   handlersAtConnect: Record<string, boolean> | undefined;
   closeCount = 0;
+  resizeSetupCount = 0;
+  resizeDisposeCount = 0;
   nextResult: ToolResult = {
     content: [{ type: 'text', text: '{}' }],
     structuredContent: {},
@@ -64,6 +68,11 @@ class FakeApp {
   resultPromise: Promise<ToolResult> | undefined;
   displayModeResult: 'inline' | 'fullscreen' | 'pip' | undefined;
   callError: Error | undefined;
+  duringConnect: ((app: FakeApp) => void) | undefined;
+  connectPromise: Promise<void> | undefined;
+  connectError: Error | undefined;
+  contextError: Error | undefined;
+  displayModePromise: Promise<{ mode: 'inline' | 'fullscreen' | 'pip' }> | undefined;
   inputDuringConnect: Parameters<ToolInputHandler>[0] | undefined;
   resultDuringConnect: Parameters<ToolResultHandler>[0] | undefined;
 
@@ -71,6 +80,7 @@ class FakeApp {
 
   async connect(transport: object): Promise<void> {
     this.connectedWith = transport;
+    this.transport = transport;
     this.handlersAtConnect = {
       input: typeof this.ontoolinput === 'function',
       result: typeof this.ontoolresult === 'function',
@@ -78,15 +88,25 @@ class FakeApp {
       context: typeof this.onhostcontextchanged === 'function',
       teardown: typeof this.onteardown === 'function',
     };
+    this.duringConnect?.(this);
     if (this.inputDuringConnect) {
       this.ontoolinput?.(this.inputDuringConnect);
     }
     if (this.resultDuringConnect) {
       this.ontoolresult?.(this.resultDuringConnect);
     }
+    if (this.connectPromise) {
+      await this.connectPromise;
+    }
+    if (this.connectError) {
+      throw this.connectError;
+    }
   }
 
   getHostContext(): McpUiHostContext {
+    if (this.contextError) {
+      throw this.contextError;
+    }
     return this.initialContext;
   }
 
@@ -105,11 +125,26 @@ class FakeApp {
     mode: 'inline' | 'fullscreen' | 'pip';
   }> {
     this.displayModeRequests.push(params);
+    if (this.displayModePromise) {
+      return this.displayModePromise;
+    }
     return { mode: this.displayModeResult ?? params.mode };
+  }
+
+  setupSizeChangedNotifications(): () => void {
+    this.resizeSetupCount += 1;
+    let disposed = false;
+    return () => {
+      if (!disposed) {
+        disposed = true;
+        this.resizeDisposeCount += 1;
+      }
+    };
   }
 
   async close(): Promise<void> {
     this.closeCount += 1;
+    this.transport = undefined;
   }
 }
 
@@ -133,14 +168,18 @@ const queryRequired = <ElementType extends Element>(
 };
 
 let createTransitBoardApp: CreateTransitBoardApp | undefined;
+let createTransitBoardSdkApp: (() => App) | undefined;
+const activeControllers: TransitBoardController[] = [];
 
 beforeAll(async () => {
   createMount();
   const lifecycle = await import('../../apps/transit-board/src/app') as LifecycleModule;
   createTransitBoardApp = lifecycle.createTransitBoardApp;
+  createTransitBoardSdkApp = lifecycle.createTransitBoardSdkApp;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(activeControllers.splice(0).map(controller => controller.teardown()));
   document.body.replaceChildren();
   document.documentElement.removeAttribute('data-theme');
   document.documentElement.style.cssText = '';
@@ -163,10 +202,227 @@ const startLifecycle = async (
     root: document.documentElement,
     eventTarget: window,
   });
+  activeControllers.push(controller);
   return { app, mount, controller };
 };
 
 describe('Transit Board Apps lifecycle', () => {
+  it('constructs the real SDK App without implicit resize and uses its public disposer', async () => {
+    expect(typeof createTransitBoardSdkApp).toBe('function');
+    const sdkApp = createTransitBoardSdkApp?.();
+    if (!sdkApp) {
+      throw new Error('Expected the production SDK App factory');
+    }
+    const observed: Element[] = [];
+    let observerCount = 0;
+    let disconnectCount = 0;
+    const resizeObserverDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+    const animationFrameDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      'requestAnimationFrame',
+    );
+    class ProbeResizeObserver {
+      constructor(_callback: ResizeObserverCallback) {
+        observerCount += 1;
+      }
+      observe(target: Element): void {
+        observed.push(target);
+      }
+      unobserve(): void {}
+      disconnect(): void {
+        disconnectCount += 1;
+      }
+    }
+    Object.defineProperty(globalThis, 'ResizeObserver', {
+      configurable: true,
+      value: ProbeResizeObserver,
+    });
+    Object.defineProperty(globalThis, 'requestAnimationFrame', {
+      configurable: true,
+      value: () => 1,
+    });
+    try {
+      type SdkTransport = Exclude<Parameters<App['connect']>[0], undefined>;
+      type TransportMessage = Parameters<SdkTransport['send']>[0];
+      const transport = {
+        onmessage: undefined as SdkTransport['onmessage'],
+        onerror: undefined as SdkTransport['onerror'],
+        onclose: undefined as SdkTransport['onclose'],
+        async start(): Promise<void> {},
+        async send(message: TransportMessage): Promise<void> {
+          if ('method' in message && message.method === 'ui/initialize' && 'id' in message) {
+            queueMicrotask(() => {
+              transport.onmessage?.({
+                jsonrpc: '2.0',
+                id: message.id,
+                result: {
+                  protocolVersion: '2026-01-26',
+                  hostInfo: { name: 'observer-probe', version: '1.0.0' },
+                  hostCapabilities: {},
+                  hostContext: {},
+                },
+              });
+            });
+          }
+        },
+        async close(): Promise<void> {
+          transport.onclose?.();
+        },
+      } as SdkTransport;
+
+      await sdkApp.connect(transport);
+      expect(observerCount).toBe(0);
+      const dispose = sdkApp.setupSizeChangedNotifications();
+      expect(observerCount).toBe(1);
+      expect(observed).toEqual([document.documentElement, document.body]);
+      dispose();
+      expect(disconnectCount).toBe(1);
+      await sdkApp.close();
+    } finally {
+      if (resizeObserverDescriptor) {
+        Object.defineProperty(globalThis, 'ResizeObserver', resizeObserverDescriptor);
+      } else {
+        Reflect.deleteProperty(globalThis, 'ResizeObserver');
+      }
+      if (animationFrameDescriptor) {
+        Object.defineProperty(globalThis, 'requestAnimationFrame', animationFrameDescriptor);
+      } else {
+        Reflect.deleteProperty(globalThis, 'requestAnimationFrame');
+      }
+    }
+  });
+
+  it('closes transport ownership when the real SDK transport start rejects', async () => {
+    expect(typeof createTransitBoardSdkApp).toBe('function');
+    expect(typeof createTransitBoardApp).toBe('function');
+    const sdkApp = createTransitBoardSdkApp?.();
+    if (!sdkApp || !createTransitBoardApp) {
+      throw new Error('Expected the production SDK lifecycle exports');
+    }
+    type SdkTransport = Exclude<Parameters<App['connect']>[0], undefined>;
+    let closeCount = 0;
+    const transport = {
+      onmessage: undefined as SdkTransport['onmessage'],
+      onerror: undefined as SdkTransport['onerror'],
+      onclose: undefined as SdkTransport['onclose'],
+      async start(): Promise<void> {
+        throw new Error('transport start failed');
+      },
+      async send(): Promise<void> {},
+      async close(): Promise<void> {
+        closeCount += 1;
+        transport.onclose?.();
+      },
+    } as SdkTransport;
+
+    await expect(createTransitBoardApp({
+      app: sdkApp as unknown as FakeApp,
+      transport,
+      mount: createMount(),
+      root: document.documentElement,
+      eventTarget: window,
+    })).rejects.toThrow('transport start failed');
+
+    expect(closeCount).toBe(1);
+    expect(sdkApp.transport).toBeUndefined();
+  });
+
+  it('drains the real SDK initial resize frame before terminal teardown closes transport', async () => {
+    expect(typeof createTransitBoardSdkApp).toBe('function');
+    expect(typeof createTransitBoardApp).toBe('function');
+    const sdkApp = createTransitBoardSdkApp?.();
+    if (!sdkApp || !createTransitBoardApp) {
+      throw new Error('Expected the production SDK lifecycle exports');
+    }
+    const frameCallbacks: FrameRequestCallback[] = [];
+    let disconnectCount = 0;
+    let closeCount = 0;
+    const resizeObserverDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+    const animationFrameDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      'requestAnimationFrame',
+    );
+    class ProbeResizeObserver {
+      constructor(_callback: ResizeObserverCallback) {}
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {
+        disconnectCount += 1;
+      }
+    }
+    Object.defineProperty(globalThis, 'ResizeObserver', {
+      configurable: true,
+      value: ProbeResizeObserver,
+    });
+    Object.defineProperty(globalThis, 'requestAnimationFrame', {
+      configurable: true,
+      value: (callback: FrameRequestCallback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      },
+    });
+    try {
+      type SdkTransport = Exclude<Parameters<App['connect']>[0], undefined>;
+      type TransportMessage = Parameters<SdkTransport['send']>[0];
+      const transport = {
+        onmessage: undefined as SdkTransport['onmessage'],
+        onerror: undefined as SdkTransport['onerror'],
+        onclose: undefined as SdkTransport['onclose'],
+        async start(): Promise<void> {},
+        async send(message: TransportMessage): Promise<void> {
+          if ('method' in message && message.method === 'ui/initialize' && 'id' in message) {
+            queueMicrotask(() => {
+              transport.onmessage?.({
+                jsonrpc: '2.0',
+                id: message.id,
+                result: {
+                  protocolVersion: '2026-01-26',
+                  hostInfo: { name: 'resize-drain-probe', version: '1.0.0' },
+                  hostCapabilities: {},
+                  hostContext: {},
+                },
+              });
+            });
+          }
+        },
+        async close(): Promise<void> {
+          closeCount += 1;
+          transport.onclose?.();
+        },
+      } as SdkTransport;
+      const controller = await createTransitBoardApp({
+        app: sdkApp as unknown as FakeApp,
+        transport,
+        mount: createMount(),
+        root: document.documentElement,
+        eventTarget: window,
+      });
+
+      const teardownPromise = controller.teardown();
+      expect(() => {
+        for (const callback of frameCallbacks.splice(0)) {
+          callback(performance.now());
+        }
+      }).not.toThrow();
+      await teardownPromise;
+
+      expect(disconnectCount).toBe(1);
+      expect(closeCount).toBe(1);
+      expect(sdkApp.transport).toBeUndefined();
+    } finally {
+      if (resizeObserverDescriptor) {
+        Object.defineProperty(globalThis, 'ResizeObserver', resizeObserverDescriptor);
+      } else {
+        Reflect.deleteProperty(globalThis, 'ResizeObserver');
+      }
+      if (animationFrameDescriptor) {
+        Object.defineProperty(globalThis, 'requestAnimationFrame', animationFrameDescriptor);
+      } else {
+        Reflect.deleteProperty(globalThis, 'requestAnimationFrame');
+      }
+    }
+  });
+
   it('installs every official lifecycle handler before connecting and renders through the real dispatcher', async () => {
     expect(typeof createTransitBoardApp).toBe('function');
     const { app, mount } = await startLifecycle(completeContext('get_station_predictions'));
@@ -208,6 +464,40 @@ describe('Transit Board Apps lifecycle', () => {
     expect(queryRequired(mount, '[data-view="rail-arrivals"]')).toBeTruthy();
     expect(queryRequired(mount, 'h1').textContent).toBe('A01 train arrivals');
   });
+
+  for (const order of ['result-then-cancel', 'cancel-then-result'] as const) {
+    it(`keeps cancellation terminal when connect delivers ${order}`, async () => {
+      const result = EXPECTED_TOOL_CONTRACTS.get_station_predictions.structuredContent;
+      const { mount } = await startLifecycle(
+        completeContext('get_station_predictions'),
+        (app) => {
+          app.duringConnect = (host) => {
+            host.ontoolinput?.({ arguments: { city: 'dc', station: 'A01' } });
+            const deliverResult = (): void => host.ontoolresult?.({
+              content: [{ type: 'text', text: JSON.stringify(result) }],
+              structuredContent: result,
+            });
+            const deliverCancellation = (): void => host.ontoolcancelled?.({
+              reason: 'Cancelled during connection.',
+            });
+            if (order === 'result-then-cancel') {
+              deliverResult();
+              deliverCancellation();
+            } else {
+              deliverCancellation();
+              deliverResult();
+            }
+          };
+        },
+      );
+
+      expect(mount.querySelector('[data-state="cancelled"]')).not.toBeNull();
+      expect(mount.querySelector('[data-view="rail-arrivals"]')).toBeNull();
+      expect(queryRequired(mount, '[role="status"]').textContent).toBe(
+        'Transit request cancelled.',
+      );
+    });
+  }
 
   it('parses only an object-valued JSON text fallback and rejects arrays, primitives, and invalid text', async () => {
     const { app, mount } = await startLifecycle(completeContext('get_bus_routes'));
@@ -310,7 +600,12 @@ describe('Transit Board Apps lifecycle', () => {
       styles: {
         variables: {
           '--color-background-primary': 'rgb(1, 2, 3)',
+          '--color-background-secondary': '#101820',
           '--color-text-primary': 'rgb(240, 241, 242)',
+          '--color-text-secondary': 'hsl(210 10% 70%)',
+          '--color-text-info': 'color(display-p3 0.2 0.5 0.9)',
+          '--color-border-primary': 'transparent',
+          '--color-ring-primary': 'oklch(0.72 0.16 240)',
           '--font-sans': 'Transit Sans, sans-serif',
           '--not-a-host-variable': 'url(javascript:alert(1))',
         },
@@ -323,9 +618,37 @@ describe('Transit Board Apps lifecycle', () => {
     expect(mount.style.getPropertyValue('--safe-area-inset-top')).toBe('12px');
     expect(mount.style.getPropertyValue('--safe-area-inset-left')).toBe('5px');
     expect(mount.style.getPropertyValue('--board-canvas')).toBe('rgb(1, 2, 3)');
+    expect(mount.style.getPropertyValue('--board-panel')).toBe('#101820');
     expect(mount.style.getPropertyValue('--board-ink')).toBe('rgb(240, 241, 242)');
+    expect(mount.style.getPropertyValue('--board-muted')).toBe('hsl(210 10% 70%)');
+    expect(mount.style.getPropertyValue('--board-accent')).toBe('color(display-p3 0.2 0.5 0.9)');
+    expect(mount.style.getPropertyValue('--board-border')).toBe('transparent');
+    expect(mount.style.getPropertyValue('--focus-ring')).toBe('oklch(0.72 0.16 240)');
     expect(mount.style.getPropertyValue('--font-ui')).toBe('Transit Sans, sans-serif');
     expect(mount.style.getPropertyValue('--not-a-host-variable')).toBe('');
+
+    const adversarialValues = [
+      ['--color-background-primary', 'image-set("https://example.invalid/pixel.png" 1x)', '--board-canvas', 'rgb(1, 2, 3)'],
+      ['--color-background-secondary', 'image("https://example.invalid/panel.png")', '--board-panel', '#101820'],
+      ['--color-text-primary', 'var(--attacker-color)', '--board-ink', 'rgb(240, 241, 242)'],
+      ['--color-text-secondary', 'env(attacker-color)', '--board-muted', 'hsl(210 10% 70%)'],
+      ['--color-text-info', 'linear-gradient(red, blue)', '--board-accent', 'color(display-p3 0.2 0.5 0.9)'],
+      ['--color-border-primary', 'cross-fade(url(https://example.invalid/a), red)', '--board-border', 'transparent'],
+      ['--color-ring-primary', 'paint(attacker)', '--focus-ring', 'oklch(0.72 0.16 240)'],
+      ['--font-sans', 'url(https://example.invalid/font.woff2)', '--font-ui', 'Transit Sans, sans-serif'],
+      ['--font-sans', 'local(Transit Sans)', '--font-ui', 'Transit Sans, sans-serif'],
+      ['--font-sans', 'var(--host-font)', '--font-ui', 'Transit Sans, sans-serif'],
+      ['--font-sans', 'env(host-font)', '--font-ui', 'Transit Sans, sans-serif'],
+      ['--font-sans', 'inherit', '--font-ui', 'Transit Sans, sans-serif'],
+      ['--font-sans', 'initial, sans-serif', '--font-ui', 'Transit Sans, sans-serif'],
+      ['--font-sans', 'revert-layer', '--font-ui', 'Transit Sans, sans-serif'],
+    ] as const;
+    for (const [hostName, value, localName, expected] of adversarialValues) {
+      app.onhostcontextchanged?.({
+        styles: { variables: { [hostName]: value } },
+      } as unknown as McpUiHostContext);
+      expect(mount.style.getPropertyValue(localName)).toBe(expected);
+    }
 
     app.onhostcontextchanged?.({
       styles: { variables: { '--color-background-primary': undefined } },
@@ -394,6 +717,195 @@ describe('Transit Board Apps lifecycle', () => {
     );
   });
 
+  it('keeps host teardown terminal when it arrives during connect', async () => {
+    let teardownResponse: Awaited<ReturnType<TeardownHandler>> | undefined;
+    const { app, mount, controller } = await startLifecycle(completeContext('get_incidents', {
+      theme: 'dark',
+    }), fakeApp => {
+      fakeApp.duringConnect = (host) => {
+        const response = host.onteardown?.({}, {} as Parameters<TeardownHandler>[1]);
+        if (response instanceof Promise) {
+          throw new Error('Fake host teardown response must be synchronous in this probe');
+        }
+        teardownResponse = response;
+      };
+    });
+
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+    expect(teardownResponse).toEqual({});
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+    expect(queryRequired(mount, '[role="status"]').textContent).toBe(
+      'Connecting to Transit Board.',
+    );
+    expect(app.resizeSetupCount).toBe(0);
+    expect(app.resizeDisposeCount).toBe(0);
+    expect(app.closeCount).toBe(1);
+    await controller.teardown();
+    expect(app.closeCount).toBe(1);
+  });
+
+  it('keeps a host teardown terminal when connect later rejects', async () => {
+    if (!createTransitBoardApp) {
+      throw new Error('Expected app.ts to export createTransitBoardApp');
+    }
+    const mount = createMount();
+    const app = new FakeApp(completeContext('get_incidents', { theme: 'dark' }));
+    app.connectError = new Error('connect closed');
+    app.duringConnect = (host) => {
+      host.onteardown?.({}, {} as Parameters<TeardownHandler>[1]);
+    };
+
+    await expect(createTransitBoardApp({
+      app,
+      transport: { kind: 'test-transport' },
+      mount,
+      root: document.documentElement,
+      eventTarget: window,
+    })).rejects.toThrow('connect closed');
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+    expect(mount.querySelector('[data-state="error"]')).toBeNull();
+    expect(queryRequired(mount, '[role="status"]').textContent).toBe(
+      'Connecting to Transit Board.',
+    );
+    expect(app.resizeSetupCount).toBe(0);
+    expect(app.resizeDisposeCount).toBe(0);
+    expect(app.closeCount).toBe(1);
+  });
+
+  it('keeps pagehide terminal while connect is deferred', async () => {
+    if (!createTransitBoardApp) {
+      throw new Error('Expected app.ts to export createTransitBoardApp');
+    }
+    let resolveConnect: (() => void) | undefined;
+    const connectPromise = new Promise<void>(resolve => {
+      resolveConnect = resolve;
+    });
+    const mount = createMount();
+    const app = new FakeApp(completeContext('get_incidents', { theme: 'dark' }));
+    app.connectPromise = connectPromise;
+    const lifecyclePromise = createTransitBoardApp({
+      app,
+      transport: { kind: 'test-transport' },
+      mount,
+      root: document.documentElement,
+      eventTarget: window,
+    });
+
+    window.dispatchEvent(new Event('pagehide'));
+    resolveConnect?.();
+    const controller = await lifecyclePromise;
+
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+    expect(queryRequired(mount, '[role="status"]').textContent).toBe(
+      'Connecting to Transit Board.',
+    );
+    expect(app.resizeSetupCount).toBe(0);
+    expect(app.resizeDisposeCount).toBe(0);
+    expect(app.closeCount).toBe(1);
+    await controller.teardown();
+    expect(app.closeCount).toBe(1);
+  });
+
+  it('disposes manual resize and closes once when post-connect initialization fails', async () => {
+    if (!createTransitBoardApp) {
+      throw new Error('Expected app.ts to export createTransitBoardApp');
+    }
+    const mount = createMount();
+    const app = new FakeApp(completeContext('get_incidents'));
+    app.contextError = new Error('context unavailable');
+
+    await expect(createTransitBoardApp({
+      app,
+      transport: { kind: 'test-transport' },
+      mount,
+      root: document.documentElement,
+      eventTarget: window,
+    })).rejects.toThrow('context unavailable');
+
+    expect(app.resizeSetupCount).toBe(1);
+    expect(app.resizeDisposeCount).toBe(1);
+    expect(app.closeCount).toBe(1);
+    expect(app.ontoolinput).toBeUndefined();
+    expect(app.onteardown).toBeUndefined();
+  });
+
+  for (const outcome of ['resolve', 'reject'] as const) {
+    it(`ignores a deferred fullscreen ${outcome} after controller teardown`, async () => {
+      let settleDisplay: (() => void) | undefined;
+      const displayModePromise = new Promise<{ mode: 'inline' | 'fullscreen' | 'pip' }>(
+        (resolve, reject) => {
+          settleDisplay = outcome === 'resolve'
+            ? () => resolve({ mode: 'pip' })
+            : () => reject(new Error('closed display request'));
+        },
+      );
+      const { app, mount, controller } = await startLifecycle(completeContext('get_incidents', {
+        displayMode: 'inline',
+        availableDisplayModes: ['inline', 'fullscreen', 'pip'],
+      }), fakeApp => {
+        fakeApp.displayModePromise = displayModePromise;
+      });
+      const statusBefore = queryRequired(mount, '[role="status"]').textContent;
+      queryRequired<HTMLButtonElement>(mount, '[data-action="fullscreen"]').click();
+
+      await controller.teardown();
+      settleDisplay?.();
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+
+      expect(mount.dataset.displayMode).toBe('inline');
+      expect(queryRequired(mount, '[role="status"]').textContent).toBe(statusBefore);
+      expect(app.resizeDisposeCount).toBe(1);
+      expect(app.closeCount).toBe(1);
+    });
+  }
+
+  it('does not re-render or re-enable refresh after teardown of a deferred call', async () => {
+    let resolveResult: ((result: ToolResult) => void) | undefined;
+    const resultPromise = new Promise<ToolResult>(resolve => {
+      resolveResult = resolve;
+    });
+    const { app, mount, controller } = await startLifecycle(
+      completeContext('get_incidents'),
+      fakeApp => {
+        fakeApp.resultPromise = resultPromise;
+      },
+    );
+    app.ontoolinput?.({ arguments: { city: 'dc' } });
+    const refresh = queryRequired<HTMLButtonElement>(mount, '[data-action="refresh"]');
+    refresh.click();
+    const statusBefore = queryRequired(mount, '[role="status"]').textContent;
+
+    await controller.teardown();
+    resolveResult?.({
+      content: [{ type: 'text', text: '{}' }],
+      structuredContent: { city: 'dc', incidents: [] },
+    });
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    expect(mount.querySelector('[data-view="service-incidents"]')).toBeNull();
+    expect(queryRequired(mount, '[role="status"]').textContent).toBe(statusBefore);
+    expect(refresh.disabled).toBe(true);
+    expect(app.resizeDisposeCount).toBe(1);
+    expect(app.closeCount).toBe(1);
+  });
+
+  it('tears down resize and transport exactly once on repeated pagehide', async () => {
+    const { app, controller } = await startLifecycle(completeContext('get_incidents'));
+    expect(app.resizeSetupCount).toBe(1);
+
+    window.dispatchEvent(new Event('pagehide'));
+    window.dispatchEvent(new Event('pagehide'));
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    expect(app.resizeDisposeCount).toBe(1);
+    expect(app.closeCount).toBe(1);
+    await controller.teardown();
+    expect(app.resizeDisposeCount).toBe(1);
+    expect(app.closeCount).toBe(1);
+  });
+
   it('announces cancellation and errors, then disconnects handlers and transport on teardown', async () => {
     const { app, mount, controller } = await startLifecycle(completeContext('get_incidents'));
     app.ontoolcancelled?.({ reason: '<img src=x onerror=alert(1)>' });
@@ -418,6 +930,8 @@ describe('Transit Board Apps lifecycle', () => {
     expect(mount.textContent).not.toContain('secret-must-not-render');
 
     await controller.teardown();
+    expect(app.resizeSetupCount).toBe(1);
+    expect(app.resizeDisposeCount).toBe(1);
     expect(app.closeCount).toBe(1);
     expect(app.ontoolinput).toBeUndefined();
     expect(app.ontoolresult).toBeUndefined();
@@ -448,6 +962,8 @@ describe('Transit Board Apps lifecycle', () => {
 
     window.dispatchEvent(new Event('pagehide'));
     await new Promise(resolve => window.setTimeout(resolve, 0));
+    expect(app.resizeSetupCount).toBe(1);
+    expect(app.resizeDisposeCount).toBe(1);
     expect(app.closeCount).toBe(1);
     await controller.teardown();
     expect(app.closeCount).toBe(1);
