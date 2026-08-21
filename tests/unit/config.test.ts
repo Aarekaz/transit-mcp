@@ -207,6 +207,19 @@ describe('anonymous deployment configuration', () => {
     expect(wrangler.env.preview.kv_namespaces).toBeUndefined();
   });
 
+  it('binds distinct production and preview anonymous MCP rate limit namespaces', () => {
+    expect(wrangler.ratelimits).toEqual([{
+      name: 'MCP_RATE_LIMITER',
+      namespace_id: '2026082101',
+      simple: { limit: 300, period: 60 },
+    }]);
+    expect(wrangler.env.preview.ratelimits).toEqual([{
+      name: 'MCP_RATE_LIMITER',
+      namespace_id: '2026082102',
+      simple: { limit: 300, period: 60 },
+    }]);
+  });
+
   it('contains none of the removed authentication deployment names', () => {
     const removedNames = [
       ['OAUTH', 'KV'].join('_'),

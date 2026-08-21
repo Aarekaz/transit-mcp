@@ -36,6 +36,14 @@
     "ENVIRONMENT": "production"
   },
 
+  "ratelimits": [
+    {
+      "name": "MCP_RATE_LIMITER",
+      "namespace_id": "2026082101",
+      "simple": { "limit": 300, "period": 60 }
+    }
+  ],
+
   "env": {
     "preview": {
       // Preview uses its independently approved custom domain and never
@@ -51,7 +59,14 @@
         "MCP_ALLOWED_HOSTNAMES": "metro-mcp-preview.anuragd.me",
         "MCP_ALLOWED_ORIGIN_HOSTNAMES": "metro-mcp-preview.anuragd.me",
         "ENVIRONMENT": "preview"
-      }
+      },
+      "ratelimits": [
+        {
+          "name": "MCP_RATE_LIMITER",
+          "namespace_id": "2026082102",
+          "simple": { "limit": 300, "period": 60 }
+        }
+      ]
     }
   },
 

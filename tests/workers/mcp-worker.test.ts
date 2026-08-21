@@ -483,4 +483,27 @@ describe('assembled MCP Worker', () => {
     await reader.cancel('client stopped reading');
     await vi.waitFor(() => expect(upstreamAborted).toBe(true));
   });
+
+  it('enforces and recovers a Workerd limiter quota at the public MCP boundary', async () => {
+    const rateLimitKey = '198.51.100.250';
+    const request = async () => {
+      const next = await modernMcpRequest('server/discover');
+      next.headers.set('CF-Connecting-IP', rateLimitKey);
+      return SELF.fetch(next);
+    };
+
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      expect((await request()).status).toBe(200);
+    }
+    const denied = await request();
+    expect(denied.status).toBe(429);
+    expect(await denied.json()).toEqual({
+      jsonrpc: '2.0',
+      error: { code: -32029, message: 'Rate limit exceeded' },
+      id: null,
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 10_100));
+    expect((await request()).status).toBe(200);
+  }, 15_000);
 });

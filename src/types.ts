@@ -27,6 +27,7 @@ export interface Env {
   MCP_ALLOWED_HOSTNAMES: string;
   MCP_ALLOWED_ORIGIN_HOSTNAMES: string;
   MCP_REQUEST_STATE_KEY: string;
+  MCP_RATE_LIMITER: RateLimit;
 
   // API Keys
   WMATA_API_KEY: string;           // DC Metro (WMATA) API key (secret)

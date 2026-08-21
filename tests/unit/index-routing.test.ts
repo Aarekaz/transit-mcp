@@ -92,6 +92,91 @@ describe('Worker entry routing', () => {
     expect(response.headers.get('access-control-allow-headers'))
       .toBe('Content-Type, Accept, Authorization, mcp-session-id, MCP-Protocol-Version, Mcp-Method, Mcp-Name');
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(env.MCP_RATE_LIMITER.limit).not.toHaveBeenCalled();
+  });
+
+  it('limits only normalized, fully trusted MCP POST requests immediately before dispatch', async () => {
+    const env = createMockEnv();
+    handleMcpRequest.mockResolvedValue(new Response(null, { status: 204 }));
+
+    for (const request of [
+      new Request('https://metro-mcp.anuragd.me/mcp', {
+        method: 'POST',
+        headers: { Host: 'metro-mcp.anuragd.me', 'CF-Connecting-IP': '198.51.100.10' },
+      }),
+      new Request('https://metro-mcp.anuragd.me/sse', {
+        method: 'POST',
+        headers: { Host: 'metro-mcp.anuragd.me', 'CF-Connecting-IP': '198.51.100.11' },
+      }),
+    ]) {
+      await worker.fetch(request, env, executionContext());
+    }
+
+    expect(env.MCP_RATE_LIMITER.limit).toHaveBeenNthCalledWith(1, { key: '198.51.100.10' });
+    expect(env.MCP_RATE_LIMITER.limit).toHaveBeenNthCalledWith(2, { key: '198.51.100.11' });
+    expect(handleMcpRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not consume quota for public, invalid, unsupported, or session-like requests', async () => {
+    const env = createMockEnv({
+      ASSETS: { fetch: vi.fn().mockResolvedValue(new Response('asset')) } as unknown as Fetcher,
+    });
+    handleMcpRequest.mockResolvedValue(new Response(null, { status: 204 }));
+
+    for (const [name, request] of [
+      ['OPTIONS /mcp', new Request('https://metro-mcp.anuragd.me/mcp', { method: 'OPTIONS', headers: { Host: 'metro-mcp.anuragd.me' } })],
+      ['GET /info', new Request('https://metro-mcp.anuragd.me/info', { headers: { Host: 'metro-mcp.anuragd.me' } })],
+      ['GET /asset', new Request('https://metro-mcp.anuragd.me/apps/transit-board.html', { headers: { Host: 'metro-mcp.anuragd.me' } })],
+      ['GET /legal', new Request('https://metro-mcp.anuragd.me/legal', { headers: { Host: 'metro-mcp.anuragd.me' } })],
+      ['POST /mcp/', new Request('https://metro-mcp.anuragd.me/mcp/', { method: 'POST', headers: { Host: 'metro-mcp.anuragd.me' } })],
+      ['POST session path', new Request('https://metro-mcp.anuragd.me/mcp/session/abc', { method: 'POST', headers: { Host: 'metro-mcp.anuragd.me' } })],
+      ['GET /mcp', new Request('https://metro-mcp.anuragd.me/mcp', { headers: { Host: 'metro-mcp.anuragd.me' } })],
+      ['POST invalid Host', new Request('https://metro-mcp.anuragd.me/mcp', { method: 'POST', headers: { Host: 'attacker.example' } })],
+      ['POST invalid Origin', new Request('https://metro-mcp.anuragd.me/mcp', { method: 'POST', headers: { Host: 'metro-mcp.anuragd.me', Origin: 'https://attacker.example' } })],
+      ['POST invalid URL origin', new Request('https://attacker.example/mcp', { method: 'POST', headers: { Host: 'metro-mcp.anuragd.me' } })],
+    ]) {
+      await worker.fetch(request as Request, env, executionContext()).catch(error => {
+        throw new Error(`unexpected worker failure for ${name}`, { cause: error });
+      });
+    }
+
+    expect(env.MCP_RATE_LIMITER.limit).not.toHaveBeenCalled();
+    expect(handleMcpRequest).toHaveBeenCalledOnce();
+  });
+
+  it('does not create an MCP handler after quota denial', async () => {
+    const env = createMockEnv({
+      MCP_RATE_LIMITER: { limit: vi.fn().mockResolvedValue({ success: false }) } as unknown as RateLimit,
+    });
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    handleMcpRequest.mockClear();
+
+    const response = await worker.fetch(new Request('https://metro-mcp.anuragd.me/mcp', {
+      method: 'POST',
+      headers: { Host: 'metro-mcp.anuragd.me', 'CF-Connecting-IP': '198.51.100.12' },
+    }), env, executionContext());
+
+    expect(response.status).toBe(429);
+    expect(await response.clone().text()).not.toContain('198.51.100.12');
+    expect(String(info.mock.calls[0]?.[0])).not.toContain('198.51.100.12');
+    expect(handleMcpRequest).not.toHaveBeenCalled();
+  });
+
+  it('fails closed with the existing generic correlated 500 when the limiter binding throws', async () => {
+    const env = createMockEnv({
+      MCP_RATE_LIMITER: { limit: vi.fn().mockRejectedValue(new Error('binding failed')) } as unknown as RateLimit,
+    });
+    handleMcpRequest.mockClear();
+
+    const response = await worker.fetch(new Request('https://metro-mcp.anuragd.me/mcp', {
+      method: 'POST',
+      headers: { Host: 'metro-mcp.anuragd.me' },
+    }), env, executionContext());
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'internal_server_error' });
+    expect(response.headers.get('x-request-id')).toMatch(/^[A-Za-z0-9._:-]+$/);
+    expect(handleMcpRequest).not.toHaveBeenCalled();
   });
 
   it.each([

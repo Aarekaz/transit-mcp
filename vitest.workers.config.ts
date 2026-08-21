@@ -7,6 +7,11 @@ export default defineConfig({
     wrangler: { configPath: './wrangler.jsonc' },
     miniflare: {
       compatibilityFlags: ['nodejs_compat', 'global_fetch_strictly_public'],
+      ratelimits: {
+        MCP_RATE_LIMITER: {
+          simple: { limit: 50, period: 10 },
+        },
+      },
       bindings: {
         MCP_PUBLIC_ORIGIN: 'https://metro-mcp.anuragd.me',
         MCP_ALLOWED_HOSTNAMES: 'metro-mcp.anuragd.me',

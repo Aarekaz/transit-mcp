@@ -7,6 +7,7 @@ import { loadConfig } from './config';
 import { addSecurityHeadersAuto } from './middleware/security-headers';
 import { handleMcpRequest } from './mcp/http-handler';
 import { handlePublicRequest } from './public-handler';
+import { anonymousMcpRateLimitResponse } from './rate-limit';
 import { normalizeMcpRoute } from './route-normalizer';
 import { serializeTelemetry, type TelemetryInput } from './telemetry';
 import type { Env } from './types';
@@ -62,12 +63,22 @@ export default {
         const config = loadConfig(env);
         if (normalized) {
           telemetry.alias = normalized.alias;
-          response = mcpTrustRejection(
+          const trustRejection = mcpTrustRejection(
             normalized.request,
             config.mcp.publicOrigin,
             config.mcp.allowedHostnames,
             config.mcp.allowedOriginHostnames,
-          ) ?? await handleMcpRequest(normalized.request, env, config, telemetry);
+          );
+          if (trustRejection) {
+            response = trustRejection;
+          } else if (normalized.request.method === 'POST') {
+            response = await anonymousMcpRateLimitResponse(
+              normalized.request,
+              env.MCP_RATE_LIMITER,
+            ) ?? await handleMcpRequest(normalized.request, env, config, telemetry);
+          } else {
+            response = await handleMcpRequest(normalized.request, env, config, telemetry);
+          }
         } else {
           response = await handlePublicRequest(request, env, config);
         }
