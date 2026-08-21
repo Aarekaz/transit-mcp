@@ -9,7 +9,7 @@ export default defineConfig({
       compatibilityFlags: ['nodejs_compat', 'global_fetch_strictly_public'],
       ratelimits: {
         MCP_RATE_LIMITER: {
-          simple: { limit: 50, period: 10 },
+          simple: { limit: 2, period: 10 },
         },
       },
       bindings: {
