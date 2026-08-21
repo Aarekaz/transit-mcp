@@ -8,8 +8,6 @@
  * - Self-documenting code through types
  */
 
-import type { AuthRequest, OAuthHelpers } from '@cloudflare/workers-oauth-provider';
-
 /**
  * Cloudflare Workers Environment
  * 
@@ -19,7 +17,7 @@ import type { AuthRequest, OAuthHelpers } from '@cloudflare/workers-oauth-provid
  * 
  * BINDINGS EXPLAINED:
  * - Environment variables: Configuration and secrets
- * - KV Namespaces: Provider-owned OAuth protocol storage
+ * - Bindings: static assets and runtime secrets
  * 
  * NOTE: Update this when adding new environment variables or KV namespaces
  */
@@ -30,22 +28,8 @@ export interface Env {
   MCP_ALLOWED_ORIGIN_HOSTNAMES: string;
   MCP_REQUEST_STATE_KEY: string;
 
-  // OAuth Configuration
-  GITHUB_CLIENT_ID: string;        // GitHub OAuth App Client ID (public)
-  GITHUB_CLIENT_SECRET: string;    // GitHub OAuth App Client Secret (secret)
-  OAUTH_REDIRECT_URI: string;      // OAuth callback URL
-
   // API Keys
   WMATA_API_KEY: string;           // DC Metro (WMATA) API key (secret)
-
-  // Security
-  JWT_SECRET: string;              // Secret for signing JWT tokens (secret)
-
-  /** OAuth Provider protocol storage. */
-  OAUTH_KV: KVNamespace;
-
-  /** OAuth Provider helpers injected into protected/default handlers. */
-  OAUTH_PROVIDER: OAuthHelpers;
 
   /**
    * Inactive legacy session KV retained only as a rollback data shape.
@@ -62,39 +46,6 @@ export interface Env {
 
   // Deployment environment
   ENVIRONMENT: 'development' | 'preview' | 'production';
-}
-
-/**
- * User information from OAuth provider
- * 
- * WHY THESE FIELDS:
- * - id: Unique identifier for the user
- * - login: Username (for display and logging)
- * - name: Display name
- * - email: Contact information (may be empty if private)
- * - avatar_url: Profile picture
- */
-export interface User {
-  id: string;
-  login: string;
-  name: string;
-  email: string;
-  avatar_url: string;
-}
-
-/** Application-owned state between Provider validation and GitHub identity. */
-export interface PendingGitHubLogin {
-  authRequest: AuthRequest;
-  clientName: string;
-  createdAt: number;
-}
-
-/** Application-owned state between GitHub identity and explicit MCP consent. */
-export interface PendingConsent extends PendingGitHubLogin {
-  user: {
-    id: string;
-    login: string;
-  };
 }
 
 /**

@@ -2,16 +2,12 @@
  * Example wrangler.jsonc for self-hosting. Copy to wrangler.jsonc and
  * fill in the placeholders below.
  *
- * Then create independent production and preview OAuth Provider namespaces:
- *   bunx wrangler kv namespace create "OAUTH_KV"
- *   bunx wrangler kv namespace create "OAUTH_KV_preview"
- *
  * The original DO migration is retained only as a rollback asset. The
  * stateless route does not declare a Durable Object binding.
  *
- * Secrets are not stored here. Set GITHUB_CLIENT_SECRET, WMATA_API_KEY,
- * JWT_SECRET, and a stable 32+ byte MCP_REQUEST_STATE_KEY with
- * `wrangler secret put` for production and preview independently.
+ * Secrets are not stored here. Set WMATA_API_KEY and a stable 32+ byte
+ * MCP_REQUEST_STATE_KEY with `wrangler secret put` for production and
+ * preview independently.
  *
  * For local development, copy the complete canonical `.dev.vars.example`
  * template to `.dev.vars` and replace its clear placeholders. Never put
@@ -26,7 +22,7 @@
   // a transitive mimetext dep needs node:path/os.
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "workers_dev": true,
-  "keep_vars": true,
+  "keep_vars": false,
   "minify": true,
   "upload_source_maps": true,
 
@@ -39,42 +35,23 @@
     }
   ],
 
-  "kv_namespaces": [
-    {
-      "binding": "OAUTH_KV",
-      "id": "your-production-oauth-provider-kv-id-here",
-      "preview_id": "your-local-oauth-provider-kv-preview-id-here"
-    }
-  ],
-
   "vars": {
-    "GITHUB_CLIENT_ID": "your-github-oauth-app-client-id",
     "MCP_PUBLIC_ORIGIN": "https://metro-mcp.anuragd.me",
     "MCP_ALLOWED_HOSTNAMES": "metro-mcp.anuragd.me",
     "MCP_ALLOWED_ORIGIN_HOSTNAMES": "metro-mcp.anuragd.me",
-    "OAUTH_REDIRECT_URI": "https://metro-mcp.anuragd.me/callback",
     "ENVIRONMENT": "production"
   },
 
   "env": {
     "preview": {
-      // Preview uses an independent GitHub OAuth app and OAUTH_KV namespace.
       // Bindings and vars do not inherit into named Wrangler environments.
       "routes": [],
       "vars": {
-        "GITHUB_CLIENT_ID": "your-preview-github-oauth-app-client-id",
         "MCP_PUBLIC_ORIGIN": "https://metro-mcp-preview.anuragd.me",
         "MCP_ALLOWED_HOSTNAMES": "metro-mcp-preview.anuragd.me",
         "MCP_ALLOWED_ORIGIN_HOSTNAMES": "metro-mcp-preview.anuragd.me",
-        "OAUTH_REDIRECT_URI": "https://metro-mcp-preview.anuragd.me/callback",
         "ENVIRONMENT": "preview"
-      },
-      "kv_namespaces": [
-        {
-          "binding": "OAUTH_KV",
-          "id": "your-distinct-preview-oauth-provider-kv-id-here"
-        }
-      ]
+      }
     }
   },
 

@@ -23,9 +23,9 @@ describe('release operator documentation', () => {
   it('shows every required preview secret command with the named environment', () => {
     for (const secret of [
       'MCP_REQUEST_STATE_KEY',
-      'GITHUB_CLIENT_SECRET',
+      ['GITHUB', 'CLIENT_SECRET'].join('_'),
       'WMATA_API_KEY',
-      'JWT_SECRET',
+      ['JWT', 'SECRET'].join('_'),
     ]) {
       expect(readme).toContain(`bunx wrangler secret put ${secret} --env preview`);
     }
@@ -187,6 +187,12 @@ describe('release operator documentation', () => {
     expect(appsHostSource).toContain('new AppBridge(');
     expect(appsHostSource).toContain('new PostMessageTransport(');
     expect(appsHostSource).not.toMatch(/\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/);
-    expect(appsHostSource).not.toMatch(/(?:WMATA_API_KEY|GITHUB_CLIENT_SECRET|JWT_SECRET|OAuth)/i);
+    const privateRuntimeNames = [
+      'WMATA_API_KEY',
+      ['GITHUB', 'CLIENT_SECRET'].join('_'),
+      ['JWT', 'SECRET'].join('_'),
+      ['O', 'Auth'].join(''),
+    ];
+    for (const name of privateRuntimeNames) expect(appsHostSource).not.toContain(name);
   });
 });

@@ -6,56 +6,6 @@ import {
 
 export const TEST_ORIGIN = 'https://metro-mcp.anuragd.me';
 export const TEST_RESOURCE = `${TEST_ORIGIN}/mcp`;
-export const TEST_JWT_SECRET = 'test-jwt-secret-at-least-32-characters-long';
-
-export type LegacyJwtClaims = {
-  aud?: unknown;
-  exp?: unknown;
-  nbf?: unknown;
-  sub?: unknown;
-  login?: unknown;
-  userId?: unknown;
-  userLogin?: unknown;
-};
-
-function base64Url(bytes: Uint8Array): string {
-  return btoa(String.fromCharCode(...bytes))
-    .replace(/=/g, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-}
-
-export async function testBearerToken(
-  overrides: LegacyJwtClaims = {},
-): Promise<string> {
-  const now = Math.floor(Date.now() / 1_000);
-  const claims: LegacyJwtClaims = {
-    aud: TEST_RESOURCE,
-    exp: now + 3_600,
-    sub: 'workerd-user-42',
-    login: 'workerd-user',
-    ...overrides,
-  };
-  const header = base64Url(new TextEncoder().encode(JSON.stringify({
-    alg: 'HS256',
-    typ: 'JWT',
-  })));
-  const payload = base64Url(new TextEncoder().encode(JSON.stringify(claims)));
-  const signingInput = `${header}.${payload}`;
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(TEST_JWT_SECRET),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const signature = await crypto.subtle.sign(
-    'HMAC',
-    key,
-    new TextEncoder().encode(signingInput),
-  );
-  return `${signingInput}.${base64Url(new Uint8Array(signature))}`;
-}
 
 function namedValue(method: string, params: unknown): string | undefined {
   if (!params || typeof params !== 'object' || Array.isArray(params)) {

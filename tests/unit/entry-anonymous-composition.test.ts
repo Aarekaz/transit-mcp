@@ -29,7 +29,6 @@ const deployments = [
       MCP_PUBLIC_ORIGIN: 'https://metro-mcp-preview.anuragd.me',
       MCP_ALLOWED_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
       MCP_ALLOWED_ORIGIN_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
-      OAUTH_REDIRECT_URI: 'https://metro-mcp-preview.anuragd.me/callback',
       ENVIRONMENT: 'preview',
     }),
   },

@@ -7,7 +7,7 @@
  * 
  * USAGE:
  * ```typescript
- * import { createMockEnv, createMockKV } from './setup';
+ * import { createMockEnv } from './setup';
  * 
  * const env = createMockEnv();
  * const result = await myFunction(env);
@@ -15,67 +15,12 @@
  */
 
 import { vi } from 'vitest';
-import type { OAuthHelpers } from '@cloudflare/workers-oauth-provider';
 import type { Env as WorkerEnv, TransitStation } from '../src/types';
 
 declare global {
   namespace Cloudflare {
     interface Env extends WorkerEnv {}
   }
-}
-
-/**
- * Mock KVNamespace implementation
- * 
- * WHY NEEDED:
- * KVNamespace is a Cloudflare Workers API not available in test environment.
- * We need to mock it to test code that uses KV.
- * 
- * IMPLEMENTATION:
- * Uses an in-memory Map for storage, implements KV interface.
- */
-export function createMockKV(): KVNamespace {
-  const storage = new Map<string, { value: string; expiration?: number }>();
-
-  return {
-    async get(key: string): Promise<string | null> {
-      const item = storage.get(key);
-      if (!item) return null;
-      
-      // Check expiration
-      if (item.expiration && Date.now() > item.expiration) {
-        storage.delete(key);
-        return null;
-      }
-      
-      return item.value;
-    },
-
-    async put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> {
-      const expiration = options?.expirationTtl 
-        ? Date.now() + (options.expirationTtl * 1000)
-        : undefined;
-      
-      storage.set(key, { value, expiration });
-    },
-
-    async delete(key: string): Promise<void> {
-      storage.delete(key);
-    },
-
-    async list(): Promise<any> {
-      return {
-        keys: Array.from(storage.keys()).map(name => ({ name })),
-        list_complete: true,
-        cursor: '',
-      };
-    },
-
-    // Additional methods for testing
-    getWithMetadata: vi.fn(),
-    getMultiple: vi.fn(),
-    setMultiple: vi.fn(),
-  } as any;
 }
 
 /**
@@ -90,32 +35,13 @@ export function createMockKV(): KVNamespace {
  * const env = createMockEnv({ WMATA_API_KEY: 'test-key' });
  * ```
  */
-export function createMockOAuthHelpers(
-  overrides: Partial<OAuthHelpers> = {},
-): WorkerEnv['OAUTH_PROVIDER'] {
-  return new Proxy(overrides, {
-    get(target, property, receiver) {
-      if (Reflect.has(target, property)) {
-        return Reflect.get(target, property, receiver);
-      }
-      throw new Error('OAUTH_PROVIDER helpers accessed without an explicit test mock.');
-    }
-  }) as WorkerEnv['OAUTH_PROVIDER'];
-}
-
 export function createMockEnv(overrides: Partial<WorkerEnv> = {}): WorkerEnv {
   return {
     MCP_PUBLIC_ORIGIN: 'https://metro-mcp.anuragd.me',
     MCP_ALLOWED_HOSTNAMES: 'metro-mcp.anuragd.me',
     MCP_ALLOWED_ORIGIN_HOSTNAMES: 'metro-mcp.anuragd.me',
     MCP_REQUEST_STATE_KEY: 'test-mrtr-request-state-key-32-bytes-minimum',
-    GITHUB_CLIENT_ID: 'test-client-id',
-    GITHUB_CLIENT_SECRET: 'test-client-secret',
-    OAUTH_REDIRECT_URI: 'https://metro-mcp.anuragd.me/callback',
     WMATA_API_KEY: 'test-wmata-key',
-    JWT_SECRET: 'test-jwt-secret-at-least-32-characters-long',
-    OAUTH_KV: createMockKV(),
-    OAUTH_PROVIDER: createMockOAuthHelpers(),
     ASSETS: { fetch: vi.fn() } as unknown as Fetcher,
     ENVIRONMENT: 'production',
     ...overrides,
