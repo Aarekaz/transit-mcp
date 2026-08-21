@@ -103,7 +103,7 @@ export async function modernMcpRequest(
   } = {},
 ): Promise<Request> {
   const headers = new Headers(options.headers);
-  headers.set('Authorization', `Bearer ${options.token ?? await testBearerToken()}`);
+  if (options.token) headers.set('Authorization', `Bearer ${options.token}`);
   headers.set('Host', 'metro-mcp.anuragd.me');
   headers.set('Content-Type', 'application/json');
   headers.set('Accept', 'application/json, text/event-stream');
@@ -130,7 +130,7 @@ export async function legacyMcpRequest(
   } = {},
 ): Promise<Request> {
   const headers = new Headers(options.headers);
-  headers.set('Authorization', `Bearer ${options.token ?? await testBearerToken()}`);
+  if (options.token) headers.set('Authorization', `Bearer ${options.token}`);
   headers.set('Host', 'metro-mcp.anuragd.me');
   headers.set('Content-Type', 'application/json');
   headers.set('Accept', 'application/json, text/event-stream');

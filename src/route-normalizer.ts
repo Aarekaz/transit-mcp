@@ -12,7 +12,7 @@ function methodNotAllowed(): Response {
   });
 }
 
-/** Admit only the two exact stateless MCP routes before OAuth dispatch. */
+/** Admit only the two exact stateless MCP routes before anonymous dispatch. */
 export function normalizeMcpRoute(request: Request): NormalizedMcpRoute | Response | undefined {
   const url = new URL(request.url);
   const { pathname } = url;

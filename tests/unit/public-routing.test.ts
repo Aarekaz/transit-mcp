@@ -8,12 +8,6 @@ vi.mock('../../src/mcp-agent', () => ({
   },
 }));
 
-vi.mock('../../src/oauth/provider', () => ({
-  createOAuthProvider: vi.fn(() => {
-    throw new Error('public route characterization constructed the OAuth Provider');
-  }),
-}));
-
 import worker from '../../src/index';
 import { createMockEnv } from '../setup';
 
@@ -79,5 +73,28 @@ describe('public route characterization', () => {
     expect(writeResponse.status).toBe(404);
     expect(await writeResponse.text()).toBe('Not Found');
     expect(writeResponse.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+
+  it.each([
+    ['GET', '/authorize'],
+    ['POST', '/authorize/decision'],
+    ['GET', '/callback'],
+    ['POST', '/token'],
+    ['POST', '/register'],
+    ['GET', '/.well-known/oauth-authorization-server'],
+    ['GET', '/.well-known/oauth-protected-resource'],
+    ['GET', '/.well-known/oauth-protected-resource/mcp'],
+  ])('returns 404 for former OAuth endpoint %s %s', async (method, pathname) => {
+    const env = createMockEnv({
+      ASSETS: { fetch: vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 })) } as unknown as Fetcher,
+    });
+
+    const response = await worker.fetch(
+      new Request(`https://metro-mcp.anuragd.me${pathname}`, { method }),
+      env,
+      executionContext(),
+    );
+
+    expect(response.status).toBe(404);
   });
 });

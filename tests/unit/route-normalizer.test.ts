@@ -14,7 +14,7 @@ function expectAdmitted(
 }
 
 describe('normalizeMcpRoute', () => {
-  it.each(['POST', 'OPTIONS'])('rewrites exact /sse %s before auth', async method => {
+  it.each(['POST', 'OPTIONS'])('rewrites exact /sse %s before dispatch', async method => {
     const original = new Request('https://metro-mcp.anuragd.me/sse?trace=1', {
       method,
       headers: { Authorization: 'Bearer secret', 'X-Probe': 'kept' },

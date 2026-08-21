@@ -9,7 +9,6 @@ import {
   modernEnvelope,
   modernMcpRequest,
   readMcpResponse,
-  testBearerToken,
   TEST_ORIGIN,
 } from '../helpers/mcp-request';
 import {
@@ -49,16 +48,11 @@ afterEach(() => {
 });
 
 describe('assembled MCP Worker', () => {
-  it('returns the RFC 9728 challenge before MCP dispatch', async () => {
-    const response = await SELF.fetch(`${TEST_ORIGIN}/mcp`, {
-      method: 'POST',
-      headers: { Host: 'metro-mcp.anuragd.me' },
-    });
+  it('serves anonymous modern server/discover without an authentication challenge', async () => {
+    const response = await SELF.fetch(await modernMcpRequest('server/discover'));
 
-    expect(response.status).toBe(401);
-    expect(response.headers.get('www-authenticate')).toContain(
-      `resource_metadata="${TEST_ORIGIN}/.well-known/oauth-protected-resource/mcp"`,
-    );
+    expect(response.status).toBe(200);
+    expect(response.headers.has('www-authenticate')).toBe(false);
   });
 
   it('serves modern server/discover without initialize', async () => {
@@ -119,7 +113,7 @@ describe('assembled MCP Worker', () => {
     }
   });
 
-  it('lists and reads the committed Transit Board asset through authenticated MCP', async () => {
+  it('lists and reads the committed Transit Board asset through anonymous MCP', async () => {
     const publicAssetResponse = await SELF.fetch(`${TEST_ORIGIN}/apps/transit-board.html`, {
       headers: { Host: 'metro-mcp.anuragd.me' },
     });
@@ -159,7 +153,7 @@ describe('assembled MCP Worker', () => {
     });
   });
 
-  it('protects Transit Board resource reads before the asset binding is reached', async () => {
+  it('serves Transit Board resource reads without a token', async () => {
     const request = new Request(`${TEST_ORIGIN}/mcp`, {
       method: 'POST',
       headers: {
@@ -175,8 +169,8 @@ describe('assembled MCP Worker', () => {
 
     const response = await SELF.fetch(request);
 
-    expect(response.status).toBe(401);
-    expect(response.headers.get('www-authenticate')).toContain('resource_metadata=');
+    expect(response.status).toBe(200);
+    expect(response.headers.has('www-authenticate')).toBe(false);
   });
 
   it('serves representative modern tool, resource, and prompt calls', async () => {
@@ -251,7 +245,7 @@ describe('assembled MCP Worker', () => {
     expect(JSON.stringify(ambiguous)).toContain('please call get_station_predictions again');
   });
 
-  it('keeps /sse as an exact POST alias and rejects unsupported MCP methods before OAuth', async () => {
+  it('keeps /sse as an exact POST alias and rejects unsupported MCP methods before dispatch', async () => {
     const aliasResponse = await SELF.fetch(await modernMcpRequest(
       'server/discover',
       {},
@@ -278,23 +272,22 @@ describe('assembled MCP Worker', () => {
     }
   });
 
-  it('ignores query-string credentials', async () => {
+  it('does not create an authentication path for query-string credentials', async () => {
     for (const query of ['access_token=not-a-token', 'token=not-a-token']) {
-      const response = await SELF.fetch(`${TEST_ORIGIN}/mcp?${query}`, {
-        method: 'POST',
-        headers: { Host: 'metro-mcp.anuragd.me' },
-      });
-      expect(response.status).toBe(401);
+      const request = await modernMcpRequest('server/discover');
+      const url = new URL(request.url);
+      url.search = query;
+      const response = await SELF.fetch(new Request(url, request));
+      expect(response.status).toBe(200);
+      expect(response.headers.has('www-authenticate')).toBe(false);
     }
   });
 
   it('returns SDK-defined errors for version, method, and name mismatches', async () => {
-    const token = await testBearerToken();
     const cases = [
       new Request(`${TEST_ORIGIN}/mcp`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${token}`,
           Host: 'metro-mcp.anuragd.me',
           'Content-Type': 'application/json',
           Accept: 'application/json',
@@ -306,7 +299,6 @@ describe('assembled MCP Worker', () => {
       new Request(`${TEST_ORIGIN}/mcp`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${token}`,
           Host: 'metro-mcp.anuragd.me',
           'Content-Type': 'application/json',
           Accept: 'application/json',
@@ -315,11 +307,11 @@ describe('assembled MCP Worker', () => {
         },
         body: JSON.stringify(modernEnvelope('tools/list')),
       }),
-      await modernMcpRequest('tools/list', {}, { token }),
+      await modernMcpRequest('tools/list'),
       await modernMcpRequest('tools/call', {
         name: 'search_stations',
         arguments: { city: 'nyc', query: 'Times Sq' },
-      }, { token }),
+      }),
     ];
     cases[2]!.headers.set('Mcp-Method', 'prompts/list');
     cases[3]!.headers.set('Mcp-Name', 'wrong_tool');
@@ -361,29 +353,76 @@ describe('assembled MCP Worker', () => {
   });
 
   it('enforces Host and browser Origin while allowing Origin-less desktop requests', async () => {
-    const token = await testBearerToken();
     const allowed = await SELF.fetch(await modernMcpRequest('server/discover', {}, {
-      token,
       headers: { Origin: TEST_ORIGIN },
     }));
-    const desktop = await SELF.fetch(await modernMcpRequest('server/discover', {}, { token }));
+    const desktop = await SELF.fetch(await modernMcpRequest('server/discover'));
     const badOrigin = await SELF.fetch(await modernMcpRequest('server/discover', {}, {
-      token,
       headers: { Origin: 'https://attacker.example' },
     }));
     const malformedOrigin = await SELF.fetch(await modernMcpRequest('server/discover', {}, {
-      token,
       headers: { Origin: 'not a url' },
     }));
-    const badHostRequest = await modernMcpRequest('server/discover', {}, { token });
+    const badHostRequest = await modernMcpRequest('server/discover');
     badHostRequest.headers.set('Host', 'attacker.example');
     const badHost = await SELF.fetch(badHostRequest);
+    const insecureRequest = await modernMcpRequest('server/discover');
+    const insecureUrl = new URL(insecureRequest.url);
+    insecureUrl.protocol = 'http:';
+    const insecureOrigin = await SELF.fetch(new Request(insecureUrl, insecureRequest));
 
     expect(allowed.status).toBe(200);
     expect(desktop.status).toBe(200);
     expect(badOrigin.status).toBe(403);
     expect(malformedOrigin.status).toBe(403);
     expect(badHost.status).toBe(403);
+    expect(insecureOrigin.status).toBe(403);
+  });
+
+  it('serves canonical preflight without consuming an authentication boundary', async () => {
+    const response = await SELF.fetch(`${TEST_ORIGIN}/mcp`, {
+      method: 'OPTIONS',
+      headers: {
+        Host: 'metro-mcp.anuragd.me',
+        Origin: TEST_ORIGIN,
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'MCP-Protocol-Version, Mcp-Method, Mcp-Name',
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('access-control-allow-methods'))
+      .toBe('GET, POST, DELETE, OPTIONS');
+    expect(response.headers.has('www-authenticate')).toBe(false);
+  });
+
+  it.each([
+    ['GET', '/authorize'],
+    ['POST', '/authorize/decision'],
+    ['GET', '/callback'],
+    ['POST', '/token'],
+    ['POST', '/register'],
+    ['GET', '/.well-known/oauth-authorization-server'],
+    ['GET', '/.well-known/oauth-protected-resource'],
+    ['GET', '/.well-known/oauth-protected-resource/mcp'],
+  ])('returns 404 for former OAuth endpoint %s %s', async (method, pathname) => {
+    const response = await SELF.fetch(`${TEST_ORIGIN}${pathname}`, {
+      method,
+      headers: { Host: 'metro-mcp.anuragd.me' },
+    });
+
+    expect(response.status).toBe(404);
+  });
+
+  it('accepts a stale Authorization header as anonymous input', async () => {
+    const request = await modernMcpRequest('server/discover', {}, {
+      token: 'canary-do-not-log',
+    });
+
+    const response = await SELF.fetch(request);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.has('www-authenticate')).toBe(false);
   });
 
   it('streams request-scoped progress before the final result', async () => {

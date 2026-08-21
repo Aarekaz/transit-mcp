@@ -5,7 +5,7 @@ import {
 
 import { loadConfig } from './config';
 import { addSecurityHeadersAuto } from './middleware/security-headers';
-import { createOAuthProvider } from './oauth/provider';
+import { handleMcpRequest } from './mcp/http-handler';
 import { handlePublicRequest } from './public-handler';
 import { normalizeMcpRoute } from './route-normalizer';
 import { serializeTelemetry, type TelemetryInput } from './telemetry';
@@ -15,18 +15,7 @@ import type { Env } from './types';
 // Cloudflare's bundler discovers DO classes by name at deploy time.
 export { MetroMcpAgent } from './mcp-agent';
 
-function isOAuthRoute(pathname: string): boolean {
-  return pathname === '/authorize'
-    || pathname === '/authorize/decision'
-    || pathname === '/callback'
-    || pathname === '/token'
-    || pathname === '/register'
-    || pathname === '/.well-known/oauth-authorization-server'
-    || pathname === '/.well-known/oauth-protected-resource'
-    || pathname.startsWith('/.well-known/oauth-protected-resource/');
-}
-
-function providerTrustRejection(
+function mcpTrustRejection(
   request: Request,
   publicOrigin: string,
   allowedHostnames: string[],
@@ -60,7 +49,7 @@ function withCorrelationId(response: Response, correlationId: string): Response 
 }
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const startedAt = performance.now();
     const telemetry: TelemetryInput = { correlationId: crypto.randomUUID() };
     const normalized = normalizeMcpRoute(request);
@@ -73,20 +62,12 @@ export default {
         const config = loadConfig(env);
         if (normalized) {
           telemetry.alias = normalized.alias;
-          response = providerTrustRejection(
+          response = mcpTrustRejection(
             normalized.request,
             config.mcp.publicOrigin,
             config.mcp.allowedHostnames,
             config.mcp.allowedOriginHostnames,
-          ) ?? await createOAuthProvider(env, ctx, config, telemetry)
-            .fetch(normalized.request, env, ctx);
-        } else if (isOAuthRoute(new URL(request.url).pathname)) {
-          response = providerTrustRejection(
-            request,
-            config.mcp.publicOrigin,
-            config.mcp.allowedHostnames,
-          )
-            ?? await createOAuthProvider(env, ctx, config, telemetry).fetch(request, env, ctx);
+          ) ?? await handleMcpRequest(normalized.request, env, config, telemetry);
         } else {
           response = await handlePublicRequest(request, env, config);
         }

@@ -210,12 +210,6 @@ function testContext(): MetroMcpContext {
   return {
     env: createMockEnv(),
     era: 'modern',
-    props: {
-      userId: '42',
-      userLogin: 'anurag',
-      clientId: 'catalog-test',
-      scopes: ['transit:read'],
-    },
   };
 }
 
@@ -286,7 +280,6 @@ async function listToolsOverSdkWire(): Promise<ToolWireContract[]> {
   const handler = createMcpHandler(sdkContext => createMetroMcpServer({
     ...context,
     era: sdkContext.era,
-    authInfo: sdkContext.authInfo,
   }));
 
   try {
@@ -378,7 +371,6 @@ function metroServerFactory(context = testContext()) {
   return (sdkContext: McpRequestContext) => createMetroMcpServer({
     ...context,
     era: sdkContext.era,
-    authInfo: sdkContext.authInfo,
   });
 }
 

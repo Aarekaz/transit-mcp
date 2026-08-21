@@ -8,8 +8,6 @@ import type { TelemetryInput } from '../telemetry';
 import type { Env } from '../types';
 import { resolveLegacyToken } from './legacy-token';
 
-type ProviderExecutionContext = ExecutionContext & { props?: unknown };
-
 /** Create an isolated Provider configuration for one Worker request. */
 export function createOAuthProvider(
   env: Env,
@@ -18,9 +16,8 @@ export function createOAuthProvider(
   telemetry?: TelemetryInput,
 ): OAuthProvider<Env> {
   const protectedHandler: ExportedHandler<Env> & Pick<Required<ExportedHandler<Env>>, 'fetch'> = {
-    fetch(request, _handlerEnv, workerContext) {
-      const props = (workerContext as ProviderExecutionContext).props;
-      return handleMcpRequest(request, env, undefined, props, config, telemetry);
+    fetch(request) {
+      return handleMcpRequest(request, env, config, telemetry);
     },
   };
   const publicHandler: ExportedHandler<Env> = {

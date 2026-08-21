@@ -5,7 +5,6 @@ export interface TelemetryInput extends Record<string, unknown> {
   mcpMethod?: unknown;
   mcpName?: unknown;
   alias?: unknown;
-  clientId?: unknown;
   upstream?: unknown;
   durationMs?: unknown;
   status?: unknown;
@@ -18,7 +17,6 @@ export interface SafeTelemetry {
   mcpMethod?: string;
   mcpName?: string;
   alias?: '/mcp' | '/sse';
-  clientId?: string;
   upstream?: string;
   durationMs?: number;
   statusClass?: `${1 | 2 | 3 | 4 | 5}xx`;
@@ -68,7 +66,6 @@ export function sanitizeTelemetry(input: TelemetryInput): SafeTelemetry {
     'alias',
     input.alias === '/mcp' || input.alias === '/sse' ? input.alias : undefined,
   );
-  addIfDefined(safe, 'clientId', safeString(input.clientId, /^[^\u0000-\u001f\u007f]+$/, 512));
   addIfDefined(safe, 'upstream', safeString(input.upstream, /^[a-z0-9][a-z0-9._-]*$/, 64));
   addIfDefined(
     safe,

@@ -1,54 +1,68 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const handlerFetch = vi.hoisted(() => vi.fn<(request: Request) => Promise<Response>>());
+
+vi.mock('agents/mcp/server', () => ({
+  createMcpHandler: vi.fn(() => ({ fetch: handlerFetch })),
+}));
+
+vi.mock('../../src/mcp/server', () => ({
+  createMetroMcpServer: vi.fn(),
+}));
 
 import { handleMcpRequest } from '../../src/mcp/http-handler';
 import { addSecurityHeadersAuto } from '../../src/middleware/security-headers';
 import { createMockEnv } from '../setup';
 
-const validProps = {
-  userId: '42',
-  userLogin: 'anurag',
-  clientId: 'client-123',
-  scopes: ['transit:read'] as ['transit:read'],
-};
+beforeEach(() => {
+  handlerFetch.mockReset();
+});
 
 describe('handleMcpRequest', () => {
-  it.each([
-    undefined,
-    {},
-    { ...validProps, scopes: [] },
-    { ...validProps, scopes: ['profile'] },
-  ])('rejects absent or invalid authoritative props before MCP construction', async props => {
+  it('serves anonymous preflight without Provider props or an authentication challenge', async () => {
+    handlerFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
     const response = await handleMcpRequest(
       new Request('https://metro-mcp.anuragd.me/mcp', {
         method: 'OPTIONS',
         headers: { Host: 'metro-mcp.anuragd.me' },
       }),
       createMockEnv(),
-      undefined,
-      props,
     );
 
-    expect(response.status).toBe(403);
-    expect(response.headers.get('www-authenticate')).toContain('insufficient_scope');
-    await expect(response.json()).resolves.toMatchObject({ error: 'insufficient_scope' });
+    expect(response.status).toBe(204);
+    expect(response.headers.has('www-authenticate')).toBe(false);
   });
 
-  it('accepts valid props when Provider AuthInfo is absent', async () => {
+  it('removes a stale Authorization header before SDK dispatch', async () => {
+    handlerFetch.mockResolvedValueOnce(Response.json({ result: { ok: true } }));
     const response = await handleMcpRequest(
       new Request('https://metro-mcp.anuragd.me/mcp', {
-        method: 'OPTIONS',
-        headers: { Host: 'metro-mcp.anuragd.me' },
+        method: 'POST',
+        headers: {
+          Host: 'metro-mcp.anuragd.me',
+          Authorization: 'Bearer canary-do-not-log',
+          'Content-Type': 'application/json',
+          'MCP-Protocol-Version': '2026-07-28',
+          'Mcp-Method': 'server/discover',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'server/discover', params: {} }),
       }),
       createMockEnv(),
-      undefined,
-      validProps,
     );
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('access-control-allow-methods')).toContain('POST');
+    expect(handlerFetch).toHaveBeenCalledOnce();
+    expect(handlerFetch.mock.calls[0]![0].headers.has('authorization')).toBe(false);
   });
 
   it('keeps the Agents modern MCP preflight policy through outer security composition', async () => {
+    handlerFetch.mockResolvedValueOnce(new Response(null, {
+      status: 200,
+      headers: {
+        'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Accept, Authorization, mcp-session-id, MCP-Protocol-Version, Mcp-Method, Mcp-Name',
+      },
+    }));
     const mcpResponse = await handleMcpRequest(
       new Request('https://metro-mcp.anuragd.me/mcp', {
         method: 'OPTIONS',
@@ -60,8 +74,6 @@ describe('handleMcpRequest', () => {
         },
       }),
       createMockEnv(),
-      undefined,
-      validProps,
     );
 
     const response = addSecurityHeadersAuto(mcpResponse);
@@ -76,7 +88,8 @@ describe('handleMcpRequest', () => {
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
   });
 
-  it('serves an ordinary legacy stateless request with props as the authority', async () => {
+  it('serves an ordinary legacy stateless request without an authorization object', async () => {
+    handlerFetch.mockResolvedValueOnce(new Response('{"id":1}'));
     const response = await handleMcpRequest(
       new Request('https://metro-mcp.anuragd.me/mcp', {
         method: 'POST',
@@ -88,8 +101,6 @@ describe('handleMcpRequest', () => {
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
       }),
       createMockEnv(),
-      undefined,
-      validProps,
     );
 
     expect(response.status).toBe(200);

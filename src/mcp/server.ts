@@ -5,8 +5,6 @@ import {
 } from '@modelcontextprotocol/server';
 import { SERVER_VERSION } from '../config';
 import {
-  parseMetroMcpProps,
-  requireTransitRead,
   type MetroMcpContext,
   type MetroRequestState,
 } from './context';
@@ -51,16 +49,10 @@ function buildMetroMcpServer(context: MetroMcpContext): {
   server: McpServer;
   stateCodec: RequestStateCodec<MetroRequestState>;
 } {
-  const props = parseMetroMcpProps(requireTransitRead(context.props));
-  const normalizedContext: MetroMcpContext = { ...context, props };
-
   const stateCodec = createRequestStateCodec<MetroRequestState>({
-    key: normalizedContext.env.MCP_REQUEST_STATE_KEY,
+    key: context.env.MCP_REQUEST_STATE_KEY,
     ttlSeconds: 300,
-    bind: serverContext => [
-      normalizedContext.props.userId,
-      serverContext.mcpReq.method,
-    ].join('\u0000'),
+    bind: serverContext => serverContext.mcpReq.method,
   });
 
   const server = new McpServer(
@@ -86,9 +78,9 @@ function buildMetroMcpServer(context: MetroMcpContext): {
     },
   );
 
-  registerMetroFeatures(server, normalizedContext, stateCodec);
-  registerTransitBoardApp(server, normalizedContext);
-  registerResources(server, normalizedContext);
+  registerMetroFeatures(server, context, stateCodec);
+  registerTransitBoardApp(server, context);
+  registerResources(server, context);
   registerPrompts(server);
   return { server, stateCodec };
 }

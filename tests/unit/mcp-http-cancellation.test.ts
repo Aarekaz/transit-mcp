@@ -13,13 +13,6 @@ vi.mock('../../src/mcp/server', () => ({
 import { handleMcpRequest } from '../../src/mcp/http-handler';
 import { createMockEnv } from '../setup';
 
-const props = {
-  userId: '42',
-  userLogin: 'workerd-user',
-  clientId: 'client-42',
-  scopes: ['transit:read'] as ['transit:read'],
-};
-
 beforeEach(() => {
   handlerFetch.mockReset();
 });
@@ -43,8 +36,6 @@ describe('MCP response cancellation bridge', () => {
     const response = await handleMcpRequest(
       new Request('https://metro-mcp.anuragd.me/mcp', { method: 'POST' }),
       createMockEnv(),
-      undefined,
-      props,
     );
     const reader = response.body!.getReader();
     await reader.read();
@@ -72,8 +63,6 @@ describe('MCP response cancellation bridge', () => {
         signal: controller.signal,
       }),
       createMockEnv(),
-      undefined,
-      props,
     );
 
     expect(response.status).toBe(499);
@@ -100,8 +89,6 @@ describe('MCP response cancellation bridge', () => {
     const response = await handleMcpRequest(
       request,
       createMockEnv(),
-      undefined,
-      props,
     );
 
     await expect(response.text()).resolves.toBe('done');
@@ -121,8 +108,6 @@ describe('MCP response cancellation bridge', () => {
     await expect(handleMcpRequest(
       request,
       createMockEnv(),
-      undefined,
-      props,
     )).rejects.toThrow('handler failed');
     expect(remove).toHaveBeenCalled();
   });
