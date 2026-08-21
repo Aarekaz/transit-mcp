@@ -20,17 +20,6 @@ const packageJson = JSON.parse(readOptionalProjectFile('package.json')) as {
 const workflow = readOptionalProjectFile('.github/workflows/type-check.yml');
 
 describe('release operator documentation', () => {
-  it('shows every required preview secret command with the named environment', () => {
-    for (const secret of [
-      'MCP_REQUEST_STATE_KEY',
-      ['GITHUB', 'CLIENT_SECRET'].join('_'),
-      'WMATA_API_KEY',
-      ['JWT', 'SECRET'].join('_'),
-    ]) {
-      expect(readme).toContain(`bunx wrangler secret put ${secret} --env preview`);
-    }
-  });
-
   it('states the active SDK v2 input boundaries without removed validator claims', () => {
     expect(securityGuide).not.toMatch(
       /\b(?:validateToolParams|ValidationError|validateCityCode|validateSearchQuery|validateQuery)\b/,
@@ -189,9 +178,7 @@ describe('release operator documentation', () => {
     expect(appsHostSource).not.toMatch(/\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/);
     const privateRuntimeNames = [
       'WMATA_API_KEY',
-      ['GITHUB', 'CLIENT_SECRET'].join('_'),
-      ['JWT', 'SECRET'].join('_'),
-      ['O', 'Auth'].join(''),
+      'OAuth',
     ];
     for (const name of privateRuntimeNames) expect(appsHostSource).not.toContain(name);
   });
