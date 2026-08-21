@@ -1,7 +1,7 @@
 # Metro MCP 6.0 Anonymous Public Service Design
 
 **Date:** 2026-08-21
-**Status:** Draft for owner review
+**Status:** Approved
 **Owner:** Anurag Dhungana
 **Target release:** 6.0.0
 
