@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Cloudflare request limiting of approximately 300 requests per minute per location and 60 per minute per shared source IP. These are shared abuse controls, not a dedicated user quota.
+- Cloudflare request limiting of roughly 300 requests per 60-second window per source-IP key per Cloudflare location. Shared egress IPs group clients, and enforcement is eventually consistent; it is not a dedicated user quota.
 - Canonical privacy, terms, and support links for the public service.
 
 ### Preserved

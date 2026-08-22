@@ -52,7 +52,7 @@ An Apps-capable host can render the Transit Board resource for all 13 tools. Cli
 - **Request trust:** public origin and host/origin allowlists are validated at startup. The signed MRTR request-state codec is bound to the MCP method and expires after five minutes.
 - **Cancellation:** client disconnects propagate request cancellation to MCP handlers and upstream transit fetches.
 - **Caching:** discovery and tool metadata are publicly cacheable for 24 hours. Station and route resources are public-cacheable; live incident resources are not. WMATA uses Cloudflare edge cache windows appropriate to each feed, while MTA real-time feeds use a 30-second in-memory cache.
-- **Rate limiting:** the deployed Cloudflare binding allows approximately 300 requests per minute per Cloudflare location and approximately 60 requests per minute per shared source IP. These are abuse controls, not a dedicated user quota; shared networks can be affected by other traffic.
+- **Rate limiting:** roughly 300 requests per 60-second window per source-IP key per Cloudflare location. Shared egress IPs group clients, and enforcement is eventually consistent. This is abuse protection, not a dedicated user quota.
 - **Rollback:** the inactive `MetroMcpAgent` class and original `v1` Durable Object migration remain for rollback. Do not add a deletion migration during stabilization.
 
 ## Deploy your own

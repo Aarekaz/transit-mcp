@@ -4,7 +4,7 @@ Metro MCP 6.0 is an anonymous, read-only service at `https://metro-mcp.anuragd.m
 
 ## Public request and rate-limit boundaries
 
-Any client can call the public endpoint; a caller is not an authenticated identity. Cloudflare bindings apply approximately 300 requests per minute per Cloudflare location and approximately 60 requests per minute per shared source IP. These are abuse controls, not a guarantee of a dedicated user quota: shared networks can be affected by other traffic.
+Any client can call the public endpoint; there is no caller identity. Cloudflare applies roughly 300 requests per 60-second window per source-IP key per Cloudflare location. Shared egress IPs group clients, and enforcement is eventually consistent. This is abuse protection, not a guarantee of a dedicated user quota.
 
 `Mcp-Method` and `Mcp-Name` are untrusted request headers at the edge. An edge rule must validate and allowlist any secondary dimension itself, key primarily on trusted Cloudflare identity or source IP, and never treat a header as identity.
 
@@ -18,7 +18,7 @@ MCP 2026 clients send request metadata on every operation without an initializat
 
 ### MRTR request state
 
-Modern ambiguous-station selection uses signed request state with a five-minute TTL. `MCP_REQUEST_STATE_KEY` is a dedicated stable secret of at least 32 bytes and must differ by environment. State binds the user and operation and rejects expiration, tampering, cross-user replay, a changed query, and selections outside the offered candidates. State is signed rather than encrypted, so it contains no secrets or unnecessary personal data.
+Modern ambiguous-station selection uses signed request state with a five-minute TTL. `MCP_REQUEST_STATE_KEY` is a dedicated stable secret of at least 32 bytes and must differ by environment. There is no caller identity: state binds the MCP method plus validated operation payload semantics (tool, city, query, and offered candidate IDs) and rejects expiration, tampering, a changed query, and selections outside the offered candidates. State is signed rather than encrypted, so it contains no secrets or unnecessary personal data.
 
 ### Tool input schemas and downstream handling
 
@@ -85,7 +85,7 @@ bun audit
 
 **6. Review Code for Security**
 - Check each input has an accurate SDK schema and field-specific downstream boundary
-- Verify authentication is required
+- Verify that authentication is absent by design and no caller identity is inferred from request headers
 - Verify any Cloudflare edge policy keys on trusted Cloudflare identity or source IP
 - Confirm security headers are set
 
@@ -113,7 +113,7 @@ Production and preview require distinct WMATA API keys, MRTR state keys, origins
 
 **3. Review Logs Regularly**
 
-Metro application telemetry is serialized through `serializeTelemetry` into these allowlisted fields only: `correlationId`, `era`, `protocolVersion`, `mcpMethod`, `mcpName`, `alias`, `clientId`, `upstream`, `durationMs`, and `statusClass`. Invalid or unknown fields are dropped. Use `statusClass` and the safe request dimensions for application trends. Authentication detail and rate-limit analytics are not emitted by Metro telemetry and must be reviewed in the owning platform when available.
+Metro application telemetry is serialized through `serializeTelemetry` into these allowlisted fields only: `correlationId`, `era`, `protocolVersion`, `mcpMethod`, `mcpName`, `alias`, `upstream`, `durationMs`, and `statusClass`. Invalid or unknown fields are dropped. Metro emits no client identity field; use `statusClass` and the safe request dimensions for application trends, and review rate-limit analytics in Cloudflare.
 
 Worker log and tail access remain sensitive. Restrict access, limit retention, and redact downstream before exporting or sharing logs.
 
@@ -132,7 +132,7 @@ bun audit
 **6. Preserve rollback boundaries**
 
 - Keep the inactive `MetroMcpAgent` export and original `v1` migration.
-- Do not add a Durable Object deletion migration during the 5.0 stabilization window.
+- Do not add a Durable Object deletion migration during the 6.0 stabilization and rollback window.
 - Roll back by restoring the prior Worker version and its prior binding configuration.
 - Treat production deployment, DNS, secret changes, and old namespace deletion as separately approved operations.
 

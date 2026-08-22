@@ -546,7 +546,7 @@
             <div class="endpoint"><span class="method">GET</span><code>/docs/</code><p>This documentation page.</p></div>
             <div class="endpoint"><span class="method">GET</span><code>/info</code><p>JSON server summary: supported cities, station counts, capabilities, and MCP endpoint.</p></div>
             <div class="endpoint"><span class="method">POST</span><code>/mcp</code><p>Primary anonymous MCP Streamable HTTP endpoint.</p></div>
-            <div class="endpoint"><span class="method">GET/POST</span><code>/sse</code><p>Legacy SSE alias for clients that still expect the old transport shape.</p></div>
+            <div class="endpoint"><span class="method">POST/OPTIONS</span><code>/sse</code><p>Stateless alias for <code>/mcp</code>. <code>GET /sse</code> returns <code>405</code>; it is not a persistent stream.</p></div>
           </div>
         </section>
 
@@ -656,12 +656,12 @@
               <p>The Worker is the front door. It serves the site, accepts anonymous MCP traffic, and routes requests to the right part of the app.</p>
             </div>
             <div class="info-card">
-              <h3>Durable Objects</h3>
-              <p>Durable Objects keep each MCP session stateful. They let clients resume conversations, receive streamed events, and stay connected without keeping every session hot all the time.</p>
+              <h3>Request-scoped runtime</h3>
+              <p>Each MCP request runs in a request-scoped stateless runtime. It does not support resumability or server push.</p>
             </div>
             <div class="info-card">
-              <h3>KV</h3>
-              <p>Cloudflare rate-limit bindings protect shared public traffic at each edge location and source IP.</p>
+              <h3>Rate limiting and rollback</h3>
+              <p>The Cloudflare Rate Limit binding applies roughly 300 requests per 60-second window per source-IP key per Cloudflare location. Shared egress IPs group clients, and enforcement is eventually consistent. The inactive <code>MetroMcpAgent</code> rollback class and <code>v1</code> migration remain for rollback.</p>
             </div>
             <div class="info-card">
               <h3>Assets and logs</h3>
