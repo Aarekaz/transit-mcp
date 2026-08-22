@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>metro-mcp docs</title>
-  <meta name="description" content="Connect MCP clients to metro-mcp and understand the live DC Metro and NYC Subway data behind each tool.">
+  <meta name="description" content="Connect anonymously to metro-mcp and understand the live DC Metro and NYC Subway data behind each read-only tool.">
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -440,11 +440,28 @@
     }
     .toast[data-show="true"] { opacity: 1; }
     footer {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 8px 16px;
       border-top: 1px solid var(--border);
       color: var(--ink-3);
       padding: 18px 24px;
       text-align: center;
       font-size: 12px;
+    }
+    .footer-legal {
+      display: inline-flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px 14px;
+    }
+    .footer-legal a {
+      color: var(--ink-2);
+      text-decoration: underline;
+      text-decoration-color: var(--accent);
+      text-underline-offset: 3px;
     }
 
     @media (max-width: 620px) {
@@ -673,7 +690,14 @@
     </div>
   </main>
 
-  <footer>&copy; 2026 Anurag Dhungana &middot; MIT</footer>
+  <footer>
+    <span>&copy; 2026 Anurag Dhungana &middot; MIT</span>
+    <span class="footer-legal">
+      <a href="/privacy/">Privacy</a>
+      <a href="/terms/">Terms</a>
+      <a href="/support/">Support</a>
+    </span>
+  </footer>
   <div class="toast" role="status" aria-live="polite"></div>
 
   <script>

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>metro-mcp · Plug your LLM into the subway</title>
-  <meta name="description" content="Connect any MCP client to live DC Metro and NYC Subway data. Real-time arrivals, incidents, and 598 stations via the Model Context Protocol.">
+  <meta name="description" content="Anonymous, read-only access to live DC Metro and NYC Subway data for any MCP client.">
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
 
   <!-- Open Graph / Twitter -->
@@ -12,14 +12,14 @@
   <meta property="og:site_name" content="metro-mcp">
   <meta property="og:url" content="https://metro-mcp.anuragd.me/">
   <meta property="og:title" content="metro-mcp · Plug your LLM into the subway">
-  <meta property="og:description" content="Connect any MCP client to live DC Metro and NYC Subway data via the Model Context Protocol.">
+  <meta property="og:description" content="Anonymous, read-only access to live DC Metro and NYC Subway data via the Model Context Protocol.">
   <meta property="og:image" content="https://metro-mcp.anuragd.me/og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="twitter:card" content="summary_large_image">
   <meta property="twitter:url" content="https://metro-mcp.anuragd.me/">
   <meta property="twitter:title" content="metro-mcp · Plug your LLM into the subway">
-  <meta property="twitter:description" content="Connect any MCP client to live DC Metro and NYC Subway data via the Model Context Protocol.">
+  <meta property="twitter:description" content="Anonymous, read-only access to live DC Metro and NYC Subway data via the Model Context Protocol.">
   <meta property="twitter:image" content="https://metro-mcp.anuragd.me/og-image.png">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -702,6 +702,17 @@
       border-color: rgba(10, 37, 64, 0.34);
       transform: translateY(-1px);
     }
+    .footer-legal {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .footer-legal a {
+      color: var(--ink);
+      text-decoration: underline;
+      text-decoration-color: rgba(255, 107, 26, 0.7);
+      text-underline-offset: 3px;
+    }
 
     @media (max-width: 560px) {
       .action-band { padding: 96px 18px 8px; }
@@ -885,7 +896,7 @@
     <section class="hero-section">
       <div class="hero">
         <h1>Plug your LLM into the <span class="accent">subway</span>.</h1>
-        <p class="subtitle">DC Metro and NYC Subway via the Model Context Protocol. Connect any MCP client to live arrivals, incidents, and 598 stations.</p>
+        <p class="subtitle">Anonymous access to live DC Metro and NYC Subway arrivals, incidents, and 598 stations. Read-only, with no account or client credentials required.</p>
         <div class="cta-row">
           <button type="button" class="url-pill" data-copy-url="https://metro-mcp.anuragd.me/mcp" aria-label="Copy MCP server URL">
             <span class="url-text">metro-mcp.anuragd.me/mcp</span>
@@ -954,6 +965,11 @@
         <span class="dot-sep">·</span>
         <span>MIT</span>
         <span class="dot-sep">·</span>
+        <span class="footer-legal">
+          <a href="/privacy/">Privacy</a>
+          <a href="/terms/">Terms</a>
+          <a href="/support/">Support</a>
+        </span>
         <a class="footer-action" href="https://github.com/Aarekaz/metro-mcp/issues/new?labels=enhancement&amp;title=Feature%20request%3A%20" target="_blank" rel="noreferrer">Suggest a feature</a>
         <a class="footer-action" href="https://github.com/Aarekaz/metro-mcp/issues/new?labels=bug&amp;title=Bug%20report%3A%20" target="_blank" rel="noreferrer">Report issue</a>
       </footer>

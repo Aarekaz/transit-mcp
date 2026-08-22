@@ -4,7 +4,7 @@ const baseURL = 'http://127.0.0.1:4178';
 
 export default defineConfig({
   testDir: './tests/apps',
-  testMatch: 'transit-board.spec.ts',
+  testMatch: ['transit-board.spec.ts', 'legal-pages.spec.ts'],
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: 0,
