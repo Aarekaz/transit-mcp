@@ -511,7 +511,7 @@
       <div class="docs">
         <section id="connect">
           <h2>Connect an MCP client</h2>
-          <p class="section-copy">The production MCP endpoint is protected with OAuth discovery and supports Streamable HTTP. Most modern clients only need the server URL and will handle registration, authorization, and token exchange.</p>
+          <p class="section-copy">The production MCP endpoint is anonymous Streamable HTTP. No login is required. No client credentials, token, or OAuth flow is required; stale Authorization headers are ignored.</p>
           <div class="code-block">
             <div class="code-title">
               <span>Claude Desktop / Cursor config</span>
@@ -528,7 +528,7 @@
           <div class="grid" style="margin-top: 14px;">
             <div class="info-card">
               <h3>Codex CLI</h3>
-              <p>Register the same Streamable HTTP endpoint from a terminal.</p>
+              <p>Add the same anonymous Streamable HTTP endpoint from a terminal.</p>
               <div class="chip-row"><span class="chip"><code>codex mcp add metro-mcp https://metro-mcp.anuragd.me/mcp</code></span></div>
             </div>
             <div class="info-card">
@@ -540,16 +540,13 @@
 
         <section id="endpoints">
           <h2>HTTP endpoints</h2>
-          <p class="section-copy">The Worker serves both the public website and the MCP/OAuth API. MCP traffic is authenticated; metadata and the static pages are public.</p>
+          <p class="section-copy">The Worker serves both the public website and anonymous MCP API. MCP traffic, metadata, and static pages are public.</p>
           <div class="endpoint-list">
             <div class="endpoint"><span class="method">GET</span><code>/</code><p>Landing page.</p></div>
             <div class="endpoint"><span class="method">GET</span><code>/docs/</code><p>This documentation page.</p></div>
             <div class="endpoint"><span class="method">GET</span><code>/info</code><p>JSON server summary: supported cities, station counts, capabilities, and MCP endpoint.</p></div>
-            <div class="endpoint"><span class="method">POST</span><code>/mcp</code><p>Primary MCP Streamable HTTP endpoint. Requires OAuth bearer token after discovery.</p></div>
+            <div class="endpoint"><span class="method">POST</span><code>/mcp</code><p>Primary anonymous MCP Streamable HTTP endpoint.</p></div>
             <div class="endpoint"><span class="method">GET/POST</span><code>/sse</code><p>Legacy SSE alias for clients that still expect the old transport shape.</p></div>
-            <div class="endpoint"><span class="method">GET</span><code>/.well-known/oauth-protected-resource</code><p>OAuth protected-resource metadata for MCP clients.</p></div>
-            <div class="endpoint"><span class="method">GET</span><code>/.well-known/oauth-authorization-server</code><p>Authorization server metadata, including authorize, token, and dynamic registration endpoints.</p></div>
-            <div class="endpoint"><span class="method">GET/POST</span><code>/authorize /token /register /callback</code><p>OAuth 2.1 + PKCE flow used by clients to connect securely.</p></div>
           </div>
         </section>
 
@@ -652,11 +649,11 @@
 
         <section id="architecture">
           <h2>Cloudflare stack</h2>
-          <p class="section-copy">metro-mcp runs as a small Cloudflare application: the edge handles web pages, authentication, MCP requests, live sessions, lightweight storage, and logs close to the user.</p>
+          <p class="section-copy">metro-mcp runs as a small Cloudflare application: the edge handles web pages, anonymous MCP requests, lightweight rate limiting, and logs close to the user.</p>
           <div class="grid">
             <div class="info-card">
               <h3>Workers</h3>
-              <p>The Worker is the front door. It serves the site, publishes OAuth discovery, accepts MCP traffic, and routes requests to the right part of the app.</p>
+              <p>The Worker is the front door. It serves the site, accepts anonymous MCP traffic, and routes requests to the right part of the app.</p>
             </div>
             <div class="info-card">
               <h3>Durable Objects</h3>
@@ -664,7 +661,7 @@
             </div>
             <div class="info-card">
               <h3>KV</h3>
-              <p>KV stores small pieces of shared state, like OAuth client registrations and rate-limit counters, so any edge location can handle the next request.</p>
+              <p>Cloudflare rate-limit bindings protect shared public traffic at each edge location and source IP.</p>
             </div>
             <div class="info-card">
               <h3>Assets and logs</h3>

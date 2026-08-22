@@ -1,73 +1,18 @@
 # Security Architecture
 
-This document explains the security measures implemented in Metro MCP and the rationale behind them.
+Metro MCP 6.0 is an anonymous, read-only service at `https://metro-mcp.anuragd.me/mcp`. No login is required. No client credentials, bearer token, or OAuth flow is required, and Metro MCP does not collect client credentials. Stale `Authorization` headers are ignored before the request reaches the MCP handler.
 
-## Table of Contents
+## Public request and rate-limit boundaries
 
-- [Overview](#overview)
-- [Authentication & Authorization](#authentication--authorization)
-- [Rate Limiting](#rate-limiting)
-- [MCP and Input Boundaries](#mcp-and-input-boundaries)
-- [Security Headers](#security-headers)
-- [Security Best Practices](#security-best-practices)
+Any client can call the public endpoint; a caller is not an authenticated identity. Cloudflare bindings apply approximately 300 requests per minute per Cloudflare location and approximately 60 requests per minute per shared source IP. These are abuse controls, not a guarantee of a dedicated user quota: shared networks can be affected by other traffic.
 
-## Overview
-
-### Security Philosophy
-
-Metro MCP follows a **defense-in-depth** approach:
-
-1. **Multiple layers**: If one security measure fails, others provide protection
-2. **Fail securely**: Errors default to denying access, not granting it
-3. **Least privilege**: Grant minimum permissions necessary
-4. **Assume breach**: Design as if attackers are already inside
-
-### Threat Model
-
-The active security boundaries are:
-
-- **Unauthorized access**: OAuth 2.1 with PKCE
-- **Abuse/DoS**: Operator-managed Cloudflare edge policy; the Worker has no application rate limiter
-- **Untrusted input boundaries**: SDK schemas, field-specific domain handling, and non-HTML MCP results
-- **Browser-rendered content**: Escaped server-rendered OAuth HTML with a no-script CSP
-- **Clickjacking**: X-Frame-Options
-- **CSRF**: State parameter, PKCE
-
-## Authentication & Authorization
-
-Metro MCP 5.0 delegates OAuth protocol ownership to `@cloudflare/workers-oauth-provider`. GitHub authenticates the person but does not issue the MCP access token. The Provider owns authorization-server and protected-resource discovery, PKCE S256, RFC 9207 issuer identifiers, RFC 8707 resource binding, RFC 9728 challenges, refresh rotation, revocation, and client storage in `OAUTH_KV`.
-
-### Registration, consent, and scope
-
-Clients register in this order:
-
-1. A pre-registered client relationship, when available.
-2. A Client ID Metadata Document (CIMD).
-3. Temporary Dynamic Client Registration at `/register`.
-
-DCR is a compatibility fallback and sunsets on **2027-06-30**. `global_fetch_strictly_public` is required so CIMD fetches stay on publicly routable addresses. GitHub login is followed by an explicit consent screen identifying the MCP client, canonical resource, and exact application permission `transit:read`. Invalid clients and redirect URIs are rendered locally and are not redirected.
-
-### Resource and token boundaries
-
-The production resource is exactly `https://metro-mcp.anuragd.me/mcp`; preview uses its own origin plus `/mcp`. `/sse` is only a URL alias rewritten before OAuth and is never an audience. Provider-issued access tokens last no more than 60 minutes. Refresh tokens last no more than 30 days and rotate on use.
-
-Dynamically registered clients expire after 90 days. Pre-registered configured clients are not governed by the DCR TTL and persist until revoked or removed under their own lifecycle. CIMD supplies resolved metadata and is not a stored DCR record.
-
-Bearer credentials are accepted only through `Authorization: Bearer`. Query parameters such as `access_token` and `token` are ignored. Protected requests also require Provider props with the exact normalized `transit:read` scope; missing scope returns `403`.
-
-### Legacy JWT bridge
-
-Metro MCP 5.0 no longer issues custom JWTs. The temporary resolver accepts an old token only when it has a valid signature and expiry, arrived in the Authorization header, and has an `aud` exactly matching canonical `/mcp`. Tokens without an audience and tokens bound to `/sse` require reauthorization. An otherwise compatible legacy JWT expires at the earlier of its embedded expiry and **2026-11-30T00:00:00Z**. Old DCR records are not imported.
-
-## Rate Limiting
-
-Metro MCP 5.0 has no application rate-limiter implementation or KV binding. Rate limiting, when configured, is operator-managed Cloudflare edge policy outside this repository. `Mcp-Method` and `Mcp-Name` are untrusted request headers at the edge. If an edge rule uses either as a secondary dimension, the edge rule must validate and allowlist the value itself. It must key primarily on trusted Cloudflare identity or source IP and must never treat either header as authenticated identity. `RATE_LIMIT_KV` is not an active Worker binding in 5.0.
+`Mcp-Method` and `Mcp-Name` are untrusted request headers at the edge. An edge rule must validate and allowlist any secondary dimension itself, key primarily on trusted Cloudflare identity or source IP, and never treat a header as identity.
 
 ## MCP and Input Boundaries
 
 ### Host, Origin, and transport
 
-The Worker derives trust from configured `MCP_PUBLIC_ORIGIN` and hostname allowlists, never from an incoming Host header. Undeclared or malformed Host and browser Origin values return `403`; origin-less desktop/server clients remain valid. Exact `POST`/`OPTIONS /sse` requests are rewritten to `/mcp` before the Provider sees them. `GET` and `DELETE`, slash variants, and legacy session-message URLs return `405`.
+The Worker derives trust from configured `MCP_PUBLIC_ORIGIN` and hostname allowlists, never from an incoming Host header. Undeclared or malformed Host and browser Origin values return `403`; origin-less desktop/server clients remain valid. Exact `POST`/`OPTIONS /sse` requests are rewritten to `/mcp`. `GET` and `DELETE`, slash variants, and legacy session-message URLs return `405`.
 
 MCP 2026 clients send request metadata on every operation without an initialization handshake. Header/body version, method, and name mismatches are rejected. The server is stateless and does not advertise protocol sessions, resumability, or server push.
 
@@ -84,7 +29,7 @@ Validation beyond the wire schema is field-specific:
 - Station searches normalize case and whitespace where needed, then resolve names and identifiers against transit-domain data. Resource and transfer lookups reject unknown cities or identifiers.
 - Thrown WMATA failures and other uncaught non-cancellation adapter errors are mapped to operational tool errors by the shared tool-error boundary. MTA prediction-feed failures are skipped, so predictions may be partial or empty. MTA incident-feed failures return empty incidents. Abort failures rethrow in both MTA paths, and MCP protocol errors keep their own semantics.
 - Path and query values are encoded only where the active transit adapter does so. The optional WMATA bus-route filter uses URL encoding; other fields rely on domain lookup, numeric types, or their adapter contract. This is not a universal character or path constraint.
-- Successful tool results are returned as structured JSON plus a JSON-serialized text representation. That structured JSON and text are not rendered as trusted HTML by the Worker. Separately generated OAuth HTML escapes interpolated values.
+- Successful tool results are returned as structured JSON plus a JSON-serialized text representation. That structured JSON and text are not rendered as trusted HTML by the Worker.
 
 Tool inputs are not universally sanitized. Many strings intentionally have no generic regex or maximum-length constraint, including station names, station searches, line/route identifiers, and bus stop IDs. The server does not execute tool input as SQL or shell commands. Any new field constraint must be added to the active Zod schema and covered by a wire-level test before it is documented as enforced.
 
@@ -94,11 +39,10 @@ The outer Worker applies response-type-aware security headers after routing. It 
 
 - MCP JSON responses receive a deny-by-default CSP with scripts, styles, images, connections, frames, base URIs, and form actions disabled.
 - Event streams receive a deny-by-default CSP that allows only same-origin connections.
-- OAuth consent and error forms are server-rendered with escaped interpolated values and no scripts. Error forms use `default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`; consent forms append only the Provider-validated client redirect origin to `form-action` so the approved form submission can complete its redirect.
-- OAuth forms also set `Cache-Control: no-store`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`.
+- Static pages are served without an account flow and set shared protective headers, including `X-Frame-Options`, `X-Content-Type-Options`, and `Referrer-Policy`.
 - Other responses receive the shared `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, and disabled legacy XSS-filter headers when a route has not already supplied a stricter value.
 
-The OAuth pages contain no untrusted HTML. Interpolated user, client, resource, state, and error values pass through the dedicated HTML-escaping function before rendering.
+Static pages contain no untrusted HTML.
 
 ## Security Best Practices
 
@@ -124,7 +68,7 @@ Schema descriptions explain values to clients but do not create regex or length 
 
 **3. Handle Errors and Telemetry Safely**
 
-Preserve abort and MCP protocol errors at their existing boundaries, and use the shared tool-error mapping for uncaught operational failures. Send Metro-owned diagnostics through `serializeTelemetry`; do not add raw error objects, tokens, secrets, or user payloads to Metro-owned log entries. This guidance controls Metro application code, not the pinned Provider diagnostics described below.
+Preserve abort and MCP protocol errors at their existing boundaries, and use the shared tool-error mapping for uncaught operational failures. Send Metro-owned diagnostics through `serializeTelemetry`; do not add raw error objects, secrets, or user payloads to Metro-owned log entries.
 
 **4. Use Prepared Statements (if using SQL)**
 ```typescript
@@ -142,7 +86,7 @@ bun audit
 **6. Review Code for Security**
 - Check each input has an accurate SDK schema and field-specific downstream boundary
 - Verify authentication is required
-- Verify any Cloudflare edge policy keys on authenticated or trusted identity
+- Verify any Cloudflare edge policy keys on trusted Cloudflare identity or source IP
 - Confirm security headers are set
 
 **7. Test Security Features**
@@ -156,12 +100,10 @@ bun audit
 ```bash
 # Store each value interactively; do not put it in shell history or config
 bunx wrangler secret put MCP_REQUEST_STATE_KEY
-bunx wrangler secret put GITHUB_CLIENT_SECRET
 bunx wrangler secret put WMATA_API_KEY
-bunx wrangler secret put JWT_SECRET
 ```
 
-Production and preview require distinct `OAUTH_KV` namespaces, GitHub OAuth apps/callbacks, and MRTR keys. The legacy JWT secret is retained only through the bridge and rollback windows.
+Production and preview require distinct WMATA API keys, MRTR state keys, origins, allowlists, and rate-limit bindings.
 
 **2. Monitor Edge Rate Policy**
 - Review Cloudflare edge analytics separately from application telemetry
@@ -173,9 +115,7 @@ Production and preview require distinct `OAUTH_KV` namespaces, GitHub OAuth apps
 
 Metro application telemetry is serialized through `serializeTelemetry` into these allowlisted fields only: `correlationId`, `era`, `protocolVersion`, `mcpMethod`, `mcpName`, `alias`, `clientId`, `upstream`, `durationMs`, and `statusClass`. Invalid or unknown fields are dropped. Use `statusClass` and the safe request dimensions for application trends. Authentication detail and rate-limit analytics are not emitted by Metro telemetry and must be reviewed in the owning platform when available.
 
-Provider 0.10.3 emits its own OAuth and CIMD diagnostics outside the Metro serializer. Those OAuth and CIMD diagnostics can include a client or metadata URL and upstream error detail. Across the reviewed Provider paths, no known bearer credentials, client secrets, or tokens are intentionally emitted. This is a pinned-code observation, not a guarantee that Provider diagnostics are suppressed or globally allowlisted.
-
-Worker log and tail access remain sensitive. Restrict access, limit retention, and redact downstream before exporting or sharing logs. Review Provider upgrades for logging changes before deployment.
+Worker log and tail access remain sensitive. Restrict access, limit retention, and redact downstream before exporting or sharing logs.
 
 **4. Keep exact runtime pins reviewed**
 ```bash
@@ -186,8 +126,7 @@ bun audit
 **5. Use Environment Variables Correctly**
 ```jsonc
 // wrangler.jsonc contains public values and binding IDs only.
-// Never place MCP_REQUEST_STATE_KEY, GITHUB_CLIENT_SECRET,
-// WMATA_API_KEY, JWT_SECRET, or bearer tokens here.
+// Never place MCP_REQUEST_STATE_KEY or WMATA_API_KEY here.
 ```
 
 **6. Preserve rollback boundaries**
@@ -199,7 +138,7 @@ bun audit
 
 ### Logging and conformance
 
-Metro application telemetry reports only the response status class, not a raw response or error. Metro-owned code must not add raw error objects, access or refresh tokens, authorization codes, GitHub tokens, secrets, raw Provider props, request bodies, user payloads, or MRTR responses. The Provider-owned diagnostic boundary and operator controls are documented above; Metro does not claim to suppress those dependency warnings. The conformance proxy binds only `127.0.0.1`, replaces inbound Authorization, supplies the operator token only from the process environment, uses manual redirects, and rejects remote targets unless `MCP_CONFORMANCE_ALLOW_REMOTE=1` is explicit.
+Metro application telemetry reports only the response status class, not a raw response or error. Metro-owned code must not add raw error objects, secrets, request bodies, user payloads, or MRTR responses. The direct conformance runner uses only its target URL and does not add an authentication layer.
 
 ### Incident Response
 
@@ -222,7 +161,7 @@ Metro application telemetry reports only the response status class, not a raw re
 
 - [ ] Every tool input has an accurate SDK schema and documented downstream boundary
 - [ ] Any edge rate policy primarily keys on trusted Cloudflare identity or source IP and independently allowlists secondary request-header dimensions
-- [ ] Authentication is required for MCP endpoints
+- [ ] Anonymous MCP access is documented accurately
 - [ ] Production and preview origins use HTTPS; only loopback development may use HTTP
 - [ ] Security headers are applied
 - [ ] Secrets are stored in environment variables
@@ -230,13 +169,12 @@ Metro application telemetry reports only the response status class, not a raw re
 - [ ] Security tests pass
 - [ ] Worker log/tail access is restricted, retention is limited, and downstream exports are redacted
 - [ ] Public errors and structured telemetry are reviewed for sensitive-data disclosure
-- [ ] Production and preview OAuth storage, apps, callbacks, and MRTR keys are distinct
+- [ ] Production and preview origins, rate-limit bindings, and MRTR keys are distinct
 - [ ] Rollback assets and the original `v1` migration remain intact
 
 ## Resources
 
 - [OWASP Top 10](https://owasp.org/www-project-top-ten/)
 - [OWASP Secure Headers](https://owasp.org/www-project-secure-headers/)
-- [OAuth 2.1](https://oauth.net/2.1/)
 - [JWT Best Practices](https://tools.ietf.org/html/rfc8725)
 - [Content Security Policy](https://content-security-policy.com/)

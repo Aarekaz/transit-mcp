@@ -5,6 +5,23 @@ All notable changes to Metro MCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.0] - 2026-08-21
+
+### Breaking
+
+- Metro MCP is now anonymous. `/mcp` and `/sse` accept public MCP traffic with no login, client credential, bearer token, or OAuth flow; stale `Authorization` headers are ignored.
+- `/info` advertises MCP `2026-07-28`, anonymous authentication (`{ type: 'none' }`), the `/mcp` and `/sse` endpoints, canonical `Aarekaz/metro-mcp` repository links, and privacy, terms, and support pages at `metro-mcp.anuragd.me`.
+- Retired account and credential endpoints are no longer advertised. The conformance runner now invokes frozen `@modelcontextprotocol/conformance@0.2.0-alpha.11` directly with only `MCP_CONFORMANCE_TARGET_URL`.
+
+### Added
+
+- Cloudflare request limiting of approximately 300 requests per minute per location and 60 per minute per shared source IP. These are shared abuse controls, not a dedicated user quota.
+- Canonical privacy, terms, and support links for the public service.
+
+### Preserved
+
+- The stateless MCP runtime, 13 tools, 3 resources, 3 prompts, Apps enhancement, request cancellation, MRTR state, cache hints, and rollback assets remain intact.
+
 ## [5.0.0] - 2026-08-13
 
 Metro MCP 5.0 upgrades the remote server to MCP `2026-07-28` and a request-scoped SDK v2 architecture. The transit surface remains exactly thirteen read-only tools, three resources, and three prompts.

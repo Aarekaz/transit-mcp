@@ -54,7 +54,7 @@ describe('anonymous deployment configuration', () => {
         requestStateKey: 'replace-with-a-local-request-state-key-at-least-32-bytes',
       },
       apis: { wmata: 'replace-with-your-local-wmata-api-key' },
-      app: { environment: 'development', version: '5.0.0' },
+      app: { environment: 'development', version: '6.0.0' },
     });
     expect(new TextEncoder().encode(localVars.MCP_REQUEST_STATE_KEY).byteLength)
       .toBeGreaterThanOrEqual(32);

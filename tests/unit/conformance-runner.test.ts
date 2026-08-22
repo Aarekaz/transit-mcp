@@ -1,7 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
-  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -33,7 +32,7 @@ describe('conformance runner', () => {
     expect(spawnSync('bash', ['-n', runner]).status).toBe(0);
   });
 
-  it('fails before startup when the target is missing without echoing the token', () => {
+  it('requires only the target without echoing unrelated environment values', () => {
     const token = 'runner-token-that-must-not-escape';
     const result = runWith({
       MCP_CONFORMANCE_TARGET_URL: '',
@@ -46,31 +45,13 @@ describe('conformance runner', () => {
     expect(output).not.toContain(token);
   });
 
-  it('fails before startup when the token is missing', () => {
-    const result = runWith({
-      MCP_CONFORMANCE_TARGET_URL: 'http://127.0.0.1:8787/mcp',
-      MCP_CONFORMANCE_TOKEN: '',
-    });
-    const output = `${result.stdout}${result.stderr}`;
-
-    expect(result.status).toBe(1);
-    expect(output).toContain('MCP_CONFORMANCE_TOKEN');
-  });
-
-  it('pins the frozen requirements and cleans up the proxy when conformance exits', () => {
+  it('runs the frozen requirements directly against the supplied target', () => {
     const fakeBin = mkdtempSync(join(tmpdir(), 'metro-mcp-conformance-runner-'));
     temporaryRoots.push(fakeBin);
-    const stoppedFile = join(fakeBin, 'proxy-stopped');
     const callsFile = join(fakeBin, 'bunx-calls');
 
-    writeExecutable(fakeBin, 'bun', `#!/usr/bin/env bash
-trap 'printf stopped > "$FAKE_PROXY_STOPPED"; exit 0' TERM INT
-while :; do sleep 0.1; done
-`);
-    writeExecutable(fakeBin, 'curl', '#!/usr/bin/env bash\nexit 0\n');
     writeExecutable(fakeBin, 'bunx', `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$FAKE_BUNX_CALLS"
-if [[ -n "\${MCP_CONFORMANCE_TOKEN:-}" ]]; then exit 29; fi
 if [[ "$2" == 'server' ]]; then exit 23; fi
 `);
 
@@ -78,17 +59,21 @@ if [[ "$2" == 'server' ]]; then exit 23; fi
       PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
       MCP_CONFORMANCE_TARGET_URL: 'http://127.0.0.1:8787/mcp',
       MCP_CONFORMANCE_TOKEN: 'runner-lifecycle-probe',
-      FAKE_PROXY_STOPPED: stoppedFile,
       FAKE_BUNX_CALLS: callsFile,
     });
 
     expect(result.status).toBe(23);
-    expect(existsSync(stoppedFile)).toBe(true);
     expect(readFileSync(callsFile, 'utf8').trim().split('\n')).toEqual([
       '@modelcontextprotocol/conformance list --requirements 2026-07-28',
-      '@modelcontextprotocol/conformance server --url http://127.0.0.1:8788/mcp --requirements 2026-07-28',
+      '@modelcontextprotocol/conformance server --url http://127.0.0.1:8787/mcp --requirements 2026-07-28',
     ]);
     expect(`${result.stdout}${result.stderr}`).not.toContain('runner-lifecycle-probe');
+  });
+
+  it('has no proxy or credential behavior', () => {
+    const source = readFileSync(runner, 'utf8');
+
+    expect(source).not.toMatch(/MCP_CONFORMANCE_TOKEN|proxy|curl|\bbun scripts\//i);
   });
 });
 

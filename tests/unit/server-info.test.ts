@@ -10,14 +10,16 @@ const exampleClientConfig = JSON.parse(
 );
 
 describe('getServerInfo', () => {
-  it('publishes the Metro MCP 5.0 stateless MCP 2026 contract', () => {
+  it('publishes the Metro MCP 6.0 anonymous stateless MCP 2026 contract', () => {
     const body = getServerInfo('https://metro-mcp.anuragd.me', '2026-08-13T12:00:00.000Z');
 
-    expect(body.version).toBe('5.0.0');
+    expect(body.version).toBe('6.0.0');
     expect(body.protocolVersion).toBe('2026-07-28');
     expect(body.links.mcpServer).toBe('https://metro-mcp.anuragd.me/mcp');
     expect(body.endpoints.mcpRecommended).toBe('/mcp');
-    expect(body.authentication.scopes).toEqual(['transit:read']);
+    expect(body.authentication).toEqual({ type: 'none' });
+    expect(body.endpoints).not.toHaveProperty('oauth');
+    expect(body.endpoints).not.toHaveProperty('discovery');
     expect(body.stats).toMatchObject({
       toolsAvailable: 13,
       resourcesAvailable: 3,
@@ -38,10 +40,24 @@ describe('getServerInfo', () => {
   });
 
   it('keeps release and client configuration metadata aligned', () => {
-    expect(packageJson.version).toBe('5.0.0');
+    expect(packageJson.version).toBe('6.0.0');
     expect(exampleClientConfig.mcpServers['metro-mcp']).toEqual({
       type: 'http',
       url: 'https://metro-mcp.anuragd.me/mcp',
+    });
+  });
+
+  it('publishes canonical anonymous connection and legal links', () => {
+    const body = getServerInfo('https://metro-mcp.anuragd.me', '2026-08-21T12:00:00.000Z');
+
+    expect(body.links).toMatchObject({
+      github: 'https://github.com/Aarekaz/metro-mcp',
+      mcpServer: 'https://metro-mcp.anuragd.me/mcp',
+      mcpServerLegacy: 'https://metro-mcp.anuragd.me/sse',
+      documentation: 'https://metro-mcp.anuragd.me/docs/',
+      privacy: 'https://metro-mcp.anuragd.me/privacy',
+      terms: 'https://metro-mcp.anuragd.me/terms',
+      support: 'https://metro-mcp.anuragd.me/support',
     });
   });
 

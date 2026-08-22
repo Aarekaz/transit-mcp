@@ -174,7 +174,7 @@ describe('assembled MCP Worker', () => {
       _meta: {
         'io.modelcontextprotocol/serverInfo': {
           name: 'metro-mcp',
-          version: '5.0.0',
+          version: '6.0.0',
         },
       },
       contents: [{

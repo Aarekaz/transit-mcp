@@ -629,7 +629,7 @@ export async function createTransitBoardApp(
 
 export function createTransitBoardSdkApp(): App {
   return new App(
-    { name: 'Metro MCP Transit Board', version: '5.0.0' },
+    { name: 'Metro MCP Transit Board', version: '6.0.0' },
     { availableDisplayModes: ['inline', 'fullscreen'] },
     { autoResize: false, strict: true },
   );
