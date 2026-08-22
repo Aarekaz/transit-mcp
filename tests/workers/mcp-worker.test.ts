@@ -23,6 +23,8 @@ import {
 } from '../fixtures/mcp-contracts';
 
 const RATE_LIMIT_PERIOD_MS = 10_000;
+const RATE_LIMIT_EPOCH_SAFETY_MS = 1_000;
+const RATE_LIMIT_HEARTBEAT_MS = 250;
 let nextTestClient = 1;
 
 function workerFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -42,14 +44,29 @@ function sleep(milliseconds: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
+async function waitUntilWithPublicHeartbeats(targetTime: number): Promise<void> {
+  while (Date.now() < targetTime) {
+    const response = await workerFetch(`${TEST_ORIGIN}/info`, {
+      headers: { Host: 'metro-mcp.anuragd.me' },
+    });
+    expect(response.status).toBe(200);
+    await sleep(Math.min(RATE_LIMIT_HEARTBEAT_MS, Math.max(0, targetTime - Date.now())));
+  }
+}
+
 async function enterFreshRateLimitEpoch(): Promise<number> {
   while (true) {
     const now = Date.now();
+    const currentEpoch = Math.floor(now / RATE_LIMIT_PERIOD_MS);
+    const remaining = RATE_LIMIT_PERIOD_MS - (now % RATE_LIMIT_PERIOD_MS);
+    if (remaining >= RATE_LIMIT_EPOCH_SAFETY_MS) {
+      return currentEpoch;
+    }
     const nextEpochAt = now - (now % RATE_LIMIT_PERIOD_MS) + RATE_LIMIT_PERIOD_MS;
-    await sleep(nextEpochAt - now + 25);
+    await waitUntilWithPublicHeartbeats(nextEpochAt + 25);
     const enteredAt = Date.now();
-    const remaining = RATE_LIMIT_PERIOD_MS - (enteredAt % RATE_LIMIT_PERIOD_MS);
-    if (remaining >= RATE_LIMIT_PERIOD_MS / 2) {
+    const enteredRemaining = RATE_LIMIT_PERIOD_MS - (enteredAt % RATE_LIMIT_PERIOD_MS);
+    if (enteredRemaining >= RATE_LIMIT_EPOCH_SAFETY_MS) {
       return Math.floor(enteredAt / RATE_LIMIT_PERIOD_MS);
     }
   }
@@ -538,8 +555,7 @@ describe('assembled MCP Worker', () => {
       id: null,
     });
 
-    const recoveryDelay = (deniedEpoch + 1) * RATE_LIMIT_PERIOD_MS - Date.now() + 25;
-    await sleep(Math.max(0, recoveryDelay));
+    await waitUntilWithPublicHeartbeats((deniedEpoch + 1) * RATE_LIMIT_PERIOD_MS + 25);
     expect(Math.floor(Date.now() / RATE_LIMIT_PERIOD_MS)).toBeGreaterThan(deniedEpoch);
     expect((await request()).status).toBe(200);
   }, 35_000);
