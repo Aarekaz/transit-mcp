@@ -6,6 +6,7 @@
   --ink-soft: #4d5e70;
   --rule: #d7d9d5;
   --accent: #e75c17;
+  --accent-text: #b5440c;
   --focus: #b83f05;
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
@@ -47,7 +48,7 @@ a {
 }
 
 a:hover {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 :focus-visible {
@@ -183,7 +184,7 @@ a:hover {
 
 .eyebrow {
   margin: 0 0 var(--space-sm);
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 700;
 }
 

@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs';
-import type { Page, Request } from '@playwright/test';
+import type { APIRequestContext, Page, Request } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 
 type BrowserSecurityEffects = {
@@ -31,12 +31,91 @@ const viewports = [
 ] as const;
 
 const screenshotDir = 'output/playwright/screenshots';
+const workerOrigin = 'http://127.0.0.1:4179';
 mkdirSync(screenshotDir, { recursive: true });
+
+const internalRouteExpectations = {
+  '/': { contentType: 'text/html', body: /Plug your LLM into the/i },
+  '/docs/': { contentType: 'text/html', body: /Connect anonymously/i },
+  '/privacy/': { contentType: 'text/html', body: /Privacy, in plain language/i },
+  '/terms/': { contentType: 'text/html', body: /Terms of Use/i },
+  '/support/': { contentType: 'text/html', body: /<h1>Support<\/h1>/i },
+  '/info': { contentType: 'application/json', body: /"name":\s*"Metro MCP"/i },
+} as const;
+
+const expectedObserverLabels = [
+  'Storage.setItem',
+  'Storage.removeItem',
+  'Storage.clear',
+  'indexedDB.open',
+  'indexedDB.deleteDatabase',
+  'caches.open',
+  'caches.delete',
+  'permissions.query',
+  'geolocation.get',
+  'geolocation.watch',
+  'mediaDevices.getUserMedia',
+  'Notification.requestPermission',
+] as const;
 
 function isExternalRequest(request: Request): boolean {
   const url = new URL(request.url());
   if (url.protocol === 'data:' || url.protocol === 'blob:') return false;
-  return url.hostname !== '127.0.0.1' || url.port !== '4178';
+  return url.origin !== workerOrigin;
+}
+
+function parseRgb(value: string): [number, number, number] {
+  const match = value.match(/^rgba?\(\s*([\d.]+)[, ]+\s*([\d.]+)[, ]+\s*([\d.]+)/i);
+  expect(match, `${value} is an RGB color`).not.toBeNull();
+  return [Number(match?.[1]), Number(match?.[2]), Number(match?.[3])];
+}
+
+function relativeLuminance([red, green, blue]: [number, number, number]): number {
+  const linearize = (value: number): number => {
+    const channel = value / 255;
+    return (
+      channel <= 0.04045
+        ? channel / 12.92
+        : ((channel + 0.055) / 1.055) ** 2.4
+    );
+  };
+  const linearRed = linearize(red);
+  const linearGreen = linearize(green);
+  const linearBlue = linearize(blue);
+  return (0.2126 * linearRed) + (0.7152 * linearGreen) + (0.0722 * linearBlue);
+}
+
+function contrastRatio(first: string, second: string): number {
+  const firstLuminance = relativeLuminance(parseRgb(first));
+  const secondLuminance = relativeLuminance(parseRgb(second));
+  const lighter = Math.max(firstLuminance, secondLuminance);
+  const darker = Math.min(firstLuminance, secondLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+async function validateInternalAnchors(page: Page, request: APIRequestContext): Promise<void> {
+  const hrefs = await page.locator('a[href]').evaluateAll(anchors => (
+    [...new Set(anchors.map(anchor => anchor.getAttribute('href')).filter(Boolean))]
+  ));
+
+  for (const href of hrefs) {
+    if (!href) continue;
+    if (href.startsWith('#')) {
+      await expect(page.locator(href), `${href} fragment exists`).toHaveCount(1);
+      continue;
+    }
+    if (!href.startsWith('/')) continue;
+
+    const expectation = internalRouteExpectations[href as keyof typeof internalRouteExpectations];
+    expect(expectation, `${href} has an explicit route contract`).toBeDefined();
+    if (!expectation) continue;
+
+    const response = await request.get(`${workerOrigin}${href}`);
+    expect(response.status(), `${href} status`).toBe(200);
+    expect(response.url(), `${href} remains canonical`).toBe(`${workerOrigin}${href}`);
+    expect(response.headers()['content-type'], `${href} content type`).toContain(expectation.contentType);
+    expect(await response.text(), `${href} content`).toMatch(expectation.body);
+  }
 }
 
 async function installSecurityObservers(page: Page): Promise<void> {
@@ -50,6 +129,15 @@ async function installSecurityObservers(page: Page): Promise<void> {
     };
     scope.__metroLegalSecurityEffects = effects;
 
+    const propertyOwner = (target: object, key: PropertyKey): object | undefined => {
+      let owner: object | null = target;
+      while (owner) {
+        if (Object.prototype.hasOwnProperty.call(owner, key)) return owner;
+        owner = Object.getPrototypeOf(owner) as object | null;
+      }
+      return undefined;
+    };
+
     const wrapMethod = (
       target: object | undefined,
       key: string,
@@ -57,10 +145,12 @@ async function installSecurityObservers(page: Page): Promise<void> {
       label: string,
     ): void => {
       if (!target) return;
-      const descriptor = Object.getOwnPropertyDescriptor(target, key);
+      const owner = propertyOwner(target, key);
+      if (!owner) return;
+      const descriptor = Object.getOwnPropertyDescriptor(owner, key);
       if (!descriptor || typeof descriptor.value !== 'function') return;
       const original = descriptor.value as (...args: unknown[]) => unknown;
-      Object.defineProperty(target, key, {
+      Object.defineProperty(owner, key, {
         ...descriptor,
         value: function wrapped(this: unknown, ...args: unknown[]): unknown {
           effects[bucket].push(label);
@@ -80,6 +170,12 @@ async function installSecurityObservers(page: Page): Promise<void> {
     wrapMethod(navigator.geolocation, 'getCurrentPosition', 'permissionAttempts', 'geolocation.get');
     wrapMethod(navigator.geolocation, 'watchPosition', 'permissionAttempts', 'geolocation.watch');
     wrapMethod(
+      navigator.mediaDevices,
+      'getUserMedia',
+      'permissionAttempts',
+      'mediaDevices.getUserMedia',
+    );
+    wrapMethod(
       typeof Notification === 'undefined' ? undefined : Notification,
       'requestPermission',
       'permissionAttempts',
@@ -87,6 +183,75 @@ async function installSecurityObservers(page: Page): Promise<void> {
     );
   });
 }
+
+test('security observers record every monitored API without leaving test artifacts', async ({
+  context,
+  page,
+}) => {
+  await installSecurityObservers(page);
+  const response = await page.goto(`${workerOrigin}/privacy/`, { waitUntil: 'load' });
+  expect(response?.ok()).toBe(true);
+
+  const result = await page.evaluate(async () => {
+    const effects = (globalThis as typeof globalThis & {
+      __metroLegalSecurityEffects?: BrowserSecurityEffects;
+    }).__metroLegalSecurityEffects;
+    if (!effects) throw new Error('Security observers were not installed.');
+
+    const databaseName = '__metro-legal-observer-self-check__';
+    const cacheName = '__metro-legal-observer-self-check__';
+    const requestResult = <T>(current: IDBRequest<T>): Promise<T> => new Promise((resolve, reject) => {
+      current.addEventListener('success', () => resolve(current.result), { once: true });
+      current.addEventListener('error', () => reject(current.error), { once: true });
+    });
+
+    localStorage.setItem('observer-self-check', '1');
+    localStorage.removeItem('observer-self-check');
+    localStorage.clear();
+
+    const database = await requestResult(indexedDB.open(databaseName));
+    database.close();
+    await requestResult(indexedDB.deleteDatabase(databaseName));
+
+    await caches.open(cacheName);
+    await caches.delete(cacheName);
+
+    await navigator.permissions.query({ name: 'geolocation' });
+    const ignorePosition = (): void => undefined;
+    navigator.geolocation.getCurrentPosition(ignorePosition, ignorePosition, { timeout: 0 });
+    const watchId = navigator.geolocation.watchPosition(
+      ignorePosition,
+      ignorePosition,
+      { timeout: 0 },
+    );
+    navigator.geolocation.clearWatch(watchId);
+    await navigator.mediaDevices.getUserMedia({ audio: false, video: false }).catch(() => undefined);
+    void Notification.requestPermission().catch(() => undefined);
+
+    const observed = [...effects.storageWrites, ...effects.permissionAttempts];
+    effects.storageWrites.length = 0;
+    effects.permissionAttempts.length = 0;
+
+    return {
+      observed,
+      effectsAfterReset: effects,
+      localStorageLength: localStorage.length,
+      sessionStorageLength: sessionStorage.length,
+      cacheNames: await caches.keys(),
+      databaseNames: (await indexedDB.databases()).map(databaseInfo => databaseInfo.name),
+    };
+  });
+
+  await context.clearPermissions();
+  expect(result.observed).toEqual(expectedObserverLabels);
+  expect(result.effectsAfterReset).toEqual({ storageWrites: [], permissionAttempts: [] });
+  expect(result.localStorageLength).toBe(0);
+  expect(result.sessionStorageLength).toBe(0);
+  expect(result.cacheNames).not.toContain('__metro-legal-observer-self-check__');
+  expect(result.databaseNames).not.toContain('__metro-legal-observer-self-check__');
+  expect((await context.storageState()).origins).toEqual([]);
+  expect(await context.cookies()).toEqual([]);
+});
 
 for (const viewport of viewports) {
   for (const legalPage of pages) {
@@ -108,8 +273,10 @@ for (const viewport of viewports) {
         if (isExternalRequest(current)) externalRequests.push(current.url());
       });
 
-      const response = await page.goto(`/${legalPage.slug}/index.html`, { waitUntil: 'networkidle' });
+      const pageUrl = `${workerOrigin}/${legalPage.slug}/`;
+      const response = await page.goto(pageUrl, { waitUntil: 'load' });
       expect(response?.ok()).toBe(true);
+      expect(response?.url()).toBe(pageUrl);
       await expect(page).toHaveTitle(new RegExp(legalPage.heading, 'i'));
       await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
         'href',
@@ -125,11 +292,26 @@ for (const viewport of viewports) {
         await expect(page.locator('main')).toContainText(pattern);
       }
 
+      const backgroundColor = await page.locator('html').evaluate(element => (
+        getComputedStyle(element).backgroundColor
+      ));
+      const eyebrowColor = await page.locator('.eyebrow').evaluate(element => (
+        getComputedStyle(element).color
+      ));
+      const hoverLink = page.locator('.legal-copy a').first();
+      await hoverLink.hover();
+      const hoverColor = await hoverLink.evaluate(element => getComputedStyle(element).color);
+      expect(contrastRatio(eyebrowColor, backgroundColor)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(hoverColor, backgroundColor)).toBeGreaterThanOrEqual(4.5);
+
       await page.keyboard.press('Tab');
       const skipLink = page.getByRole('link', { name: 'Skip to main content' });
       await expect(skipLink).toBeFocused();
       await expect(skipLink).toBeVisible();
       expect(await skipLink.evaluate(element => getComputedStyle(element).outlineStyle)).not.toBe('none');
+      await page.keyboard.press('Enter');
+      await expect(page).toHaveURL(`${pageUrl}#main-content`);
+      await expect(page.locator('#main-content')).toHaveCount(1);
 
       expect(await page.locator('script').count()).toBe(0);
       expect(await page.locator('form').count()).toBe(0);
@@ -146,17 +328,7 @@ for (const viewport of viewports) {
       expect(pageErrors).toEqual([]);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       expect(await page.evaluate(() => document.body.scrollWidth <= innerWidth)).toBe(true);
-
-      for (const path of [
-        '/index.html',
-        '/docs/index.html',
-        '/privacy/index.html',
-        '/terms/index.html',
-        '/support/index.html',
-      ]) {
-        const target = await request.get(path);
-        expect(target.ok(), `${path} resolves`).toBe(true);
-      }
+      await validateInternalAnchors(page, request);
 
       await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
       await page.screenshot({
@@ -167,13 +339,15 @@ for (const viewport of viewports) {
   }
 
   for (const publicPage of [
-    { name: 'landing', path: '/index.html' },
-    { name: 'docs', path: '/docs/index.html' },
+    { name: 'landing', path: '/' },
+    { name: 'docs', path: '/docs/' },
   ]) {
-    test(`${publicPage.name} footer exposes legal links at ${viewport.name}`, async ({ page }) => {
+    test(`${publicPage.name} footer exposes legal links at ${viewport.name}`, async ({ page, request }) => {
       await page.setViewportSize(viewport);
-      const response = await page.goto(publicPage.path, { waitUntil: 'domcontentloaded' });
+      const pageUrl = `${workerOrigin}${publicPage.path}`;
+      const response = await page.goto(pageUrl, { waitUntil: 'domcontentloaded' });
       expect(response?.ok()).toBe(true);
+      expect(response?.url()).toBe(pageUrl);
       const footer = page.locator('footer');
       await footer.scrollIntoViewIfNeeded();
       for (const link of [
@@ -186,6 +360,7 @@ for (const viewport of viewports) {
         await expect(locator).toHaveAttribute('href', link.href);
       }
       expect(await footer.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await validateInternalAnchors(page, request);
       await footer.screenshot({ path: `${screenshotDir}/${publicPage.name}-footer-${viewport.name}.png` });
     });
   }

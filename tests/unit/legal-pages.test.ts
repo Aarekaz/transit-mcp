@@ -16,6 +16,33 @@ const legalPages = [
   { slug: 'support', title: /support/i },
 ] as const;
 
+function cssHexVariable(css: string, name: string): string {
+  const match = css.match(new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, 'i'));
+  expect(match, `--${name} is a six-digit hex color`).not.toBeNull();
+  return match?.[1] ?? '#000000';
+}
+
+function relativeLuminance(hex: string): number {
+  const linearChannel = (offset: number): number => {
+    const channel = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return (
+    channel <= 0.04045
+      ? channel / 12.92
+      : ((channel + 0.055) / 1.055) ** 2.4
+    );
+  };
+  const [red, green, blue] = [linearChannel(1), linearChannel(3), linearChannel(5)];
+  return (0.2126 * red) + (0.7152 * green) + (0.0722 * blue);
+}
+
+function contrastRatio(first: string, second: string): number {
+  const firstLuminance = relativeLuminance(first);
+  const secondLuminance = relativeLuminance(second);
+  const lighter = Math.max(firstLuminance, secondLuminance);
+  const darker = Math.min(firstLuminance, secondLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
 describe('public legal and support pages', () => {
   it.each(legalPages)('publishes /$slug/ as a complete static document', ({ slug, title }) => {
     const html = readRequiredProjectFile(`public/${slug}/index.html`);
@@ -105,6 +132,19 @@ describe('public legal and support pages', () => {
     expect(css).toMatch(/@media\s*\([^)]*min-width/i);
     expect(css).not.toMatch(/@import|https?:\/\/|url\s*\(/i);
     expect(css).not.toMatch(/@keyframes|animation\s*:/i);
+  });
+
+  it('uses an AA-safe text accent while reserving bright orange for non-text details', () => {
+    const css = readRequiredProjectFile('public/legal.css');
+    const paper = cssHexVariable(css, 'paper');
+    const raisedPaper = cssHexVariable(css, 'paper-raised');
+    const textAccent = cssHexVariable(css, 'accent-text');
+
+    expect(contrastRatio(textAccent, paper)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(textAccent, raisedPaper)).toBeGreaterThanOrEqual(4.5);
+    expect(css).toMatch(/a:hover\s*{[^}]*color:\s*var\(--accent-text\)/i);
+    expect(css).toMatch(/\.eyebrow\s*{[^}]*color:\s*var\(--accent-text\)/i);
+    expect(css).toMatch(/\.route-line\s*{[^}]*background:[^}]*var\(--accent\)/i);
   });
 
   it('makes anonymous access and legal navigation visible on the canonical public pages', () => {
