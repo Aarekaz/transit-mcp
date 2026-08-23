@@ -12,6 +12,29 @@ export const MCP_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
 const MCP_REQUEST_BODY_LIMIT_MESSAGE =
   `MCP request body exceeds ${MCP_REQUEST_BODY_LIMIT_BYTES}-byte limit`;
 
+export type McpBodyAccumulator = {
+  append: (chunk: Uint8Array) => boolean;
+  bytes: () => Uint8Array;
+};
+
+/** Copy streamed bytes into one fixed 1 MiB-plus-sentinel backing allocation. */
+export function createMcpBodyAccumulator(): McpBodyAccumulator {
+  const storage = new Uint8Array(MCP_REQUEST_BODY_LIMIT_BYTES + 1);
+  let byteLength = 0;
+
+  return {
+    append(chunk) {
+      const copiedLength = Math.min(chunk.byteLength, storage.byteLength - byteLength);
+      storage.set(chunk.subarray(0, copiedLength), byteLength);
+      byteLength += copiedLength;
+      return byteLength <= MCP_REQUEST_BODY_LIMIT_BYTES;
+    },
+    bytes() {
+      return storage.subarray(0, byteLength);
+    },
+  };
+}
+
 function requestBodyTooLargeResponse(): Response {
   return Response.json({
     jsonrpc: '2.0',
@@ -26,16 +49,10 @@ function validDeclaredBodyLength(request: Request): bigint | undefined {
   return BigInt(value);
 }
 
-function rebuildRequestBody(request: Request, chunks: Uint8Array[], byteLength: number): Request {
-  const body = new Uint8Array(byteLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+function rebuildRequestBody(request: Request, body: Uint8Array): Request {
   const headers = new Headers(request.headers);
   headers.delete('Content-Length');
-  headers.set('Content-Length', String(byteLength));
+  headers.set('Content-Length', String(body.byteLength));
   return new Request(request, { body, headers });
 }
 
@@ -52,8 +69,7 @@ async function boundedMcpPostRequest(request: Request): Promise<Request | Respon
   if (request.body === null) return request;
 
   const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let byteLength = 0;
+  const accumulator = createMcpBodyAccumulator();
   let rejectAbort: (reason?: unknown) => void = () => undefined;
   let abortCancellation: Promise<void> | undefined;
   const aborted = new Promise<never>((_resolve, reject) => {
@@ -71,12 +87,10 @@ async function boundedMcpPostRequest(request: Request): Promise<Request | Respon
       const { done, value } = await Promise.race([reader.read(), aborted]);
       if (done) break;
       if (value === undefined || value.byteLength === 0) continue;
-      if (value.byteLength > MCP_REQUEST_BODY_LIMIT_BYTES - byteLength) {
+      if (!accumulator.append(value)) {
         await reader.cancel(new Error(MCP_REQUEST_BODY_LIMIT_MESSAGE)).catch(() => undefined);
         return requestBodyTooLargeResponse();
       }
-      chunks.push(value);
-      byteLength += value.byteLength;
     }
   } catch (error) {
     if (request.signal.aborted) {
@@ -89,7 +103,7 @@ async function boundedMcpPostRequest(request: Request): Promise<Request | Respon
     reader.releaseLock();
   }
 
-  return rebuildRequestBody(request, chunks, byteLength);
+  return rebuildRequestBody(request, accumulator.bytes());
 }
 
 async function missingModernVersionHeaderResponse(

@@ -32,15 +32,35 @@ local checkout without displaying it. `MCP_REQUEST_STATE_KEY` was freshly
 generated from 48 random bytes. No secret value, request state, transit request
 argument, or stale bearer canary is recorded here.
 
+## Source-linked verification matrix
+
+| Boundary | Status on this branch | Durable evidence and contract source |
+| --- | --- | --- |
+| Automated repository | **Passed** | [package scripts](../package.json), [bounded-body unit tests](../tests/unit/mcp-http-handler.test.ts), [rate-before-read routing test](../tests/unit/index-routing.test.ts), [assembled Workerd tests](../tests/workers/mcp-worker.test.ts), and [browser configuration](../playwright.apps.config.ts) |
+| Local-live Wrangler | **Passed before the handler remediations; not rerun for the current handler delta** | The real `127.0.0.1:8787` matrix below ran on the pre-remediation verification tree. Current body-limit and bounded-allocation behavior passed the linked unit and Workerd suites, which is automated runtime evidence rather than a new local-live run. Runtime entrypoints: [Worker dispatch](../src/index.ts), [MCP handler](../src/mcp/http-handler.ts), [route normalizer](../src/route-normalizer.ts), and [direct conformance runner](../scripts/run-conformance.sh). |
+| Preview-live | **Pending** | Deployment is intentionally deferred to the [Task 7 preview gate](superpowers/plans/2026-08-21-metro-mcp-6-anonymous.md#task-7-deploy-preview-calibrate-the-rate-limit-and-run-live-clients). The distinct preview binding is declared in [Wrangler configuration](../wrangler.jsonc). |
+| Production-live | **Pending** | Merge/deploy acceptance is intentionally deferred to the [Task 8 production gate](superpowers/plans/2026-08-21-metro-mcp-6-anonymous.md#task-8-review-merge-deploy-production-and-retire-external-oauth-state). Production routes and bindings are in [Wrangler configuration](../wrangler.jsonc). |
+| External OAuth cleanup | **Pending owner confirmation** | The irreversible ownership and cleanup gate is defined in the [approved design](superpowers/specs/2026-08-21-metro-mcp-6-anonymous-design.md#cleanup-and-rollback) and [Task 8 plan](superpowers/plans/2026-08-21-metro-mcp-6-anonymous.md#task-8-review-merge-deploy-production-and-retire-external-oauth-state). |
+
+“Passed” in one row does not imply another row passed. In particular, local
+evidence is not presented as preview, production, client-marketplace, or
+external-cleanup evidence.
+
 ## Deterministic repository gates
+
+The command contract is defined in [package.json](../package.json). The body
+boundary's focused source-linked evidence is in
+[the handler unit suite](../tests/unit/mcp-http-handler.test.ts),
+[the routing-order suite](../tests/unit/index-routing.test.ts), and
+[the assembled Workerd suite](../tests/workers/mcp-worker.test.ts).
 
 | Gate | Exact result |
 | --- | --- |
 | `bun install --frozen-lockfile` | passed; 439 installs across 538 packages; no changes |
 | `bun run type-check` | passed; all four TypeScript projects |
-| `bun run test:unit` | passed; 26 files, 356 tests |
-| `bun run test:workers` | passed; 1 file, 29 tests; 11.06 seconds total |
-| `bun run test` | passed; Apps build, 356 unit tests, 29 Workerd tests; Workerd phase 11.28 seconds |
+| `bun run test:unit` | passed; 26 files, 357 tests |
+| `bun run test:workers` | passed; 1 file, 29 tests; 10.12 seconds total |
+| `bun run test` | passed; Apps build, 357 unit tests, 29 Workerd tests; Workerd phase 8.75 seconds |
 
 Workerd emitted only the known missing-source sourcemap messages from pinned
 third-party packages. The messages do not identify an application test failure.
@@ -53,6 +73,10 @@ across the next epoch. One earlier failure reported a roughly 994-second jump in
 the test clock. The observable contract was not relaxed: the test still requires
 two admitted requests, the exact third-request denial, entry into a later
 10-second epoch, and a recovered `200`.
+
+The observable recovery contract and public heartbeat scheduler live in
+[the Workerd suite](../tests/workers/mcp-worker.test.ts); the production
+limiter call remains before body handling in [the Worker entry](../src/index.ts).
 
 The recovery wait now keeps the public Worker event loop scheduled with
 successful `/info` requests at intervals of at most 250 milliseconds. It also
@@ -83,6 +107,11 @@ handler and its server-side tests. Two clean remediation builds reproduced the
 same size and hash above, so no production Apps artifact changed and browser
 reruns were not applicable to the remediation.
 
+The generated artifact is [Transit Board](../public/apps/transit-board.html),
+its build inputs are under [the Transit Board application](../apps/transit-board/),
+and the acceptance sources are [the Apps suite](../tests/apps/transit-board.spec.ts)
+and [legal-page suite](../tests/apps/legal-pages.spec.ts).
+
 ## Production and preview dry-runs
 
 The following commands exited after creating local bundles; neither command
@@ -92,6 +121,11 @@ deployed a Worker:
 bunx wrangler deploy --dry-run --env="" --outdir <fresh-production-directory>
 bunx wrangler deploy --env preview --dry-run --outdir <fresh-preview-directory>
 ```
+
+The environment-specific routes, variables, assets, rollback migration, and
+rate-limit namespaces are source-controlled in
+[wrangler.jsonc](../wrangler.jsonc) and guarded by
+[configuration tests](../tests/unit/config.test.ts).
 
 | Inventory | Production | Preview |
 | --- | --- | --- |
@@ -119,6 +153,12 @@ route otherwise changes the Worker-visible request origin during local
 emulation, the local-only invocation set `--local-upstream 127.0.0.1:8787`,
 `--local-protocol http`, and `--upstream-protocol http`. No source or production
 trust check was changed for the harness.
+
+The exercised behavior comes from [the Worker entry](../src/index.ts),
+[public routing](../src/public-handler.ts), [server metadata](../src/server-info.ts),
+[the MCP catalog](../src/mcp/server.ts), and
+[the request handler](../src/mcp/http-handler.ts). Equivalent trust and protocol
+boundaries are locked in [Workerd](../tests/workers/mcp-worker.test.ts).
 
 The following matrix passed against the running Worker:
 
@@ -151,6 +191,11 @@ The required direct command ran against the same local Worker:
 MCP_CONFORMANCE_TARGET_URL=http://127.0.0.1:8787/mcp ./scripts/run-conformance.sh
 ```
 
+The checked-in [direct runner](../scripts/run-conformance.sh) invokes the frozen
+package without an authentication proxy. The upstream runner and its current
+server-test contract are maintained by the
+[official MCP conformance project](https://github.com/modelcontextprotocol/conformance).
+
 The frozen manifest listed 69 server scenarios and 50 requirement scenarios.
 The runner exited `0` and its generated checks contained 105 successes, 66
 failures, 4 warnings, 1 informational result, and 1 skipped result. The runner's
@@ -175,57 +220,77 @@ release's product-specific acceptance gate.
 
 ## Source and security review
 
-The application source, examples, package manifests, Wrangler configuration,
+The active trust path is source-linked as follows:
+
+1. [Route normalization](../src/route-normalizer.ts) admits only exact MCP
+   routes and methods.
+2. [The Worker entry](../src/index.ts) enforces public URL, Host, and optional
+   browser-Origin trust, then calls [the rate limiter](../src/rate-limit.ts)
+   before the MCP body handler.
+3. [The MCP handler](../src/mcp/http-handler.ts) enforces the body ceiling,
+   strips stale `Authorization`, and dispatches through a request-scoped SDK
+   server while preserving cancellation.
+4. [Telemetry](../src/telemetry.ts) is allowlisted and cannot serialize request
+   bodies, arguments, bearer values, or signed request state.
+5. [The server](../src/mcp/server.ts) binds five-minute HMAC request state to
+   the MCP method, tool, query, and candidate IDs.
+
+Application source, examples, package manifests, [Wrangler configuration](../wrangler.jsonc),
 and both dry-run bundles were reviewed for the removed provider package,
 provider dispatch, OAuth/KV bindings, GitHub client variables, redirect/JWT
 variables, legacy-token configuration, proxy/token injection, and deleted OAuth
 source modules. No application-level reintroduction was found; only the exact
-transitive vendor marker described above remains in each bundle.
+inert transitive vendor marker described above remains in each bundle.
 
-The request trust path remains: exact `/mcp` or normalized `/sse` route, exact
-public URL origin, Host allowlist, optional browser-Origin allowlist, POST-only
-Cloudflare rate limit, stale `Authorization` removal, then stateless SDK
-dispatch. Rejected trust inputs and public/static routes do not consume MCP
-quota. Telemetry is an allowlist and cannot serialize request bodies, tool
-arguments, bearer values, or request state. MRTR state uses HMAC-SHA-256, a
-minimum 32-byte key, a five-minute lifetime, method binding, signed candidate
-IDs, and constant-time tag comparison. The initial local trust-boundary review
-found no validated vulnerability.
+### Durable sanitized scan record
 
-The formal diff scan
+This checked-in section is the durable, secret-free evidence pointer for the
+formal scan; the scanner's temporary artifact directory is intentionally not a
+repository dependency. Scan
 `7947e3eb0762a88eed3091d1713b79ed23da8fb8_20260822T234214Z_y3uuzowa`
-reviewed the complete changed-file inventory for
-`d70c5754ac1b439a9f0359ae6245a4c402b8fb41...7947e3eb0762a88eed3091d1713b79ed23da8fb8`.
-It reported one high-confidence, medium-severity finding and no other
-reportable finding. Occurrence `occ_f37a72b420eb008b8b371660` showed that an
-anonymous `16,777,477`-byte `server/discover` body reached the pinned SDK's
-whole-body parser and returned `200`.
+covered the complete changed-file inventory through
+[commit `7947e3eb`](https://github.com/Aarekaz/metro-mcp/commit/7947e3eb0762a88eed3091d1713b79ed23da8fb8),
+starting at `d70c5754ac1b439a9f0359ae6245a4c402b8fb41`. It reported one
+high-confidence, medium-severity finding and no other reportable finding.
+Occurrence `occ_f37a72b420eb008b8b371660` reproduced an anonymous
+`16,777,477`-byte `server/discover` body returning `200` through the pinned
+whole-body parser.
 
-The remediation adds a documented `1,048,576`-byte MCP POST ceiling at the
-shared `/mcp` and normalized `/sse` handler, after the count limiter and before
-any protocol classifier or SDK parser. A strictly valid oversized
-`Content-Length` returns the deterministic HTTP `413` JSON-RPC response without
-reading the stream. Missing, invalid, or ambiguous lengths are read only to the
-bounded overflow sentinel, then cancelled. Accepted bodies are rebuilt with an
-exact new `Content-Length`; stale authorization remains stripped. Incoming
-abort reason identity and listener cleanup remain preserved.
+The first remediation added the `1,048,576`-byte MCP POST ceiling at the shared
+`/mcp` and normalized `/sse` handler. Its RED phase had five focused failures:
+the declared trigger and absent, invalid, and ambiguous length forms reached
+dispatch, and the bounded-reader abort behavior was missing. Declared overflow
+then rejected before reading; unknown-length overflow cancelled; exact-limit
+traffic reached the SDK; and quota denial still consumed no body.
 
-RED evidence consisted of five focused failures: the reproduced declared body
-and three streamed length forms reached SDK dispatch, and the bounded-reader
-abort contract was absent. GREEN evidence is 31 focused unit tests, 356 full
-unit tests, 29 Workerd tests, the combined gate, and both dry-runs. Workerd
-verified `413` through both `/mcp` and `/sse`, no oversized-body canary in
-telemetry, and `200` for a legitimate request exactly at the limit. A quota
-denial test proves the body is neither pulled nor cancelled before the `429`.
-The original 16.8 MB trigger therefore no longer reaches parsing or dispatch.
+Independent review then found that the first unknown-length implementation
+retained one `Uint8Array` object per chunk. An isolated pre-fix diagnostic with
+periodic full GC observed `638,976` bytes of RSS growth for one coarse overflow
+chunk and `79,003,648` bytes for 300,000 one-byte chunks. Those figures diagnose
+relative object amplification; they are not a production-memory measurement or
+a committed absolute memory threshold.
+
+The review fix replaces that array with one preallocated 1 MiB-plus-sentinel
+backing store in [the shared handler](../src/mcp/http-handler.ts). A deterministic
+[unit regression](../tests/unit/mcp-http-handler.test.ts) appends 300,000 tiny
+chunks and proves that the backing `ArrayBuffer` identity never changes. A
+direct 1,048,577 one-byte probe observed exactly 1,048,576 accepted appends,
+overflow on the sentinel, `1,048,577` buffered bytes, and the same backing
+allocation. The focused handler/cancellation/routing slice passed 32 tests;
+[Workerd](../tests/workers/mcp-worker.test.ts) still verifies exact `413`
+responses through `/mcp` and `/sse`, no body-canary telemetry, and `200` at
+exactly 1 MiB. [The routing test](../tests/unit/index-routing.test.ts) still
+proves a `429` body is neither pulled nor cancelled. The original declared
+16.8 MB trigger and the unknown-length variants therefore no longer reach SDK
+parsing with unbounded application-owned storage.
 
 ## Known operational limits
 
-Cloudflare's Workers rate-limit binding is an abuse-control boundary, not an
-exact accounting or billing system. Enforcement is per Cloudflare location and
-eventually consistent, so short bursts can exceed the nominal threshold across
-locations. The current key is the Cloudflare-provided client IP; shared NATs can
-share quota and a single caller can use multiple egress addresses. The local
+Cloudflare documents that its
+[Workers Rate Limiting API](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)
+is per-location, permissive, eventually consistent, and unsuitable for exact
+accounting. The current key is the Cloudflare-provided client IP; shared NATs
+can share quota and a single caller can use multiple egress addresses. The local
 fallback key exists for emulator/tests, not production identity. The initial
 policy is 300 requests per 60 seconds and remains subject to preview calibration
 before production.
@@ -234,6 +299,13 @@ The independent 1 MiB request-body ceiling protects parsing memory per admitted
 MCP POST. It intentionally leaves ample headroom over the small public 13/3/3
 catalog requests. Requests above the ceiling receive HTTP `413`; this is a
 compatibility limit, not a quota response.
+
+Cloudflare's current [Workers limits](https://developers.cloudflare.com/workers/platform/limits/#memory)
+document a 128 MB per-isolate memory ceiling, while its
+[BYOB stream guidance](https://developers.cloudflare.com/workers/runtime-apis/streams/readablestreambyobreader/#common-issues)
+warns that a read may legally yield only one byte. The fixed backing allocation
+therefore does not depend on coarse runtime chunking. Stream objects and runtime
+internals remain platform-owned; the application retains no per-chunk array.
 
 ## Deployed and external status
 

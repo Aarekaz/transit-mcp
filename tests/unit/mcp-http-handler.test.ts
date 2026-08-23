@@ -10,7 +10,10 @@ vi.mock('../../src/mcp/server', () => ({
   createMetroMcpServer: vi.fn(),
 }));
 
-import { handleMcpRequest } from '../../src/mcp/http-handler';
+import {
+  createMcpBodyAccumulator,
+  handleMcpRequest,
+} from '../../src/mcp/http-handler';
 import { addSecurityHeadersAuto } from '../../src/middleware/security-headers';
 import { createMockEnv } from '../setup';
 
@@ -142,6 +145,25 @@ describe('handleMcpRequest', () => {
     expect(offset).toBe(MCP_REQUEST_BODY_LIMIT_BYTES + 1);
     expect(cancelReason).toBeInstanceOf(Error);
     expect(handlerFetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps one fixed backing allocation across very many tiny chunks', () => {
+    const accumulator = createMcpBodyAccumulator();
+    const backing = accumulator.bytes().buffer;
+    const oneByte = new Uint8Array([0x61]);
+    let allAccepted = true;
+
+    for (let index = 0; index < 300_000; index += 1) {
+      allAccepted = accumulator.append(oneByte) && allAccepted;
+    }
+
+    expect(allAccepted).toBe(true);
+    expect(accumulator.bytes().buffer).toBe(backing);
+    expect(accumulator.bytes().byteLength).toBe(300_000);
+    expect(accumulator.append(new Uint8Array(MCP_REQUEST_BODY_LIMIT_BYTES + 1 - 300_000)))
+      .toBe(false);
+    expect(accumulator.bytes().buffer).toBe(backing);
+    expect(accumulator.bytes().byteLength).toBe(MCP_REQUEST_BODY_LIMIT_BYTES + 1);
   });
 
   it('rebuilds an exactly-at-limit request for anonymous SDK dispatch', async () => {
