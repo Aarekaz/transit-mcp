@@ -2,15 +2,17 @@
 
 Date: August 23, 2026 (America/New_York)
 
-Release candidate: Metro MCP `6.0.0` at pre-verification commit
-`7ef18cadee2153cf14a03e26830ddc55fd52bd2a`
+Release candidate: Metro MCP `6.0.0`. The original pre-verification base was
+`7ef18cadee2153cf14a03e26830ddc55fd52bd2a`; the exact reviewed commit deployed
+to preview was `085bdc39f3ca90c138d73233f73dffcff6a41db9`.
 
 Protocol: MCP `2026-07-28`, anonymous stateless HTTP
 
 This record separates deterministic repository gates, a real local Worker,
-deployed-environment work, and external cleanup. No Worker was deployed and no
-Cloudflare, GitHub, marketplace, or other external state was changed while
-collecting this evidence.
+preview deployment, production work, and external cleanup. Task 7 changed only
+the independently configured Cloudflare preview Worker and a temporary Codex
+MCP entry that was removed after acceptance. Production, GitHub, marketplace,
+and external OAuth state were not changed.
 
 ## Environment and secret boundary
 
@@ -38,7 +40,7 @@ argument, or stale bearer canary is recorded here.
 | --- | --- | --- |
 | Automated repository | **Passed** | [package scripts](../package.json), [bounded-body unit tests](../tests/unit/mcp-http-handler.test.ts), [rate-before-read routing test](../tests/unit/index-routing.test.ts), [assembled Workerd tests](../tests/workers/mcp-worker.test.ts), and [browser configuration](../playwright.apps.config.ts) |
 | Local-live Wrangler | **Passed before the handler remediations; not rerun for the current handler delta** | The real `127.0.0.1:8787` matrix below ran on the pre-remediation verification tree. Current body-limit and bounded-allocation behavior passed the linked unit and Workerd suites, which is automated runtime evidence rather than a new local-live run. Runtime entrypoints: [Worker dispatch](../src/index.ts), [MCP handler](../src/mcp/http-handler.ts), [route normalizer](../src/route-normalizer.ts), and [direct conformance runner](../scripts/run-conformance.sh). |
-| Preview-live | **Pending** | Deployment is intentionally deferred to the [Task 7 preview gate](superpowers/plans/2026-08-21-metro-mcp-6-anonymous.md#task-7-deploy-preview-calibrate-the-rate-limit-and-run-live-clients). The distinct preview binding is declared in [Wrangler configuration](../wrangler.jsonc). |
+| Preview-live | **Passed** | The exact reviewed commit above was deployed only to the distinct preview environment declared in [Wrangler configuration](../wrangler.jsonc). The live results below exercise [Worker dispatch](../src/index.ts), [the MCP handler](../src/mcp/http-handler.ts), [the public router](../src/public-handler.ts), [the catalog](../src/mcp/server.ts), and [the rate limiter](../src/rate-limit.ts). |
 | Production-live | **Pending** | Merge/deploy acceptance is intentionally deferred to the [Task 8 production gate](superpowers/plans/2026-08-21-metro-mcp-6-anonymous.md#task-8-review-merge-deploy-production-and-retire-external-oauth-state). Production routes and bindings are in [Wrangler configuration](../wrangler.jsonc). |
 | External OAuth cleanup | **Pending owner confirmation** | The irreversible ownership and cleanup gate is defined in the [approved design](superpowers/specs/2026-08-21-metro-mcp-6-anonymous-design.md#cleanup-and-rollback) and [Task 8 plan](superpowers/plans/2026-08-21-metro-mcp-6-anonymous.md#task-8-review-merge-deploy-production-and-retire-external-oauth-state). |
 
@@ -218,6 +220,118 @@ advertise the task capability. Therefore the frozen runner is useful as a
 recorded compatibility probe, but its diagnostic-fixture total is not the
 release's product-specific acceptance gate.
 
+## Preview deployment and live acceptance
+
+The exact reviewed commit
+`085bdc39f3ca90c138d73233f73dffcff6a41db9` was deployed with
+`bunx wrangler deploy --env preview` only. Cloudflare created preview version
+`d8fb4612-da66-4932-b69a-335b21783b82` at
+`2026-08-23T19:41:58.088Z` and assigned it 100 percent of the independently
+configured `metro-mcp-preview` deployment. Production was not deployed or
+modified.
+
+The deployed preview inventory matched [Wrangler configuration](../wrangler.jsonc):
+the preview custom domain and public origin, Host and browser-Origin allowlists,
+environment marker, 24 static assets, and `MCP_RATE_LIMITER` at 300 requests per
+60 seconds. The required `MCP_REQUEST_STATE_KEY` and `WMATA_API_KEY` encrypted
+secrets remained present. The retired `GITHUB_CLIENT_SECRET` and `JWT_SECRET`
+encrypted values also remained stored, intentionally pending the separate
+post-production cleanup gate; no code path reads them. No OAuth public
+variable, OAuth route, provider binding, or KV binding was deployed.
+
+The live preview matrix exercised the implementation linked in the
+[source-linked verification matrix](#source-linked-verification-matrix):
+
+| Preview surface | Observed result |
+| --- | --- |
+| `/info` and legal pages | `200`; version `6.0.0`, protocol `2026-07-28`, authentication `none`, catalog `13/3/3`; privacy, terms, and support returned HTML |
+| modern discovery and catalog | anonymous discovery completed; exact 13 tools, 3 resource templates, and 3 prompts |
+| Transit Board App | `ui://metro-mcp/transit-board.html` returned the exact `392515`-byte MCP App HTML |
+| real transit | WMATA `A01` and public MTA `127` prediction calls completed |
+| resource and prompt | NYC station resource and DC service-briefing prompt completed |
+| progress and cancellation | two ordered progress notifications preceded the result; reader cancellation and request abort stopped the in-flight exchange and a follow-up request succeeded |
+| MRTR | signed `v1` Times Square `input_required` state completed after an allowlisted selection |
+| compatibility and alias | MCP 2025 headerless tools list exposed the same 13 tools; modern discovery completed through normalized `/sse` |
+| OAuth retirement and stale bearer | all eight former OAuth routes returned `404`; stale bearer and anonymous discovery were byte-equivalent with no challenge |
+| trust and methods | invalid Host and browser Origin returned `403`; insecure HTTP canonicalized to HTTPS with an exact edge `301`; all eight unsupported method/session cases returned `405` |
+| request-body boundary | exact 1 MiB `/mcp` reached the SDK; oversized `/mcp` and normalized `/sse` returned deterministic `413` |
+
+Cloudflare performs the observed scheme canonicalization before Worker dispatch;
+the [assembled Workerd suite](../tests/workers/mcp-worker.test.ts) separately
+proves the Worker-visible noncanonical-origin `403` contract.
+
+### Preview conformance and Codex client
+
+The same frozen [direct conformance runner](../scripts/run-conformance.sh)
+targeted the preview `/mcp` endpoint. It listed 69 server scenarios and ran 50
+requirement scenarios. The raw checks were 94 passed and 72 failed. The scored
+summary was 76 passed and 31 failed across 37 scenarios; the 13 run-but-unscored
+extension/pending scenarios contributed 18 passed and 41 failed checks. As in
+the local run, the runner is diagnostic rather than the product gate: failures
+remain dominated by generic fixture names and unadvertised task extensions that
+cannot be added without violating the exact production catalog. The small
+local/live count difference is recorded rather than normalized away.
+
+A fresh ephemeral Codex client used a temporary anonymous
+`metro-mcp-v6-preview` MCP entry with no bearer-token environment variable,
+headers, OAuth flow, login prompt, or stored credential. It completed
+`get_station_predictions` for DC `A01` and NYC `127`; the final client result
+reported 6 and 50 predictions respectively. The temporary entry was removed,
+and a subsequent lookup confirmed it no longer exists. Codex logged a
+non-blocking shutdown diagnostic when its generic streamable-HTTP client sent
+`DELETE` with a session ID to the stateless server and received `400`; both
+requested calls and the final result had already completed. Claude client
+acceptance was explicitly user-waived for this gate and is not claimed passed.
+
+### Preview rate-limit calibration and logs
+
+Three legitimate parallel bursts each issued eight MCP POSTs: discovery, all
+four catalog/list surfaces, Transit Board App loading, and one DC plus one NYC
+prediction call. Every request passed. The bursts completed in 971, 384, and
+379 milliseconds. The measured maximum legitimate burst was therefore 8, and
+`max(10 * 8, 300)` remains 300 requests per minute. No real upstream constraint
+was observed during the live calls. The public WMATA portal says keys are rate
+limited but does not publish this account's numeric service-tier quota. Without
+an account-specific number or an observed quota failure, there was no
+evidence-based lower threshold to select, so
+[the configured limiter](../wrangler.jsonc) was not changed merely to create
+configuration churn.
+
+After a clean 65-second window, a strictly sequential preview probe admitted
+301 `server/discover` requests and denied attempt 302. The denied follow-up was
+exactly HTTP `429` with JSON-RPC code `-32029`, message `Rate limit exceeded`,
+`id: null`, `Retry-After: 60`, JSON content type, `X-Request-ID`, and
+`X-Content-Type-Options: nosniff`. Public `/info` heartbeats remained `200`, and
+the first MCP request after 65,053 milliseconds recovered with `200`.
+
+Before that sequential proof, intentionally concurrent probes admitted 360 and
+then 1,200 requests without a denial. This is bounded evidence of Cloudflare's
+documented permissive, eventually consistent, per-machine cache behavior, not
+an exact-accounting claim. The release threshold remains the configured policy;
+it is not represented as a hard global firewall.
+
+A version-pinned, self-IP, 4xx-only tail reproduced first denial at request 302.
+Both denied application log entries contained only `correlationId`, `alias`,
+`durationMs`, and `statusClass`; they contained no era, protocol, MCP method,
+MCP name, or upstream field, proving the limiter returned before SDK dispatch.
+An exact search for the stale-bearer and representative transit-argument
+canaries returned zero events. A separate `mcpMethod` positive-control search
+captured both corresponding allowlisted application logs, establishing that
+the tail was active. Sampled events reported successful Worker outcomes with no
+exceptions; no request body, bearer value, transit argument, signed request
+state, stack trace, or response body appeared in application telemetry.
+
+After updating this record, the final focused handler/routing slice passed 2
+files and 28 tests. Type checking passed all four projects; the full unit suite
+passed 26 files and 357 tests; the Workerd suite passed 1 file and 29 tests with
+10.97 seconds in test bodies; and the combined Apps-build/unit/Workerd gate
+passed with a 9.49-second Workerd test-body phase. Two additional Apps builds
+remained byte-identical at 392,515 bytes and SHA-256
+`5ad6ba1b0d1d580682a015cf93179e465195d8331975e95e3c028ca629f49c34`.
+Fresh production and preview dry-runs each exited `0`, read 24 assets, and
+reported only the intended public bindings. These were local validation
+commands; the production dry-run did not deploy production.
+
 ## Source and security review
 
 The active trust path is source-linked as follows:
@@ -292,8 +406,18 @@ is per-location, permissive, eventually consistent, and unsuitable for exact
 accounting. The current key is the Cloudflare-provided client IP; shared NATs
 can share quota and a single caller can use multiple egress addresses. The local
 fallback key exists for emulator/tests, not production identity. The initial
-policy is 300 requests per 60 seconds and remains subject to preview calibration
-before production.
+policy is 300 requests per 60 seconds. Preview calibration retained that policy
+because the largest measured legitimate burst was 8; the concurrent and
+sequential exhaustion evidence above demonstrates why it must still be treated
+as a permissive edge safeguard rather than exact accounting.
+
+WMATA's current [developer portal](https://developer.wmata.com/products) does
+not publish this account's numeric service-tier quota, and its
+[Transit Data Terms of Use](https://developer.wmata.com/license) distinguish an
+end-user application from exposing Transit Data through an API. Confirmation
+of the account-specific quota and any required redistribution authorization is
+an external owner/legal condition before production; preview testing did not
+attempt to infer either one.
 
 The independent 1 MiB request-body ceiling protects parsing memory per admitted
 MCP POST. It intentionally leaves ample headroom over the small public 13/3/3
@@ -309,13 +433,17 @@ internals remain platform-owned; the application retains no per-chunk array.
 
 ## Deployed and external status
 
-- Preview-live anonymous acceptance and rate-limit calibration: **Pending**.
+- Preview-live anonymous acceptance, Codex client acceptance, rate-limit
+  calibration, and canary log scan: **Passed** on preview version
+  `d8fb4612-da66-4932-b69a-335b21783b82` from reviewed commit `085bdc39`.
 - Production-live acceptance, production log scan, and post-deploy rollback
   observation: **Pending**.
 - Retired Cloudflare OAuth/KV/dashboard values, encrypted secrets, and GitHub
   OAuth application cleanup: **Pending** and must occur only after the approved
   production observation window.
-- Marketplace/client acceptance outside the local Worker and managed Chromium
-  harness: **Pending**.
+- Claude client acceptance: **User-waived**, not passed.
+- Marketplace submission and any remaining client-directory acceptance:
+  **Pending**.
 
-No pending item above is claimed as complete by this local verification record.
+No pending item above is claimed as complete by this preview verification
+record.
