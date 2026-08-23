@@ -1,6 +1,6 @@
 # Metro MCP 6.0 verification record
 
-Date: August 22, 2026 (America/New_York)
+Date: August 23, 2026 (America/New_York)
 
 Release candidate: Metro MCP `6.0.0` at pre-verification commit
 `7ef18cadee2153cf14a03e26830ddc55fd52bd2a`
@@ -38,9 +38,9 @@ argument, or stale bearer canary is recorded here.
 | --- | --- |
 | `bun install --frozen-lockfile` | passed; 439 installs across 538 packages; no changes |
 | `bun run type-check` | passed; all four TypeScript projects |
-| `bun run test:unit` | passed; 26 files, 350 tests |
-| `bun run test:workers` | passed; 1 file, 26 tests; 12.17 seconds total |
-| `bun run test` | passed; Apps build, 350 unit tests, 26 Workerd tests; Workerd phase 8.73 seconds |
+| `bun run test:unit` | passed; 26 files, 356 tests |
+| `bun run test:workers` | passed; 1 file, 29 tests; 11.06 seconds total |
+| `bun run test` | passed; Apps build, 356 unit tests, 29 Workerd tests; Workerd phase 11.28 seconds |
 
 Workerd emitted only the known missing-source sourcemap messages from pinned
 third-party packages. The messages do not identify an application test failure.
@@ -59,7 +59,9 @@ successful `/info` requests at intervals of at most 250 milliseconds. It also
 requires at least one second to remain in the selected starting epoch. Five
 consecutive focused Workerd repetitions passed with test-body durations of
 9.34, 5.40, 3.13, 5.07, and 5.65 seconds. The independent Workerd and combined
-gates above then passed on the final tree.
+gates passed on the verification commit. After the formal security scan found
+the body-size issue described below, both gates passed again on the remediation
+tree with the updated counts.
 
 ### Transit Board determinism and browser acceptance
 
@@ -70,13 +72,16 @@ checked-in artifact, were byte-identical:
 - size: `392515` bytes;
 - SHA-256: `5ad6ba1b0d1d580682a015cf93179e465195d8331975e95e3c028ca629f49c34`.
 
-`bun run test:apps` then ran three independent times with repository-managed
+Before the security scan, `bun run test:apps` ran three independent times with repository-managed
 Chromium, one worker, and zero retries. Each run passed all 62 tests. These runs
 cover all thirteen dedicated tool renderers, the five visual families,
 desktop/mobile legal pages, real Worker-backed `/`, `/docs/`, `/privacy/`,
 `/terms/`, `/support/`, and `/info` routing, keyboard/focus and overflow
 behavior, host lifecycle, hostile text, and the positive self-checks for every
-security observer.
+security observer. The body-limit remediation changes only the Worker request
+handler and its server-side tests. Two clean remediation builds reproduced the
+same size and hash above, so no production Apps artifact changed and browser
+reruns were not applicable to the remediation.
 
 ## Production and preview dry-runs
 
@@ -184,13 +189,35 @@ dispatch. Rejected trust inputs and public/static routes do not consume MCP
 quota. Telemetry is an allowlist and cannot serialize request bodies, tool
 arguments, bearer values, or request state. MRTR state uses HMAC-SHA-256, a
 minimum 32-byte key, a five-minute lifetime, method binding, signed candidate
-IDs, and constant-time tag comparison. This local trust-boundary review found
-no validated vulnerability.
+IDs, and constant-time tag comparison. The initial local trust-boundary review
+found no validated vulnerability.
 
-The formal `codex-security:security-diff-scan` for `origin/main...HEAD` is
-pending the stable verification commit so the app-backed scan can review the
-exact immutable range. Any validated finding must be fixed and reverified
-before preview acceptance.
+The formal diff scan
+`7947e3eb0762a88eed3091d1713b79ed23da8fb8_20260822T234214Z_y3uuzowa`
+reviewed the complete changed-file inventory for
+`d70c5754ac1b439a9f0359ae6245a4c402b8fb41...7947e3eb0762a88eed3091d1713b79ed23da8fb8`.
+It reported one high-confidence, medium-severity finding and no other
+reportable finding. Occurrence `occ_f37a72b420eb008b8b371660` showed that an
+anonymous `16,777,477`-byte `server/discover` body reached the pinned SDK's
+whole-body parser and returned `200`.
+
+The remediation adds a documented `1,048,576`-byte MCP POST ceiling at the
+shared `/mcp` and normalized `/sse` handler, after the count limiter and before
+any protocol classifier or SDK parser. A strictly valid oversized
+`Content-Length` returns the deterministic HTTP `413` JSON-RPC response without
+reading the stream. Missing, invalid, or ambiguous lengths are read only to the
+bounded overflow sentinel, then cancelled. Accepted bodies are rebuilt with an
+exact new `Content-Length`; stale authorization remains stripped. Incoming
+abort reason identity and listener cleanup remain preserved.
+
+RED evidence consisted of five focused failures: the reproduced declared body
+and three streamed length forms reached SDK dispatch, and the bounded-reader
+abort contract was absent. GREEN evidence is 31 focused unit tests, 356 full
+unit tests, 29 Workerd tests, the combined gate, and both dry-runs. Workerd
+verified `413` through both `/mcp` and `/sse`, no oversized-body canary in
+telemetry, and `200` for a legitimate request exactly at the limit. A quota
+denial test proves the body is neither pulled nor cancelled before the `429`.
+The original 16.8 MB trigger therefore no longer reaches parsing or dispatch.
 
 ## Known operational limits
 
@@ -202,6 +229,11 @@ share quota and a single caller can use multiple egress addresses. The local
 fallback key exists for emulator/tests, not production identity. The initial
 policy is 300 requests per 60 seconds and remains subject to preview calibration
 before production.
+
+The independent 1 MiB request-body ceiling protects parsing memory per admitted
+MCP POST. It intentionally leaves ample headroom over the small public 13/3/3
+catalog requests. Requests above the ceiling receive HTTP `413`; this is a
+compatibility limit, not a quota response.
 
 ## Deployed and external status
 

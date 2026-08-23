@@ -14,6 +14,41 @@ import { handleMcpRequest } from '../../src/mcp/http-handler';
 import { addSecurityHeadersAuto } from '../../src/middleware/security-headers';
 import { createMockEnv } from '../setup';
 
+const MCP_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
+
+function streamingPostRequest(
+  body: ReadableStream<Uint8Array>,
+  contentLength?: string,
+  signal?: AbortSignal,
+): Request {
+  const headers = new Headers({
+    Host: 'metro-mcp.anuragd.me',
+    Authorization: 'Bearer stale-canary',
+    'Content-Type': 'application/json',
+    'MCP-Protocol-Version': '2026-07-28',
+    'Mcp-Method': 'server/discover',
+  });
+  if (contentLength !== undefined) headers.set('Content-Length', contentLength);
+  return new Request('https://metro-mcp.anuragd.me/mcp', {
+    method: 'POST',
+    headers,
+    body,
+    signal,
+    duplex: 'half',
+  } as RequestInit & { duplex: 'half' });
+}
+
+function exactLengthModernBody(byteLength: number): string {
+  const envelope = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'server/discover',
+    params: {},
+  });
+  if (envelope.length > byteLength) throw new Error('requested body is too small');
+  return envelope + ' '.repeat(byteLength - envelope.length);
+}
+
 beforeEach(() => {
   handlerFetch.mockReset();
 });
@@ -53,6 +88,121 @@ describe('handleMcpRequest', () => {
     expect(response.status).toBe(200);
     expect(handlerFetch).toHaveBeenCalledOnce();
     expect(handlerFetch.mock.calls[0]![0].headers.has('authorization')).toBe(false);
+  });
+
+  it('rejects the reproduced 16.8 MB declared body before reading or SDK dispatch', async () => {
+    let pulled = false;
+    const body = new ReadableStream({
+      type: 'bytes',
+      pull() {
+        pulled = true;
+      },
+    } as UnderlyingByteSource);
+
+    const response = await handleMcpRequest(
+      streamingPostRequest(body, '16777477'),
+      createMockEnv(),
+    );
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'MCP request body exceeds 1048576-byte limit' },
+      id: null,
+    });
+    expect(pulled).toBe(false);
+    expect(handlerFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['invalid', 'invalid'],
+    ['ambiguous', '1, 2'],
+  ])('bounds and cancels a streamed overflow with %s Content-Length', async (_name, length) => {
+    let offset = 0;
+    let cancelReason: unknown;
+    const body = new ReadableStream({
+      type: 'bytes',
+      pull(controller) {
+        const chunkLength = Math.min(256 * 1024, MCP_REQUEST_BODY_LIMIT_BYTES + 1 - offset);
+        controller.enqueue(new Uint8Array(chunkLength));
+        offset += chunkLength;
+      },
+      cancel(reason) {
+        cancelReason = reason;
+      },
+    } as UnderlyingByteSource);
+
+    const response = await handleMcpRequest(
+      streamingPostRequest(body, length),
+      createMockEnv(),
+    );
+
+    expect(response.status).toBe(413);
+    expect(offset).toBe(MCP_REQUEST_BODY_LIMIT_BYTES + 1);
+    expect(cancelReason).toBeInstanceOf(Error);
+    expect(handlerFetch).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds an exactly-at-limit request for anonymous SDK dispatch', async () => {
+    handlerFetch.mockImplementationOnce(async request => {
+      expect(request.headers.get('content-length')).toBe(String(MCP_REQUEST_BODY_LIMIT_BYTES));
+      expect(request.headers.has('authorization')).toBe(false);
+      expect((await request.text()).length).toBe(MCP_REQUEST_BODY_LIMIT_BYTES);
+      return Response.json({ result: { ok: true } });
+    });
+    const body = exactLengthModernBody(MCP_REQUEST_BODY_LIMIT_BYTES);
+
+    const response = await handleMcpRequest(
+      new Request('https://metro-mcp.anuragd.me/mcp', {
+        method: 'POST',
+        headers: {
+          Host: 'metro-mcp.anuragd.me',
+          Authorization: 'Bearer stale-canary',
+          'Content-Type': 'application/json',
+          'Content-Length': String(MCP_REQUEST_BODY_LIMIT_BYTES),
+          'MCP-Protocol-Version': '2026-07-28',
+          'Mcp-Method': 'server/discover',
+        },
+        body,
+      }),
+      createMockEnv(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(handlerFetch).toHaveBeenCalledOnce();
+  });
+
+  it('preserves an incoming abort reason while reading and removes its listener', async () => {
+    const incoming = new AbortController();
+    let pullStarted = false;
+    let cancelReason: unknown;
+    let releasePull: (() => void) | undefined;
+    const body = new ReadableStream({
+      type: 'bytes',
+      pull() {
+        pullStarted = true;
+        return new Promise<void>(resolve => {
+          releasePull = resolve;
+        });
+      },
+      cancel(reason) {
+        cancelReason = reason;
+        releasePull?.();
+      },
+    } as UnderlyingByteSource);
+    const request = streamingPostRequest(body, undefined, incoming.signal);
+    const remove = vi.spyOn(request.signal, 'removeEventListener');
+    const pending = handleMcpRequest(request, createMockEnv());
+    await vi.waitFor(() => expect(pullStarted).toBe(true));
+    const reason = { source: 'bounded body reader' };
+
+    incoming.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+    expect(cancelReason).toBe(reason);
+    expect(remove).toHaveBeenCalled();
+    expect(handlerFetch).not.toHaveBeenCalled();
   });
 
   it('keeps the Agents modern MCP preflight policy through outer security composition', async () => {

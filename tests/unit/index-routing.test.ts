@@ -150,15 +150,34 @@ describe('Worker entry routing', () => {
     });
     const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     handleMcpRequest.mockClear();
+    let bodyPulled = false;
+    let bodyCancelled = false;
+    const body = new ReadableStream({
+      type: 'bytes',
+      pull() {
+        bodyPulled = true;
+      },
+      cancel() {
+        bodyCancelled = true;
+      },
+    } as UnderlyingByteSource);
 
     const response = await worker.fetch(new Request('https://metro-mcp.anuragd.me/mcp', {
       method: 'POST',
-      headers: { Host: 'metro-mcp.anuragd.me', 'CF-Connecting-IP': '198.51.100.12' },
-    }), env, executionContext());
+      headers: {
+        Host: 'metro-mcp.anuragd.me',
+        'CF-Connecting-IP': '198.51.100.12',
+        'Content-Length': '16777477',
+      },
+      body,
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' }), env, executionContext());
 
     expect(response.status).toBe(429);
     expect(await response.clone().text()).not.toContain('198.51.100.12');
     expect(String(info.mock.calls[0]?.[0])).not.toContain('198.51.100.12');
+    expect(bodyPulled).toBe(false);
+    expect(bodyCancelled).toBe(false);
     expect(handleMcpRequest).not.toHaveBeenCalled();
   });
 

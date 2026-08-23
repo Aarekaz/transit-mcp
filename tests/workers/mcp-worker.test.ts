@@ -25,6 +25,7 @@ import {
 const RATE_LIMIT_PERIOD_MS = 10_000;
 const RATE_LIMIT_EPOCH_SAFETY_MS = 1_000;
 const RATE_LIMIT_HEARTBEAT_MS = 250;
+const MCP_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
 let nextTestClient = 1;
 
 function workerFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -42,6 +43,24 @@ function workerFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Resp
 
 function sleep(milliseconds: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+function paddedModernDiscoverRequest(path: '/mcp' | '/sse', byteLength: number): Request {
+  const canary = 'metro-task6-oversized-body-canary';
+  const envelope = JSON.stringify(modernEnvelope('server/discover', { canary }));
+  if (envelope.length > byteLength) throw new Error('requested body is too small');
+  const body = envelope + ' '.repeat(byteLength - envelope.length);
+  return new Request(`${TEST_ORIGIN}${path}`, {
+    method: 'POST',
+    headers: {
+      Host: 'metro-mcp.anuragd.me',
+      'Content-Type': 'application/json',
+      'Content-Length': String(byteLength),
+      'MCP-Protocol-Version': '2026-07-28',
+      'Mcp-Method': 'server/discover',
+    },
+    body,
+  });
 }
 
 async function waitUntilWithPublicHeartbeats(targetTime: number): Promise<void> {
@@ -103,6 +122,35 @@ describe('assembled MCP Worker', () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.has('www-authenticate')).toBe(false);
+  });
+
+  it.each(['/mcp', '/sse'] as const)(
+    'rejects a body above 1 MiB through the shared %s handler without logging its canary',
+    async path => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+      const response = await workerFetch(paddedModernDiscoverRequest(
+        path,
+        MCP_REQUEST_BODY_LIMIT_BYTES + 1,
+      ));
+
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'MCP request body exceeds 1048576-byte limit' },
+        id: null,
+      });
+      expect(String(info.mock.calls[0]?.[0]))
+        .not.toContain('metro-task6-oversized-body-canary');
+    },
+  );
+
+  it('admits a legitimate modern request exactly at the 1 MiB boundary', async () => {
+    const response = await workerFetch(paddedModernDiscoverRequest(
+      '/mcp',
+      MCP_REQUEST_BODY_LIMIT_BYTES,
+    ));
+
+    expect(response.status).toBe(200);
   });
 
   it('serves modern server/discover without initialize', async () => {
