@@ -277,6 +277,14 @@ for (const viewport of viewports) {
       const response = await page.goto(pageUrl, { waitUntil: 'load' });
       expect(response?.ok()).toBe(true);
       expect(response?.url()).toBe(pageUrl);
+      expect(response?.headers()['x-frame-options']).toBe('DENY');
+      expect(response?.headers()['x-content-type-options']).toBe('nosniff');
+      expect(response?.headers()['referrer-policy']).toBe('strict-origin-when-cross-origin');
+      expect(response?.headers()['permissions-policy']).toBe(
+        'geolocation=(), microphone=(), camera=(), payment=(), usb=()',
+      );
+      expect(response?.headers()['content-security-policy']).toContain("script-src 'none'");
+      expect(response?.headers()['content-security-policy']).toContain("frame-ancestors 'none'");
       await expect(page).toHaveTitle(new RegExp(legalPage.heading, 'i'));
       await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
         'href',

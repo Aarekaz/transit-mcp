@@ -1,6 +1,6 @@
 # Metro MCP 6.0 verification record
 
-Date: August 23, 2026 (America/New_York)
+Date: August 24, 2026 (America/New_York)
 
 Release candidate: Metro MCP `6.0.0`. The original pre-verification base was
 `7ef18cadee2153cf14a03e26830ddc55fd52bd2a`; the exact reviewed commit deployed
@@ -60,9 +60,9 @@ boundary's focused source-linked evidence is in
 | --- | --- |
 | `bun install --frozen-lockfile` | passed; 439 installs across 538 packages; no changes |
 | `bun run type-check` | passed; all four TypeScript projects |
-| `bun run test:unit` | passed; 26 files, 357 tests |
-| `bun run test:workers` | passed; 1 file, 29 tests; 10.12 seconds total |
-| `bun run test` | passed; Apps build, 357 unit tests, 29 Workerd tests; Workerd phase 8.75 seconds |
+| `bun run test:unit` | passed; 26 files, 362 tests |
+| `bun run test:workers` | passed; 1 file, 30 tests; 10.86 seconds in test bodies |
+| `bun run test` | passed; Apps build, 362 unit tests, 30 Workerd tests; Workerd phase 9.56 seconds in test bodies |
 
 Workerd emitted only the known missing-source sourcemap messages from pinned
 third-party packages. The messages do not identify an application test failure.
@@ -99,7 +99,9 @@ checked-in artifact, were byte-identical:
 - SHA-256: `5ad6ba1b0d1d580682a015cf93179e465195d8331975e95e3c028ca629f49c34`.
 
 Before the security scan, `bun run test:apps` ran three independent times with repository-managed
-Chromium, one worker, and zero retries. Each run passed all 62 tests. These runs
+Chromium, one worker, and zero retries. The final-review tree ran three more
+independent full passes after adding the static header contract. Every run
+passed all 62 tests. These runs
 cover all thirteen dedicated tool renderers, the five visual families,
 desktop/mobile legal pages, real Worker-backed `/`, `/docs/`, `/privacy/`,
 `/terms/`, `/support/`, and `/info` routing, keyboard/focus and overflow
@@ -131,12 +133,23 @@ rate-limit namespaces are source-controlled in
 
 | Inventory | Production | Preview |
 | --- | --- | --- |
-| static assets | 24 | 24 |
+| asset inventory | 24 served assets plus the `_headers` configuration file; Wrangler read 25 files | 24 served assets plus the `_headers` configuration file; Wrangler read 25 files |
 | rate limiter | `MCP_RATE_LIMITER`, 300 requests / 60 seconds | `MCP_RATE_LIMITER`, 300 requests / 60 seconds |
 | namespace ID in configuration | `2026082101` | `2026082102` |
 | public origin | production custom domain | preview custom domain |
 | public variables | origin, Host allowlist, browser-Origin allowlist, environment | origin, Host allowlist, browser-Origin allowlist, environment |
 | OAuth/provider/KV binding | absent | absent |
+
+The exact generated-header contract is checked in as
+[`public/_headers`](../public/_headers). Its wildcard rule applies
+`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: strict-origin-when-cross-origin`, and the restricted
+Permissions Policy to every static response. `/privacy/*`, `/terms/*`, and
+`/support/*` add a scriptless CSP; `/` and `/docs/*` retain separate policies
+for their existing inline interactions. Unit tests parse the deployed file,
+and the browser suite observed the merged legal-page headers from local
+Wrangler. Static assets remain asset-first; no broad Worker-first override was
+enabled.
 
 Both bundles retain the inactive `MetroMcpAgent` export and the original `v1`
 `new_sqlite_classes` migration for rollback. Neither source map contains a
@@ -321,16 +334,20 @@ the tail was active. Sampled events reported successful Worker outcomes with no
 exceptions; no request body, bearer value, transit argument, signed request
 state, stack trace, or response body appeared in application telemetry.
 
-After updating this record, the final focused handler/routing slice passed 2
-files and 28 tests. Type checking passed all four projects; the full unit suite
-passed 26 files and 357 tests; the Workerd suite passed 1 file and 29 tests with
-10.97 seconds in test bodies; and the combined Apps-build/unit/Workerd gate
-passed with a 9.49-second Workerd test-body phase. Two additional Apps builds
+After updating this record, the final focused legal/server/header/release-docs
+slice passed 4 files and 53 tests. Type checking passed all four projects; the
+full unit suite passed 26 files and 362 tests; the Workerd suite passed 1 file
+and 30 tests with 10.86 seconds in test bodies; and the combined
+Apps-build/unit/Workerd gate passed with a 9.56-second Workerd test-body phase.
+The new assembled Workerd case completes the signed modern station-selection
+MRTR flow with an allowlisted candidate. Two additional Apps builds
 remained byte-identical at 392,515 bytes and SHA-256
 `5ad6ba1b0d1d580682a015cf93179e465195d8331975e95e3c028ca629f49c34`.
-Fresh production and preview dry-runs each exited `0`, read 24 assets, and
-reported only the intended public bindings. These were local validation
-commands; the production dry-run did not deploy production.
+Three additional full managed-Chromium runs each passed all 62 tests. Fresh
+production and preview dry-runs each exited `0`, read 25 files including the
+special `_headers` configuration, and reported only the intended public
+bindings. These were local validation commands; neither dry-run deployed a
+Worker and production was not changed.
 
 ## Source and security review
 

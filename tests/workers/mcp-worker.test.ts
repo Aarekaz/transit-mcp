@@ -1,5 +1,6 @@
 import { createExecutionContext, SELF } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
+import { CLIENT_CAPABILITIES_META_KEY } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import worker from '../../src/index';
@@ -311,6 +312,69 @@ describe('assembled MCP Worker', () => {
     });
     expect(prompt).toMatchObject({ resultType: 'complete' });
     expect(prompt).not.toHaveProperty('ttlMs');
+  });
+
+  it('completes modern ambiguous-station MRTR through the assembled Worker', async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const request = new Request(input);
+      if (request.url.startsWith('https://api-endpoint.mta.info/')) {
+        return new Response('upstream unavailable in deterministic MRTR test', { status: 503 });
+      }
+      throw new Error(`Unmatched outbound request: ${request.url}`);
+    });
+
+    const arguments_ = { city: 'nyc', stationName: 'Times Sq' };
+    const mrtrMeta = {
+      [CLIENT_CAPABILITIES_META_KEY]: { elicitation: { form: {} } },
+    };
+    const ambiguousResponse = await workerFetch(await modernMcpRequest('tools/call', {
+      name: 'get_station_predictions',
+      arguments: arguments_,
+    }, { meta: mrtrMeta }));
+    const ambiguousMessages = await readMcpResponse(ambiguousResponse);
+    expect(ambiguousResponse.status, JSON.stringify(ambiguousMessages)).toBe(200);
+    const ambiguous = onlyResult(ambiguousMessages);
+    const inputRequests = record(ambiguous.inputRequests);
+    const stationRequest = record(inputRequests.station);
+    const stationParams = record(stationRequest.params);
+    const requestedSchema = record(stationParams.requestedSchema);
+    const stationProperty = record(record(requestedSchema.properties).stationId);
+
+    expect(ambiguous).toMatchObject({ resultType: 'input_required' });
+    expect(ambiguous.requestState).toMatch(/^v1\./);
+    expect(stationRequest.method).toBe('elicitation/create');
+    expect(stationParams.message).toBe('Multiple stations match "Times Sq". Choose one.');
+    expect(stationProperty.enum).toEqual(['127', '725', '902', 'R16']);
+
+    const completionResponse = await workerFetch(await modernMcpRequest('tools/call', {
+      name: 'get_station_predictions',
+      arguments: arguments_,
+      inputResponses: {
+        station: { action: 'accept', content: { stationId: '127' } },
+      },
+      requestState: ambiguous.requestState,
+    }, { id: 2, meta: mrtrMeta }));
+    const completionMessages = await readMcpResponse(completionResponse);
+    expect(completionResponse.status, JSON.stringify(completionMessages)).toBe(200);
+    const completion = onlyResult(completionMessages);
+    const structuredContent = {
+      city: 'nyc',
+      station: '127',
+      predictions: [],
+    };
+
+    expect(completion).toEqual({
+      resultType: 'complete',
+      structuredContent,
+      content: [{ type: 'text', text: JSON.stringify(structuredContent) }],
+      _meta: {
+        'io.modelcontextprotocol/serverInfo': {
+          name: 'metro-mcp',
+          version: '6.0.0',
+        },
+      },
+    });
   });
 
   it('keeps ordinary 2025 stateless list/call behavior and legacy ambiguity guidance', async () => {

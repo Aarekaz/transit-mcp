@@ -64,15 +64,31 @@ It runs `@modelcontextprotocol/conformance` alpha.11 directly against the suppli
 
 Production and preview acceptance must use the anonymous public endpoints. Verify `/info` reports version `6.0.0`, protocol `2026-07-28`, endpoint paths `/mcp` and `/sse`, and authentication `{ "type": "none" }`, with no discovery endpoints. Verify an ordinary MCP 2026 discovery plus live DC and NYC tool calls, resource reads, prompt render, progress ordering, signed MRTR state, cancellation, 2025 stateless compatibility, and the `/sse` POST alias.
 
-## Checks still pending
+## Evidence classification
 
-These checks have not been run and are not claimed as passing:
+The independently configured preview Worker has completed the direct MCP
+server conformance probe. The frozen runner recorded 94 passed and 72 failed
+raw checks; its scored summary was 76 passed and 31 failed across 37 scenarios.
+Those failures are dominated by generic diagnostic fixtures and unadvertised
+task extensions, so this is recorded compatibility evidence rather than a
+zero-failure product claim. The preview Worker-tail scan was also completed:
+the stale-bearer and transit-argument canaries were absent, the allowlisted
+positive controls were present, and no request body, bearer value, transit
+argument, signed request state, stack trace, or response body appeared in
+application telemetry. Full context is retained in the verification record's
+[preview conformance](mcp-6-verification.md#preview-conformance-and-codex-client)
+and [preview log](mcp-6-verification.md#preview-rate-limit-calibration-and-logs)
+sections.
 
-- The direct MCP server conformance runner against a deployed environment.
-- A dedicated modern-MRTR Workerd scenario.
-- A final Worker-tail scan for sensitive operational values and inactive rollback assets.
+The assembled Workerd suite now covers the complete modern MRTR sequence: an
+ambiguous station request returns signed `input_required` state and an
+allowlisted candidate completes with the public wire result.
 
-Do not paste operational secrets, request bodies, or MRTR form contents when completing those checks.
+Production conformance, production-live acceptance, the production Worker-tail
+scan, rollback observation, and external OAuth cleanup remain pending. No
+preview or deterministic repository result is classified as production
+evidence. Do not paste operational secrets, request bodies, or MRTR form
+contents when completing the pending production checks.
 
 ## Rollback checks
 

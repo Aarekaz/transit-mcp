@@ -16,9 +16,9 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
       mcpServerLegacy: `${baseUrl}/sse`,
       website: baseUrl,
       documentation: 'https://metro-mcp.anuragd.me/docs/',
-      privacy: 'https://metro-mcp.anuragd.me/privacy',
-      terms: 'https://metro-mcp.anuragd.me/terms',
-      support: 'https://metro-mcp.anuragd.me/support',
+      privacy: 'https://metro-mcp.anuragd.me/privacy/',
+      terms: 'https://metro-mcp.anuragd.me/terms/',
+      support: 'https://metro-mcp.anuragd.me/support/',
     },
     capabilities: {
       tools: {},

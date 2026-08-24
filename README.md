@@ -88,9 +88,9 @@ See [MCP 2026 verification](docs/mcp-2026-verification.md) for protocol coverage
 ## Support and legal
 
 - [Documentation](https://metro-mcp.anuragd.me/docs/)
-- [Privacy](https://metro-mcp.anuragd.me/privacy)
-- [Terms](https://metro-mcp.anuragd.me/terms)
-- [Support](https://metro-mcp.anuragd.me/support)
+- [Privacy](https://metro-mcp.anuragd.me/privacy/)
+- [Terms](https://metro-mcp.anuragd.me/terms/)
+- [Support](https://metro-mcp.anuragd.me/support/)
 - [Issues](https://github.com/Aarekaz/metro-mcp/issues)
 
 ## License

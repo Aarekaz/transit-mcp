@@ -55,9 +55,9 @@ describe('getServerInfo', () => {
       mcpServer: 'https://metro-mcp.anuragd.me/mcp',
       mcpServerLegacy: 'https://metro-mcp.anuragd.me/sse',
       documentation: 'https://metro-mcp.anuragd.me/docs/',
-      privacy: 'https://metro-mcp.anuragd.me/privacy',
-      terms: 'https://metro-mcp.anuragd.me/terms',
-      support: 'https://metro-mcp.anuragd.me/support',
+      privacy: 'https://metro-mcp.anuragd.me/privacy/',
+      terms: 'https://metro-mcp.anuragd.me/terms/',
+      support: 'https://metro-mcp.anuragd.me/support/',
     });
   });
 

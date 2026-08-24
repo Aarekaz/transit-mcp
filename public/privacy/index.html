@@ -33,8 +33,14 @@
     <article class="legal-copy">
       <section aria-labelledby="request-data">
         <h2 id="request-data">What a transit request includes</h2>
-        <p>Your MCP client sends Metro MCP a tool name and the inputs needed to answer it. Depending on the tool, those inputs can include a city, station name or code, route or line identifier, stop identifier, or a location and search radius.</p>
-        <p>Metro MCP sends the necessary transit inputs to WMATA for DC requests and MTA for NYC requests. It returns the resulting public transit information to your client. Do not include secrets or unrelated personal information in transit inputs.</p>
+        <p>Your MCP client sends Metro MCP a request body with a tool name and the public transit arguments needed to answer it. Depending on the tool, those inputs can include a city, station name or code, route or line identifier, stop identifier, or a location and search radius. The Worker processes request bodies and public transit arguments only to answer the request.</p>
+        <p>Metro MCP sends the necessary transit inputs to WMATA for DC requests and MTA for NYC requests through server-to-server requests. It does not forward your IP address or conversation to either transit provider. It returns the resulting public transit information to your client. Do not include secrets or unrelated personal information in transit inputs.</p>
+      </section>
+
+      <section aria-labelledby="accounts-storage">
+        <h2 id="accounts-storage">No account or credential collection</h2>
+        <p>Metro MCP 6.0 does not require accounts and does not intentionally collect GitHub identity, OAuth grants, access tokens, refresh tokens, client registrations, cookies, or browser storage.</p>
+        <p>If a client still sends an old bearer credential, the Worker removes the Authorization header before dispatch. Metro MCP does not use it to identify you or grant access.</p>
       </section>
 
       <section aria-labelledby="metro-telemetry">
@@ -43,10 +49,20 @@
         <p>The Metro-owned allowlist has no client identity field. It excludes request bodies, transit input values, raw errors, secrets, and full responses. Invalid and unknown fields are dropped before the record is serialized.</p>
       </section>
 
+      <section aria-labelledby="request-state">
+        <h2 id="request-state">Short-lived station-selection state</h2>
+        <p>When a station name is ambiguous, a client-held signed request state can persist for up to five minutes. It contains only public station-selection fields: the tool, city, normalized query, and offered station IDs. It creates no server-side account or session.</p>
+      </section>
+
       <section aria-labelledby="provider-logs">
         <h2 id="provider-logs">Edge and provider logs</h2>
-        <p>Cloudflare platform and invocation logs may exist under the service operator&rsquo;s Cloudflare configuration and may contain HTTP or network metadata. Their contents and retention depend on Cloudflare and the active configuration.</p>
+        <p>Cloudflare necessarily processes network metadata such as your IP address. Cloudflare platform and invocation logs may exist under the service operator&rsquo;s Cloudflare configuration. Sampled Worker logs and traces contain only Metro MCP&rsquo;s allowlisted operational telemetry fields. Their contents and retention depend on Cloudflare and the active configuration; Metro MCP does not promise a retention period it cannot enforce.</p>
         <p>WMATA and MTA may also keep access or service logs when they receive upstream requests. Cloudflare and upstream provider logs and policies are outside Metro MCP&rsquo;s direct control.</p>
+      </section>
+
+      <section aria-labelledby="third-parties">
+        <h2 id="third-parties">Independent services and clients</h2>
+        <p>Third-party processing is subject to the policies of Cloudflare, GitHub hosting, WMATA, MTA, and your MCP client&rsquo;s policies as applicable. Claude, OpenAI, Codex, and other clients are independent services with their own policies; this page describes only the Metro MCP operator&rsquo;s practices.</p>
       </section>
 
       <section aria-labelledby="not-do">
@@ -54,14 +70,16 @@
         <ul>
           <li>Metro MCP does not sell personal information.</li>
           <li>There is no advertising on the service.</li>
+          <li>Request data is not used for model training by the Metro MCP operator.</li>
           <li>Metro MCP does not track you across websites or apps.</li>
           <li>These legal pages do not run scripts, set cookies, or use browser storage.</li>
         </ul>
       </section>
 
       <section aria-labelledby="questions">
-        <h2 id="questions">Questions or concerns</h2>
-        <p>For help, a privacy question, or the current security-reporting route, visit <a href="/support/">Metro MCP Support</a>. Because the service has no user accounts, there is no account profile to retrieve or delete.</p>
+        <h2 id="questions">Stop processing, questions, or concerns</h2>
+        <p>You can stop Metro MCP processing by disconnecting the service or ceasing requests. Because the service has no user accounts, there is no account profile to retrieve or delete.</p>
+        <p>For help, a privacy question, or the current security report route, visit <a href="/support/">Metro MCP Support</a>.</p>
       </section>
     </article>
   </main>
