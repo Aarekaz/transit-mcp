@@ -1,6 +1,9 @@
 import { defineConfig } from '@playwright/test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const baseURL = 'http://127.0.0.1:4178';
+const workerStateDirectory = join(tmpdir(), 'metro-mcp-playwright-worker-state');
 
 export default defineConfig({
   testDir: './tests/apps',
@@ -30,7 +33,7 @@ export default defineConfig({
     {
       command: [
         'bunx wrangler dev --local --ip 127.0.0.1 --port 4179',
-        '--persist-to /private/tmp/metro-mcp-playwright-worker-state',
+        `--persist-to ${JSON.stringify(workerStateDirectory)}`,
         '--var MCP_PUBLIC_ORIGIN:http://127.0.0.1:4179',
         '--var MCP_ALLOWED_HOSTNAMES:127.0.0.1',
         '--var MCP_ALLOWED_ORIGIN_HOSTNAMES:127.0.0.1',
