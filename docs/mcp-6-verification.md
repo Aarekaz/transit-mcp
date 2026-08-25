@@ -2,7 +2,7 @@
 
 Date: August 25, 2026 (America/New_York)
 
-Release candidate: Metro MCP `6.0.0`. The original pre-verification base was
+Release: Metro MCP `6.0.0`. The original pre-verification base was
 `7ef18cadee2153cf14a03e26830ddc55fd52bd2a`; the final reviewed runtime commit
 deployed to preview was
 `d00e32c3e8f961b3027ac86cde570cd24b14a0e8`.
@@ -10,10 +10,11 @@ deployed to preview was
 Protocol: MCP `2026-07-28`, anonymous stateless HTTP
 
 This record separates deterministic repository gates, a real local Worker,
-preview deployment, production work, and external cleanup. Task 7 changed only
-the independently configured Cloudflare preview Worker and a temporary Codex
-MCP entry that was removed after acceptance. Production, GitHub, marketplace,
-and external OAuth state were not changed.
+preview deployment, production deployment, and external cleanup. Task 7 changed
+only the independently configured Cloudflare preview Worker and a temporary
+Codex MCP entry that was removed after acceptance. Task 8 subsequently merged
+the reviewed release, deployed the same runtime to production, and completed
+the separately approved OAuth and obsolete-state cleanup recorded below.
 
 ## Environment and secret boundary
 
@@ -42,8 +43,8 @@ argument, or stale bearer canary is recorded here.
 | Automated repository | **Passed** | [package scripts](../package.json), [bounded-body unit tests](../tests/unit/mcp-http-handler.test.ts), [rate-before-read routing test](../tests/unit/index-routing.test.ts), [assembled Workerd tests](../tests/workers/mcp-worker.test.ts), and [browser configuration](../playwright.apps.config.ts) |
 | Local-live Wrangler | **Passed before the handler remediations; not rerun for the current handler delta** | The real `127.0.0.1:8787` matrix below ran on the pre-remediation verification tree. Current body-limit and bounded-allocation behavior passed the linked unit and Workerd suites, which is automated runtime evidence rather than a new local-live run. Runtime entrypoints: [Worker dispatch](../src/index.ts), [MCP handler](../src/mcp/http-handler.ts), [route normalizer](../src/route-normalizer.ts), and [direct conformance runner](../scripts/run-conformance.sh). |
 | Preview-live | **Passed** | The exact reviewed commit above was deployed only to the distinct preview environment declared in [Wrangler configuration](../wrangler.jsonc). The live results below exercise [Worker dispatch](../src/index.ts), [the MCP handler](../src/mcp/http-handler.ts), [the public router](../src/public-handler.ts), [the catalog](../src/mcp/server.ts), and [the rate limiter](../src/rate-limit.ts). |
-| Production-live | **Pending** | Merge/deploy acceptance is intentionally deferred to the [Task 8 production gate](superpowers/plans/2026-08-21-metro-mcp-6-anonymous.md#task-8-review-merge-deploy-production-and-retire-external-oauth-state). Production routes and bindings are in [Wrangler configuration](../wrangler.jsonc). |
-| External OAuth cleanup | **Pending owner confirmation** | The irreversible ownership and cleanup gate is defined in the [approved design](superpowers/specs/2026-08-21-metro-mcp-6-anonymous-design.md#cleanup-and-rollback) and [Task 8 plan](superpowers/plans/2026-08-21-metro-mcp-6-anonymous.md#task-8-review-merge-deploy-production-and-retire-external-oauth-state). |
+| Production-live | **Passed** | PR [#16](https://github.com/Aarekaz/metro-mcp/pull/16) merged as `8407d2a841a041f55115d44a8dca87411584fa60`; the exact release tree was deployed and passed the production matrix below. Production routes and bindings are in [Wrangler configuration](../wrangler.jsonc). |
+| External OAuth cleanup | **Passed after owner confirmation** | The irreversible ownership and cleanup gate from the [approved design](superpowers/specs/2026-08-21-metro-mcp-6-anonymous-design.md#cleanup-and-rollback) and [Task 8 plan](superpowers/plans/2026-08-21-metro-mcp-6-anonymous.md#task-8-review-merge-deploy-production-and-retire-external-oauth-state) was completed by exact name/ID, then both environments were reverified. |
 
 “Passed” in one row does not imply another row passed. In particular, local
 evidence is not presented as preview, production, client-marketplace, or
@@ -249,11 +250,12 @@ The deployed preview inventory matched [Wrangler configuration](../wrangler.json
 the preview custom domain and public origin, Host and browser-Origin allowlists,
 environment marker, 24 served assets plus the `_headers` configuration file,
 and `MCP_RATE_LIMITER` at 300 requests per 60 seconds. The required
-`MCP_REQUEST_STATE_KEY` and `WMATA_API_KEY` encrypted
-secrets remained present. The retired `GITHUB_CLIENT_SECRET` and `JWT_SECRET`
-encrypted values also remained stored, intentionally pending the separate
-post-production cleanup gate; no code path reads them. No OAuth public
-variable, OAuth route, provider binding, or KV binding was deployed.
+`MCP_REQUEST_STATE_KEY` and `WMATA_API_KEY` encrypted secrets remained present.
+At initial preview acceptance, the retired `GITHUB_CLIENT_SECRET` and
+`JWT_SECRET` encrypted values were still stored pending the separate
+post-production cleanup gate; no code path read them. They were removed during
+the approved cleanup recorded below. No OAuth public variable, OAuth route,
+provider binding, or KV binding was deployed.
 
 The live preview matrix exercised the implementation linked in the
 [source-linked verification matrix](#source-linked-verification-matrix):
@@ -365,6 +367,87 @@ special `_headers` configuration, and reported only the intended public
 bindings. These were local validation commands; neither dry-run deployed a
 Worker and production was not changed.
 
+## Production deployment, cleanup, and post-cleanup acceptance
+
+PR [#16](https://github.com/Aarekaz/metro-mcp/pull/16) merged the reviewed
+release as `8407d2a841a041f55115d44a8dca87411584fa60`. The exact merge tree was
+installed with the frozen Bun lockfile, type-checked, dry-run, and deployed to
+production as version `63109890-bb76-4480-ba90-b3ecfef4e34a`. Production then
+passed the same 12-group acceptance matrix used for exact-head preview. A
+version-pinned, self-IP production tail observed two read-only canaries return
+`200`; application logs contained only the allowlisted telemetry fields, no
+stale-bearer canary, and no exception. Cloudflare's outer invocation record
+contained ordinary edge metadata and represented the authorization field as
+redacted; it was not an application log.
+
+After this acceptance evidence, the owner gave the plan's required final
+confirmation for irreversible cleanup. The approved broader scope also removed
+the obsolete pre-6.0 session and KV rate-limit state. Cleanup and its immediate
+verification completed on August 25, 2026, by `2026-08-25T19:57:48Z`. No
+secret value was read or recorded.
+
+The following exact retired Cloudflare resources were deleted:
+
+| Resource type | Environment/name | ID when applicable |
+| --- | --- | --- |
+| encrypted secret | production `GITHUB_CLIENT_SECRET` | name only |
+| encrypted secret | production `JWT_SECRET` | name only |
+| encrypted secret | preview `GITHUB_CLIENT_SECRET` | name only |
+| encrypted secret | preview `JWT_SECRET` | name only |
+| OAuth provider KV | `OAUTH_KV` | `d93416b961b0442b80c04b0081105ff6` |
+| OAuth provider KV | `OAUTH_KV_preview` | `e66115284977469fa58e5537976647f7` |
+| legacy client-registration KV | `OAUTH_CLIENTS` | `44f6224b68354c24bf071e2b53b13dbb` |
+| legacy client-registration KV | `OAUTH_CLIENTS_preview` | `7d10b069531a459cb56ed59220ede55b` |
+| obsolete session KV | `MCP_SESSIONS` | `5d8c66d201ed4fa3ac00f7acdb930632` |
+| obsolete session KV | `MCP_SESSIONS_preview` | `da9efc735f9a49f7ba1827ebf5d33d29` |
+| obsolete KV rate limit | `RATE_LIMIT_KV` | `93885a8c949b4298a7d866e2cef408b3` |
+| obsolete KV rate limit | `RATE_LIMIT_KV_preview` | `7cbeddccb3a94346b4452f40bc692b39` |
+
+GitHub accepted and completed deletion jobs for the three Aarekaz-owned Metro
+OAuth Apps. Direct authenticated visits to every former settings URL returned
+GitHub's `Page not found` result:
+
+| GitHub OAuth App | Application ID |
+| --- | --- |
+| `Metro MCP Server` | `3308666` |
+| `Metro MCP Server Preview` | `3792382` |
+| `Metro MCP Server Local` | `3792616` |
+
+Deleting the two retired secrets in each environment created secret-triggered
+Worker versions without changing the script. Production deployment
+`a490efe0-0364-4387-8180-7aebbe5b877e` now serves version
+`f33bb8df-77c8-4b8f-9fb8-0456af6c3d2b`; preview deployment
+`e8dcfd8c-6719-4e8e-80cc-3af51e58b7c9` serves version
+`1729a618-a726-4213-9982-8e7d472f0bee`. Both current versions report script
+ETag `a8976347cc67b79e4e9b5f864fcf7a5b2eb257a8f3141d20a8c7874194cfe225`.
+
+Fresh post-cleanup inventories proved that both Workers retain only
+`MCP_REQUEST_STATE_KEY` and `WMATA_API_KEY` as encrypted secrets. The current
+production version retains `MCP_RATE_LIMITER` namespace `2026082101`; preview
+retains namespace `2026082102`. Both policies remain 300 requests per 60
+seconds. The account KV list contains only unrelated `KHANA_KV`,
+`RAINDROP_AUTH_KV`, and `RAINDROP_AUTH_KV_preview`; none was changed.
+
+The full post-cleanup matrix passed 12 of 12 groups independently against both
+`https://metro-mcp.anuragd.me` and
+`https://metro-mcp-preview.anuragd.me`:
+
+| Post-cleanup surface | Production | Preview |
+| --- | --- | --- |
+| `/info`, legal/support pages, and security headers | passed | passed |
+| modern anonymous discovery and exact `13/3/3` catalog | passed | passed |
+| Transit Board public/MCP bytes and deterministic SHA-256 | passed | passed |
+| representative resource and prompt | passed | passed |
+| real WMATA `A01` and public MTA `127` predictions | passed | passed |
+| signed MRTR Times Square selection | passed | passed |
+| progress, cancellation recovery, MCP 2025, and `/sse` | passed | passed |
+| stale bearer equivalence and all eight OAuth-route `404`s | passed | passed |
+| trust, method, preflight, exact 1 MiB, and oversized `413` boundaries | passed | passed |
+
+External OAuth rollback is no longer one click: returning to 5.0 would require
+recreating the deleted GitHub Apps, secrets, and KV namespaces. The accepted
+6.0 service does not depend on any of them.
+
 ## Source and security review
 
 The active trust path is source-linked as follows:
@@ -452,9 +535,9 @@ WMATA's current [developer portal](https://developer.wmata.com/products) does
 not publish this account's numeric service-tier quota, and its
 [Transit Data Terms of Use](https://developer.wmata.com/license) distinguish an
 end-user application from exposing Transit Data through an API. Confirmation
-of the account-specific quota and any required redistribution authorization is
-an external owner/legal condition before production; preview testing did not
-attempt to infer either one.
+of the account-specific quota and any required redistribution authorization
+remains an external owner/legal operational condition; the acceptance tests do
+not infer either one.
 
 The independent 1 MiB request-body ceiling protects parsing memory per admitted
 MCP POST. It intentionally leaves ample headroom over the small public 13/3/3
@@ -472,21 +555,29 @@ retains no per-chunk array.
 
 ## Deployed and external status
 
-- Exact-head preview-live anonymous acceptance: **Passed** on preview version
-  `bf79177a-1929-4508-93d0-b38ff9f1c91a` from reviewed runtime commit
-  `d00e32c3`.
+- Reviewed release and production deployment: **Passed**. PR
+  [#16](https://github.com/Aarekaz/metro-mcp/pull/16) merged as `8407d2a`; the
+  exact release tree passed production acceptance before cleanup.
+- Current post-cleanup production-live acceptance: **Passed** on
+  secret-triggered version `f33bb8df-77c8-4b8f-9fb8-0456af6c3d2b` with the
+  unchanged release script.
+- Current post-cleanup preview-live acceptance: **Passed** on secret-triggered
+  version `1729a618-a726-4213-9982-8e7d472f0bee` with the unchanged release
+  script.
+- Exact-head pre-cleanup preview-live anonymous acceptance: **Passed** on
+  preview version `bf79177a-1929-4508-93d0-b38ff9f1c91a` from reviewed runtime
+  commit `d00e32c3`.
 - Earlier Codex client acceptance, rate-limit calibration, and canary log scan:
   **Passed** on preview version `d8fb4612-da66-4932-b69a-335b21783b82` from
   runtime commit `085bdc39`; these are retained as historical evidence rather
   than relabeled as exact-head runs.
-- Production-live acceptance, production log scan, and post-deploy rollback
-  observation: **Pending**.
-- Retired Cloudflare OAuth/KV/dashboard values, encrypted secrets, and GitHub
-  OAuth application cleanup: **Pending** and must occur only after the approved
-  production observation window.
+- Retired Cloudflare OAuth secrets, OAuth KV, obsolete Metro session/rate-limit
+  KV, and all three Metro GitHub OAuth Apps: **Deleted after explicit owner
+  confirmation**, with exact post-cleanup inventories and live acceptance
+  recorded above.
 - Claude client acceptance: **User-waived**, not passed.
 - Marketplace submission and any remaining client-directory acceptance:
   **Pending**.
 
-No pending item above is claimed as complete by this preview verification
-record.
+No pending marketplace or client-directory item above is claimed complete by
+this production verification record.
