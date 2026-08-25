@@ -58,11 +58,11 @@ boundary's focused source-linked evidence is in
 
 | Gate | Exact result |
 | --- | --- |
-| `bun install --frozen-lockfile` | passed; 439 installs across 538 packages; no changes |
+| `bun install --frozen-lockfile` | passed; 407 packages installed; no lockfile changes |
 | `bun run type-check` | passed; all four TypeScript projects |
-| `bun run test:unit` | passed; 26 files, 362 tests |
-| `bun run test:workers` | passed; 1 file, 30 tests; 10.86 seconds in test bodies |
-| `bun run test` | passed; Apps build, 362 unit tests, 30 Workerd tests; Workerd phase 9.56 seconds in test bodies |
+| `bun run test:unit` | passed; 26 files, 365 tests |
+| `bun run test:workers` | passed; 1 file, 30 tests |
+| `bun run test` | passed; Apps build, 365 unit tests, 30 Workerd tests |
 
 Workerd emitted only the known missing-source sourcemap messages from pinned
 third-party packages. The messages do not identify an application test failure.
@@ -106,10 +106,10 @@ cover all thirteen dedicated tool renderers, the five visual families,
 desktop/mobile legal pages, real Worker-backed `/`, `/docs/`, `/privacy/`,
 `/terms/`, `/support/`, and `/info` routing, keyboard/focus and overflow
 behavior, host lifecycle, hostile text, and the positive self-checks for every
-security observer. The body-limit remediation changes only the Worker request
-handler and its server-side tests. Two clean remediation builds reproduced the
-same size and hash above, so no production Apps artifact changed and browser
-reruns were not applicable to the remediation.
+security observer. The final body-limit hardening changes only the Worker
+request handler and its server-side tests. Two clean remediation builds
+reproduced the same size and hash above, and three more zero-retry browser runs
+each passed all 62 tests.
 
 The generated artifact is [Transit Board](../public/apps/transit-board.html),
 its build inputs are under [the Transit Board application](../apps/transit-board/),
@@ -336,9 +336,8 @@ state, stack trace, or response body appeared in application telemetry.
 
 After updating this record, the final focused legal/server/header/release-docs
 slice passed 4 files and 53 tests. Type checking passed all four projects; the
-full unit suite passed 26 files and 362 tests; the Workerd suite passed 1 file
-and 30 tests with 10.86 seconds in test bodies; and the combined
-Apps-build/unit/Workerd gate passed with a 9.56-second Workerd test-body phase.
+full unit suite passed 26 files and 365 tests; the Workerd suite passed 1 file
+and 30 tests; and the combined Apps-build/unit/Workerd gate passed.
 The new assembled Workerd case completes the signed modern station-selection
 MRTR flow with an allowlisted candidate. Two additional Apps builds
 remained byte-identical at 392,515 bytes and SHA-256
@@ -401,13 +400,17 @@ chunk and `79,003,648` bytes for 300,000 one-byte chunks. Those figures diagnose
 relative object amplification; they are not a production-memory measurement or
 a committed absolute memory threshold.
 
-The review fix replaces that array with one preallocated 1 MiB-plus-sentinel
-backing store in [the shared handler](../src/mcp/http-handler.ts). A deterministic
-[unit regression](../tests/unit/mcp-http-handler.test.ts) appends 300,000 tiny
-chunks and proves that the backing `ArrayBuffer` identity never changes. A
-direct 1,048,577 one-byte probe observed exactly 1,048,576 accepted appends,
-overflow on the sentinel, `1,048,577` buffered bytes, and the same backing
-allocation. The focused handler/cancellation/routing slice passed 32 tests;
+The first review fix replaced that array with one preallocated 1 MiB-plus-sentinel
+backing store. Follow-up security validation then found that every slow admitted
+POST reserved the full ceiling before receiving a byte and that already-aborted
+streamed POSTs could bypass the bounded reader. The final implementation in
+[the shared handler](../src/mcp/http-handler.ts) validates a trustworthy declared
+length before the abort branch, never dispatches an already-aborted streamed
+body, and grows one backing store geometrically from zero to the same hard
+limit. Deterministic [unit regressions](../tests/unit/mcp-http-handler.test.ts)
+prove that an empty accumulator does not reserve the ceiling, 300,000 tiny
+chunks require fewer than 32 growth operations, and overflow stops at the
+1,048,577-byte sentinel. The focused handler and cancellation slice passed 18 tests;
 [Workerd](../tests/workers/mcp-worker.test.ts) still verifies exact `413`
 responses through `/mcp` and `/sse`, no body-canary telemetry, and `200` at
 exactly 1 MiB. [The routing test](../tests/unit/index-routing.test.ts) still
@@ -444,9 +447,11 @@ compatibility limit, not a quota response.
 Cloudflare's current [Workers limits](https://developers.cloudflare.com/workers/platform/limits/#memory)
 document a 128 MB per-isolate memory ceiling, while its
 [BYOB stream guidance](https://developers.cloudflare.com/workers/runtime-apis/streams/readablestreambyobreader/#common-issues)
-warns that a read may legally yield only one byte. The fixed backing allocation
-therefore does not depend on coarse runtime chunking. Stream objects and runtime
-internals remain platform-owned; the application retains no per-chunk array.
+warns that a read may legally yield only one byte. The geometrically growing
+bounded allocation therefore does not depend on coarse runtime chunking and
+does not reserve the full ceiling for a slow request that has not supplied it.
+Stream objects and runtime internals remain platform-owned; the application
+retains no per-chunk array.
 
 ## Deployed and external status
 

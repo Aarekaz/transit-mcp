@@ -17,16 +17,28 @@ export type McpBodyAccumulator = {
   bytes: () => Uint8Array;
 };
 
-/** Copy streamed bytes into one fixed 1 MiB-plus-sentinel backing allocation. */
+/** Copy streamed bytes into one geometrically growing buffer capped at limit plus sentinel. */
 export function createMcpBodyAccumulator(): McpBodyAccumulator {
-  const storage = new Uint8Array(MCP_REQUEST_BODY_LIMIT_BYTES + 1);
+  const maximumLength = MCP_REQUEST_BODY_LIMIT_BYTES + 1;
+  let storage = new Uint8Array(0);
   let byteLength = 0;
 
   return {
     append(chunk) {
-      const copiedLength = Math.min(chunk.byteLength, storage.byteLength - byteLength);
+      const requiredLength = Math.min(maximumLength, byteLength + chunk.byteLength);
+      if (requiredLength > storage.byteLength) {
+        let capacity = Math.max(8 * 1024, storage.byteLength);
+        while (capacity < requiredLength) {
+          capacity = Math.min(maximumLength, capacity * 2);
+        }
+        const grown = new Uint8Array(capacity);
+        grown.set(storage.subarray(0, byteLength));
+        storage = grown;
+      }
+
+      const copiedLength = requiredLength - byteLength;
       storage.set(chunk.subarray(0, copiedLength), byteLength);
-      byteLength += copiedLength;
+      byteLength = requiredLength;
       return byteLength <= MCP_REQUEST_BODY_LIMIT_BYTES;
     },
     bytes() {
@@ -58,12 +70,16 @@ function rebuildRequestBody(request: Request, body: Uint8Array): Request {
 
 async function boundedMcpPostRequest(request: Request): Promise<Request | Response> {
   if (request.method.toUpperCase() !== 'POST') return request;
-  if (request.signal.aborted) return request;
 
   const declaredLength = validDeclaredBodyLength(request);
   if (declaredLength !== undefined
     && declaredLength > BigInt(MCP_REQUEST_BODY_LIMIT_BYTES)) {
     return requestBodyTooLargeResponse();
+  }
+
+  if (request.signal.aborted) {
+    if (request.body !== null) throw request.signal.reason;
+    return request;
   }
 
   if (request.body === null) return request;

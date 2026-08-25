@@ -117,6 +117,49 @@ describe('handleMcpRequest', () => {
     expect(handlerFetch).not.toHaveBeenCalled();
   });
 
+  it('rejects an oversized declared body even when the request is already aborted', async () => {
+    const incoming = new AbortController();
+    incoming.abort(new DOMException('client disconnected', 'AbortError'));
+    let pulled = false;
+    const body = new ReadableStream({
+      type: 'bytes',
+      pull() {
+        pulled = true;
+      },
+    } as UnderlyingByteSource);
+    handlerFetch.mockResolvedValueOnce(Response.json({ result: { reachedSdk: true } }));
+
+    const response = await handleMcpRequest(
+      streamingPostRequest(body, '16777477', incoming.signal),
+      createMockEnv(),
+    );
+
+    expect(response.status).toBe(413);
+    expect(pulled).toBe(false);
+    expect(handlerFetch).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch an already-aborted streamed body with no declared length', async () => {
+    const incoming = new AbortController();
+    const reason = new DOMException('client disconnected', 'AbortError');
+    incoming.abort(reason);
+    let pulled = false;
+    const body = new ReadableStream({
+      type: 'bytes',
+      pull() {
+        pulled = true;
+      },
+    } as UnderlyingByteSource);
+    handlerFetch.mockResolvedValueOnce(Response.json({ result: { reachedSdk: true } }));
+
+    await expect(handleMcpRequest(
+      streamingPostRequest(body, undefined, incoming.signal),
+      createMockEnv(),
+    )).rejects.toBe(reason);
+    expect(pulled).toBe(false);
+    expect(handlerFetch).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['absent', undefined],
     ['invalid', 'invalid'],
@@ -147,23 +190,35 @@ describe('handleMcpRequest', () => {
     expect(handlerFetch).not.toHaveBeenCalled();
   });
 
-  it('keeps one fixed backing allocation across very many tiny chunks', () => {
+  it('grows the bounded backing buffer geometrically across very many tiny chunks', () => {
     const accumulator = createMcpBodyAccumulator();
-    const backing = accumulator.bytes().buffer;
     const oneByte = new Uint8Array([0x61]);
     let allAccepted = true;
+    let backing = accumulator.bytes().buffer;
+    let growthCount = 0;
 
     for (let index = 0; index < 300_000; index += 1) {
       allAccepted = accumulator.append(oneByte) && allAccepted;
+      const currentBacking = accumulator.bytes().buffer;
+      if (currentBacking !== backing) {
+        backing = currentBacking;
+        growthCount += 1;
+      }
     }
 
     expect(allAccepted).toBe(true);
-    expect(accumulator.bytes().buffer).toBe(backing);
+    expect(growthCount).toBeLessThan(32);
     expect(accumulator.bytes().byteLength).toBe(300_000);
     expect(accumulator.append(new Uint8Array(MCP_REQUEST_BODY_LIMIT_BYTES + 1 - 300_000)))
       .toBe(false);
-    expect(accumulator.bytes().buffer).toBe(backing);
     expect(accumulator.bytes().byteLength).toBe(MCP_REQUEST_BODY_LIMIT_BYTES + 1);
+  });
+
+  it('does not reserve the full request limit before body bytes arrive', () => {
+    const accumulator = createMcpBodyAccumulator();
+
+    expect(accumulator.bytes().byteLength).toBe(0);
+    expect(accumulator.bytes().buffer.byteLength).toBeLessThan(64 * 1024);
   });
 
   it('rebuilds an exactly-at-limit request for anonymous SDK dispatch', async () => {
