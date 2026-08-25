@@ -1,10 +1,11 @@
 # Metro MCP 6.0 verification record
 
-Date: August 24, 2026 (America/New_York)
+Date: August 25, 2026 (America/New_York)
 
 Release candidate: Metro MCP `6.0.0`. The original pre-verification base was
-`7ef18cadee2153cf14a03e26830ddc55fd52bd2a`; the exact reviewed commit deployed
-to preview was `085bdc39f3ca90c138d73233f73dffcff6a41db9`.
+`7ef18cadee2153cf14a03e26830ddc55fd52bd2a`; the final reviewed runtime commit
+deployed to preview was
+`d00e32c3e8f961b3027ac86cde570cd24b14a0e8`.
 
 Protocol: MCP `2026-07-28`, anonymous stateless HTTP
 
@@ -235,18 +236,20 @@ release's product-specific acceptance gate.
 
 ## Preview deployment and live acceptance
 
-The exact reviewed commit
-`085bdc39f3ca90c138d73233f73dffcff6a41db9` was deployed with
+The final reviewed runtime commit
+`d00e32c3e8f961b3027ac86cde570cd24b14a0e8` was deployed with
 `bunx wrangler deploy --env preview` only. Cloudflare created preview version
-`d8fb4612-da66-4932-b69a-335b21783b82` at
-`2026-08-23T19:41:58.088Z` and assigned it 100 percent of the independently
+`bf79177a-1929-4508-93d0-b38ff9f1c91a` and made it the current independently
 configured `metro-mcp-preview` deployment. Production was not deployed or
-modified.
+modified. The commit that adds this evidence record changes documentation only;
+the deployed Worker source and static assets remain exactly those from the
+runtime commit above.
 
 The deployed preview inventory matched [Wrangler configuration](../wrangler.jsonc):
 the preview custom domain and public origin, Host and browser-Origin allowlists,
-environment marker, 24 static assets, and `MCP_RATE_LIMITER` at 300 requests per
-60 seconds. The required `MCP_REQUEST_STATE_KEY` and `WMATA_API_KEY` encrypted
+environment marker, 24 served assets plus the `_headers` configuration file,
+and `MCP_RATE_LIMITER` at 300 requests per 60 seconds. The required
+`MCP_REQUEST_STATE_KEY` and `WMATA_API_KEY` encrypted
 secrets remained present. The retired `GITHUB_CLIENT_SECRET` and `JWT_SECRET`
 encrypted values also remained stored, intentionally pending the separate
 post-production cleanup gate; no code path reads them. No OAuth public
@@ -257,16 +260,16 @@ The live preview matrix exercised the implementation linked in the
 
 | Preview surface | Observed result |
 | --- | --- |
-| `/info` and legal pages | `200`; version `6.0.0`, protocol `2026-07-28`, authentication `none`, catalog `13/3/3`; privacy, terms, and support returned HTML |
+| `/info` and legal pages | `200`; version `6.0.0`, protocol `2026-07-28`, authentication `none`, catalog `13/3/3`; privacy, terms, and support returned scriptless HTML with the intended CSP and shared defenses |
 | modern discovery and catalog | anonymous discovery completed; exact 13 tools, 3 resource templates, and 3 prompts |
-| Transit Board App | `ui://metro-mcp/transit-board.html` returned the exact `392515`-byte MCP App HTML |
+| Transit Board App | public and `ui://metro-mcp/transit-board.html` bytes matched the exact `392515`-byte deterministic artifact and SHA-256 `5ad6ba1b0d1d580682a015cf93179e465195d8331975e95e3c028ca629f49c34` |
 | real transit | WMATA `A01` and public MTA `127` prediction calls completed |
 | resource and prompt | NYC station resource and DC service-briefing prompt completed |
-| progress and cancellation | two ordered progress notifications preceded the result; reader cancellation and request abort stopped the in-flight exchange and a follow-up request succeeded |
+| progress and cancellation | at least two ordered progress notifications preceded the result; a client-aborted follow-up left the next discovery request healthy |
 | MRTR | signed `v1` Times Square `input_required` state completed after an allowlisted selection |
 | compatibility and alias | MCP 2025 headerless tools list exposed the same 13 tools; modern discovery completed through normalized `/sse` |
 | OAuth retirement and stale bearer | all eight former OAuth routes returned `404`; stale bearer and anonymous discovery were byte-equivalent with no challenge |
-| trust and methods | invalid Host and browser Origin returned `403`; insecure HTTP canonicalized to HTTPS with an exact edge `301`; all eight unsupported method/session cases returned `405` |
+| trust and methods | invalid browser Origin and the noncanonical workers.dev Host/origin returned `403`; all eight unsupported method/session cases returned `405`; canonical preflight returned `200` without an authentication challenge |
 | request-body boundary | exact 1 MiB `/mcp` reached the SDK; oversized `/mcp` and normalized `/sse` returned deterministic `413` |
 
 Cloudflare performs the observed scheme canonicalization before Worker dispatch;
@@ -274,6 +277,13 @@ the [assembled Workerd suite](../tests/workers/mcp-worker.test.ts) separately
 proves the Worker-visible noncanonical-origin `403` contract.
 
 ### Preview conformance and Codex client
+
+The conformance and Codex-client results in this subsection were collected on
+the earlier preview version `d8fb4612-da66-4932-b69a-335b21783b82` from runtime
+commit `085bdc39f3ca90c138d73233f73dffcff6a41db9`; they were not rerun after the
+bounded-body remediations. The exact-head live matrix above independently
+reverified discovery, catalog, representative real DC/NYC calls, compatibility,
+and cancellation recovery on the current runtime version.
 
 The same frozen [direct conformance runner](../scripts/run-conformance.sh)
 targeted the preview `/mcp` endpoint. It listed 69 server scenarios and ran 50
@@ -297,6 +307,13 @@ requested calls and the final result had already completed. Claude client
 acceptance was explicitly user-waived for this gate and is not claimed passed.
 
 ### Preview rate-limit calibration and logs
+
+The calibration and canary-log results in this subsection were also collected
+on preview version `d8fb4612-da66-4932-b69a-335b21783b82`. The rate-limiter
+configuration and ordering are unchanged at the final runtime commit; the full
+repository gate and exact-head live matrix reverified ordinary admission and
+fail-closed routing, but did not repeat the destructive quota-exhaustion or log
+tail.
 
 Three legitimate parallel bursts each issued eight MCP POSTs: discovery, all
 four catalog/list surfaces, Transit Board App loading, and one DC plus one NYC
@@ -455,9 +472,13 @@ retains no per-chunk array.
 
 ## Deployed and external status
 
-- Preview-live anonymous acceptance, Codex client acceptance, rate-limit
-  calibration, and canary log scan: **Passed** on preview version
-  `d8fb4612-da66-4932-b69a-335b21783b82` from reviewed commit `085bdc39`.
+- Exact-head preview-live anonymous acceptance: **Passed** on preview version
+  `bf79177a-1929-4508-93d0-b38ff9f1c91a` from reviewed runtime commit
+  `d00e32c3`.
+- Earlier Codex client acceptance, rate-limit calibration, and canary log scan:
+  **Passed** on preview version `d8fb4612-da66-4932-b69a-335b21783b82` from
+  runtime commit `085bdc39`; these are retained as historical evidence rather
+  than relabeled as exact-head runs.
 - Production-live acceptance, production log scan, and post-deploy rollback
   observation: **Pending**.
 - Retired Cloudflare OAuth/KV/dashboard values, encrypted secrets, and GitHub
