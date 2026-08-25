@@ -105,17 +105,10 @@ const dcPrediction: TransitPrediction = {
 
 function metroContext(
   era: MetroMcpContext['era'] = 'modern',
-  userId = 'user-42',
 ): MetroMcpContext {
   return {
     env: createMockEnv({ MCP_REQUEST_STATE_KEY: REQUEST_STATE_KEY }),
     era,
-    props: {
-      userId,
-      userLogin: 'anurag',
-      clientId: 'test-client',
-      scopes: ['transit:read'],
-    },
   };
 }
 
@@ -123,10 +116,7 @@ function stateCodecFor(context: MetroMcpContext): RequestStateCodec<MetroRequest
   return createRequestStateCodec<MetroRequestState>({
     key: context.env.MCP_REQUEST_STATE_KEY,
     ttlSeconds: 300,
-    bind: handlerContext => [
-      context.props.userId,
-      handlerContext.mcpReq.method,
-    ].join('\u0000'),
+    bind: handlerContext => handlerContext.mcpReq.method,
   });
 }
 
@@ -600,8 +590,8 @@ describe('station tool contracts', () => {
 });
 
 describe('station MRTR state machine', () => {
-  function ambiguousSetup(era: MetroMcpContext['era'] = 'modern', userId = 'user-42') {
-    const context = metroContext(era, userId);
+  function ambiguousSetup(era: MetroMcpContext['era'] = 'modern') {
+    const context = metroContext(era);
     const stateCodec = stateCodecFor(context);
     const captured = captureStationTools(context, stateCodec);
     const client = clientWith({
@@ -649,7 +639,6 @@ describe('station MRTR state machine', () => {
       query: 'times square',
       candidateIds: ['127', 'R16'],
     });
-    expect(JSON.stringify(envelope)).not.toContain('user-42');
     expect(JSON.stringify(envelope)).not.toContain('Times Square -');
   });
 
@@ -810,15 +799,6 @@ describe('station MRTR state machine', () => {
     const tampered = `${version}.${payload}.${replacement}${mac.slice(1)}`;
 
     await expect(stateCodec.verify(tampered, context)).rejects.toThrow('mac');
-  });
-
-  it('rejects cross-user state replay', async () => {
-    const first = ambiguousSetup('modern', 'user-42');
-    const second = ambiguousSetup('modern', 'user-99');
-    const context = requestContext();
-    const wireState = await mintSelectionState(first.stateCodec, context);
-
-    await expect(second.stateCodec.verify(wireState, context)).rejects.toThrow('bind');
   });
 
   it('rejects state replay under another MCP method', async () => {

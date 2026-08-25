@@ -16,7 +16,7 @@
     "global_fetch_strictly_public"
   ],
   "workers_dev": true,
-  "keep_vars": true,
+  "keep_vars": false,
   "minify": true,
   "upload_source_maps": true,
 
@@ -29,22 +29,20 @@
     }
   ],
 
-  "kv_namespaces": [
-    {
-      "binding": "OAUTH_KV",
-      "id": "d93416b961b0442b80c04b0081105ff6",
-      "preview_id": "e66115284977469fa58e5537976647f7"
-    }
-  ],
-
   "vars": {
-    "GITHUB_CLIENT_ID": "Ov23liGFwmOZeECJ6yeN",
     "MCP_PUBLIC_ORIGIN": "https://metro-mcp.anuragd.me",
     "MCP_ALLOWED_HOSTNAMES": "metro-mcp.anuragd.me",
     "MCP_ALLOWED_ORIGIN_HOSTNAMES": "metro-mcp.anuragd.me",
-    "OAUTH_REDIRECT_URI": "https://metro-mcp.anuragd.me/callback",
     "ENVIRONMENT": "production"
   },
+
+  "ratelimits": [
+    {
+      "name": "MCP_RATE_LIMITER",
+      "namespace_id": "2026082101",
+      "simple": { "limit": 300, "period": 60 }
+    }
+  ],
 
   "env": {
     "preview": {
@@ -57,17 +55,16 @@
         }
       ],
       "vars": {
-        "GITHUB_CLIENT_ID": "Ov23li2oFCt24EJJ0X1O",
         "MCP_PUBLIC_ORIGIN": "https://metro-mcp-preview.anuragd.me",
         "MCP_ALLOWED_HOSTNAMES": "metro-mcp-preview.anuragd.me",
         "MCP_ALLOWED_ORIGIN_HOSTNAMES": "metro-mcp-preview.anuragd.me",
-        "OAUTH_REDIRECT_URI": "https://metro-mcp-preview.anuragd.me/callback",
         "ENVIRONMENT": "preview"
       },
-      "kv_namespaces": [
+      "ratelimits": [
         {
-          "binding": "OAUTH_KV",
-          "id": "e66115284977469fa58e5537976647f7"
+          "name": "MCP_RATE_LIMITER",
+          "namespace_id": "2026082102",
+          "simple": { "limit": 300, "period": 60 }
         }
       ]
     }

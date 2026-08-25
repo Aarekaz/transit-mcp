@@ -2,11 +2,11 @@
 
 Date: 2026-08-20 (America/New_York)
 
-Release candidate: Metro MCP `5.0.0`
+Release candidate: Metro MCP `6.0.0`
 
 MCP Apps extension: stable `2026-01-26`
 
-This record defines the reproducible local acceptance boundary for the Transit Board MCP App. It contains no access token, provider credential, identity, live transit response, or authorization artifact.
+This record defines the reproducible local acceptance boundary for the Transit Board MCP App at `https://metro-mcp.anuragd.me/mcp`. No login is required. No client credentials, token, or OAuth flow is required for the public endpoint.
 
 ## Rendering and fallback boundary
 
@@ -30,7 +30,7 @@ All thirteen existing read-only tools reference `ui://metro-mcp/transit-board.ht
 
 An Apps-capable host reads the shared UI resource, mounts it in a sandbox, then delivers tool input and result notifications. A client without Apps rendering support ignores the extension metadata and continues to receive the mandatory text fallback plus the unchanged structured result.
 
-For this release, Codex fallback acceptance means authenticated discovery and ordinary DC/NYC tool calls. It is distinct from browser rendering: inline Apps rendering in Codex is not claimed. The local Chromium host below is the Apps rendering acceptance surface.
+For this release, Codex fallback acceptance means anonymous discovery and ordinary DC/NYC tool calls. It is distinct from browser rendering: inline Apps rendering in Codex is not claimed. The local Chromium host below is the Apps rendering acceptance surface.
 
 ## Deterministic build and local host
 
@@ -46,7 +46,7 @@ bun run test:apps
 
 `bun run test:apps` starts a new loopback-only Vite server at `127.0.0.1:4178`, opens `tests/apps/host.html`, and uses the Chromium revision managed by the exact `@playwright/test` `1.62.1` pin. The gating configuration never silently selects branded Chrome or reuses an existing server. The host loads `/apps/transit-board.html` in an iframe with exactly `sandbox="allow-scripts"`; it does not grant `allow-same-origin` or a permission-policy `allow` attribute.
 
-The harness uses the official `AppBridge` and `PostMessageTransport` host APIs. It supplies initial host context through the `ui/initialize` response, waits for `ui/notifications/initialized`, then sends exactly one `ui/notifications/tool-input` before one `ui/notifications/tool-result`. Refresh `tools/call` requests are answered only from checked-in fixture objects. A source-filtered ledger uses the installed MCP SDK runtime schemas to classify requests, notifications, success responses, error responses, and malformed messages, preserves the raw own fields, and correlates each response to one pending opposite-direction request in the same mount. There is no provider request, secret lookup, account access, or authorization emulation.
+The harness uses the official `AppBridge` and `PostMessageTransport` host APIs. It supplies initial host context through the `ui/initialize` response, waits for `ui/notifications/initialized`, then sends exactly one `ui/notifications/tool-input` before one `ui/notifications/tool-result`. Refresh `tools/call` requests are answered only from checked-in fixture objects. A source-filtered ledger uses the installed MCP SDK runtime schemas to classify requests, notifications, success responses, error responses, and malformed messages, preserves the raw own fields, and correlates each response to one pending opposite-direction request in the same mount. There is no account request, secret lookup, or identity emulation.
 
 Security-effect instrumentation reports only to a Playwright-owned runner binding installed before navigation. It does not use `window.postMessage`, add a page `message` listener, or consume any Apps traffic, and its runner-owned record survives iframe remounts.
 
@@ -78,7 +78,7 @@ Transient screenshots, traces, and failure artifacts are ignored under `output/p
 
 ## Public asset and security boundary
 
-`public/apps/transit-board.html` is publicly readable and inert without a host lifecycle. It contains the view code and styles, never tool arguments, results, credentials, user identity, or server configuration. Authenticated MCP `resources/read` remains the protocol path that returns the same resource and its deny-by-default metadata.
+`public/apps/transit-board.html` is publicly readable and inert without a host lifecycle. It contains the view code and styles, never tool arguments, results, credentials, user identity, or server configuration. Anonymous MCP `resources/read` remains the protocol path that returns the same resource and its deny-by-default metadata.
 
 The app allows no direct browser network, no browser storage, and no browser permissions. Its resource metadata declares empty `connectDomains`, `resourceDomains`, `frameDomains`, and `baseUriDomains`, requests no permissions, and sets `prefersBorder: false`. The only server interaction is host-mediated refresh of the originating allowlisted read tool.
 
@@ -109,10 +109,10 @@ The full gate also includes named source and built-bundle policy scans for:
 - new Wrangler bindings;
 - package-lock files;
 - v1 server imports from the Apps package;
-- OAuth/legacy-route changes.
+- account-flow or legacy-route changes.
 
 Review every match rather than treating a text-search match as a finding. The compiled SDK contains inert protocol-schema descriptions of some APIs; the browser oracle separately proves that the app invokes none of them.
 
 The Wrangler commands are dry-runs only. This feature does not deploy, change `wrangler.jsonc`, add a binding, modify an environment value, or change the server version.
 
-Authenticated Codex fallback discovery plus one live DC and one live NYC call require an already authorized connector and are recorded separately when available. They do not replace the local Apps-capable browser acceptance and are not claimed here unless explicitly executed.
+Anonymous Codex fallback discovery plus one live DC and one live NYC call are recorded separately when available. They do not replace the local Apps-capable browser acceptance and are not claimed here unless explicitly executed.

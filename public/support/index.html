@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Support · Metro MCP</title>
+  <meta name="description" content="Documentation, diagnostics, issue reporting, and security guidance for Metro MCP.">
+  <link rel="canonical" href="https://metro-mcp.anuragd.me/support/">
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="stylesheet" href="/legal.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <header class="site-header">
+    <a class="brand" href="/">Metro MCP</a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="/docs/">Docs</a>
+      <a href="/privacy/">Privacy</a>
+      <a href="/terms/">Terms</a>
+      <a href="/support/" aria-current="page">Support</a>
+    </nav>
+  </header>
+
+  <main id="main-content" class="page-shell">
+    <div class="route-line" aria-hidden="true"></div>
+    <header class="page-intro">
+      <p class="eyebrow">Service information</p>
+      <h1>Support</h1>
+      <p class="lede">Start with the public docs and service summary. If something still looks wrong, report it with enough context to reproduce without sharing secrets.</p>
+      <p class="page-meta">Last updated <time datetime="2026-08-21">August 21, 2026</time></p>
+    </header>
+
+    <article class="legal-copy">
+      <section aria-labelledby="self-service">
+        <h2 id="self-service">Documentation and status</h2>
+        <ul>
+          <li><a href="/docs/">Documentation</a> covers client setup, endpoints, tools, data sources, cache windows, and rate limits.</li>
+          <li><a href="/info"><code>/info</code> server information</a> returns the current public MCP endpoint, supported cities, station counts, and capabilities as JSON.</li>
+          <li>Official WMATA or MTA channels are the right place to confirm urgent service conditions.</li>
+        </ul>
+      </section>
+
+      <section aria-labelledby="issues">
+        <h2 id="issues">Bugs and feature requests</h2>
+        <p>Use <a href="https://github.com/Aarekaz/metro-mcp/issues">GitHub issues</a> for reproducible non-sensitive bugs, documentation corrections, and feature requests.</p>
+        <p>Include the Metro MCP version, client name and version, request ID, timestamp with time zone, city and tool or page, and a minimal reproduction with the expected and actual result. Remove credentials, authorization data, personal information, and private conversation content before posting.</p>
+        <div class="plain-callout"><strong>Never post API keys, bearer tokens, or secrets.</strong></div>
+      </section>
+
+      <section aria-labelledby="security">
+        <h2 id="security">Security reports</h2>
+        <p>Start at the repository&rsquo;s <a href="https://github.com/Aarekaz/metro-mcp/security">GitHub Security page</a> for the current reporting route. Private vulnerability reporting is not currently enabled for this repository, so do not publish exploitable details, secrets, or personal data in a public issue. The Security page is the source of truth if reporting options change.</p>
+      </section>
+
+      <section aria-labelledby="expectations">
+        <h2 id="expectations">Response expectations</h2>
+        <p>This is a maintained open-source service, not a staffed transit help desk. Reports are reviewed as maintainer availability allows, with no guaranteed response time. Clear reproduction details help, but submitting a report does not guarantee a fix or feature.</p>
+      </section>
+
+      <section aria-labelledby="privacy-support">
+        <h2 id="privacy-support">Privacy and use</h2>
+        <p>Read the <a href="/privacy/">Privacy page</a> for request data and logs, or the <a href="/terms/">Terms of Use</a> for upstream-data limits and acceptable use.</p>
+      </section>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <p>&copy; 2026 Anurag Dhungana · MIT</p>
+    <nav class="footer-nav" aria-label="Legal and support">
+      <a href="/privacy/">Privacy</a>
+      <a href="/terms/">Terms</a>
+      <a href="/support/" aria-current="page">Support</a>
+    </nav>
+  </footer>
+</body>
+</html>

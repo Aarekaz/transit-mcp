@@ -2,14 +2,15 @@ import { readFileSync } from 'node:fs';
 import { URL as NodeURL } from 'node:url';
 import stripJsonComments from 'strip-json-comments';
 import { describe, expect, it } from 'vitest';
-import { loadConfig, validateConfig } from '../../src/config';
+import { loadConfig } from '../../src/config';
 import type { Env } from '../../src/types';
 import { createMockEnv } from '../setup';
 
-const wrangler = JSON.parse(stripJsonComments(readFileSync(
+const wranglerSource = readFileSync(
   new NodeURL('../../wrangler.jsonc', import.meta.url),
   'utf8',
-)));
+);
+const wrangler = JSON.parse(stripJsonComments(wranglerSource));
 
 function parseVarsExample(url: NodeURL): Record<string, string> {
   return Object.fromEntries(
@@ -25,102 +26,52 @@ function parseVarsExample(url: NodeURL): Record<string, string> {
   );
 }
 
-function bindingNames(config: Record<string, any>): string[] {
-  return [
-    ...(config.durable_objects?.bindings ?? []),
-    ...(config.kv_namespaces ?? []),
-  ].map(binding => binding.name ?? binding.binding);
-}
-
-function oauthKvId(config: Record<string, any>): string {
-  const binding = config.kv_namespaces?.find(
-    (candidate: { binding?: string }) => candidate.binding === 'OAUTH_KV',
-  );
-
-  expect(binding).toBeDefined();
-  expect(binding.id).toMatch(/^[a-f0-9]{32}$/);
-  return binding.id;
-}
-
-describe('deployment configuration', () => {
-  it('loads the checked-in local development template as the exact localhost contract', () => {
+describe('anonymous deployment configuration', () => {
+  it('loads the checked-in local development template as the exact anonymous contract', () => {
     const localVars = parseVarsExample(
       new NodeURL('../../.dev.vars.example', import.meta.url),
     );
     expect(Object.keys(localVars).sort()).toEqual([
       'ENVIRONMENT',
-      'GITHUB_CLIENT_ID',
-      'GITHUB_CLIENT_SECRET',
-      'JWT_SECRET',
       'MCP_ALLOWED_HOSTNAMES',
       'MCP_ALLOWED_ORIGIN_HOSTNAMES',
       'MCP_PUBLIC_ORIGIN',
       'MCP_REQUEST_STATE_KEY',
-      'OAUTH_REDIRECT_URI',
       'WMATA_API_KEY',
     ]);
 
     const config = loadConfig({
       ...localVars,
-      OAUTH_KV: {} as KVNamespace,
-      OAUTH_PROVIDER: {} as Env['OAUTH_PROVIDER'],
       ASSETS: {} as Fetcher,
     } as Env);
 
-    expect(config.mcp).toMatchObject({
-      publicOrigin: 'http://localhost:8787',
-      resourceUri: 'http://localhost:8787/mcp',
-      allowedHostnames: ['localhost'],
-      allowedOriginHostnames: ['localhost'],
-    });
-    expect(config.oauth).toMatchObject({
-      github: {
-        clientId: 'replace-with-your-local-github-oauth-app-client-id',
-        clientSecret: 'replace-with-your-local-github-oauth-app-client-secret',
+    expect(config).toEqual({
+      mcp: {
+        publicOrigin: 'http://localhost:8787',
+        resourceUri: 'http://localhost:8787/mcp',
+        allowedHostnames: ['localhost'],
+        allowedOriginHostnames: ['localhost'],
+        requestStateKey: 'replace-with-a-local-request-state-key-at-least-32-bytes',
       },
-      redirectUri: 'http://localhost:8787/callback',
+      apis: { wmata: 'replace-with-your-local-wmata-api-key' },
+      app: { environment: 'development', version: '6.0.0' },
     });
-    expect(config.apis.wmata).toBe('replace-with-your-local-wmata-api-key');
-    expect(config.app.environment).toBe('development');
-    expect(config.mcp.requestStateKey).toBe(
-      'replace-with-a-local-request-state-key-at-least-32-bytes',
-    );
-    expect(config.legacyJwt.secret).toBe(
-      'replace-with-a-local-jwt-secret-at-least-32-bytes',
-    );
     expect(new TextEncoder().encode(localVars.MCP_REQUEST_STATE_KEY).byteLength)
       .toBeGreaterThanOrEqual(32);
-    expect(new TextEncoder().encode(localVars.JWT_SECRET).byteLength)
-      .toBeGreaterThanOrEqual(32);
   });
 
-  it('derives one canonical MCP resource', () => {
+  it('derives one canonical MCP resource without an authentication policy', () => {
     const config = loadConfig(createMockEnv());
 
-    expect(config.mcp.publicOrigin).toBe('https://metro-mcp.anuragd.me');
-    expect(config.mcp.resourceUri).toBe('https://metro-mcp.anuragd.me/mcp');
-    expect(config.mcp.allowedHostnames).toEqual(['metro-mcp.anuragd.me']);
-    expect(config.mcp.allowedOriginHostnames).toEqual(['metro-mcp.anuragd.me']);
-  });
-
-  it('loads the fixed OAuth and legacy-token policy', () => {
-    const config = loadConfig(createMockEnv());
-
-    expect(config.oauth).toMatchObject({
-      github: {
-        clientId: 'test-client-id',
-        clientSecret: 'test-client-secret',
-      },
-      redirectUri: 'https://metro-mcp.anuragd.me/callback',
-      accessTokenTtlSeconds: 3600,
-      refreshTokenTtlSeconds: 2_592_000,
-      clientRegistrationTtlSeconds: 7_776_000,
+    expect(Object.keys(config).sort()).toEqual(['apis', 'app', 'mcp']);
+    expect(config.mcp).toEqual({
+      publicOrigin: 'https://metro-mcp.anuragd.me',
+      resourceUri: 'https://metro-mcp.anuragd.me/mcp',
+      allowedHostnames: ['metro-mcp.anuragd.me'],
+      allowedOriginHostnames: ['metro-mcp.anuragd.me'],
+      requestStateKey: 'test-mrtr-request-state-key-32-bytes-minimum',
     });
     expect(config.apis.wmata).toBe('test-wmata-key');
-    expect(config.legacyJwt).toEqual({
-      secret: 'test-jwt-secret-at-least-32-characters-long',
-      cutoff: '2026-11-30T00:00:00Z',
-    });
     expect(config.app.environment).toBe('production');
   });
 
@@ -129,11 +80,7 @@ describe('deployment configuration', () => {
     'MCP_ALLOWED_HOSTNAMES',
     'MCP_ALLOWED_ORIGIN_HOSTNAMES',
     'MCP_REQUEST_STATE_KEY',
-    'GITHUB_CLIENT_ID',
-    'GITHUB_CLIENT_SECRET',
-    'OAUTH_REDIRECT_URI',
     'WMATA_API_KEY',
-    'JWT_SECRET',
     'ENVIRONMENT',
   ])('requires %s', name => {
     expect(() => loadConfig(createMockEnv({ [name]: undefined }))).toThrow(
@@ -166,12 +113,10 @@ describe('deployment configuration', () => {
   it('preserves an intentional non-default public-origin port', () => {
     const config = loadConfig(createMockEnv({
       MCP_PUBLIC_ORIGIN: 'https://metro-mcp.anuragd.me:8443',
-      OAUTH_REDIRECT_URI: 'https://metro-mcp.anuragd.me:8443/callback',
     }));
 
     expect(config.mcp.publicOrigin).toBe('https://metro-mcp.anuragd.me:8443');
     expect(config.mcp.resourceUri).toBe('https://metro-mcp.anuragd.me:8443/mcp');
-    expect(config.oauth.redirectUri).toBe('https://metro-mcp.anuragd.me:8443/callback');
   });
 
   it.each([
@@ -187,21 +132,11 @@ describe('deployment configuration', () => {
       MCP_PUBLIC_ORIGIN: 'http://localhost:8787',
       MCP_ALLOWED_HOSTNAMES: 'localhost',
       MCP_ALLOWED_ORIGIN_HOSTNAMES: 'localhost,127.0.0.1',
-      OAUTH_REDIRECT_URI: 'http://localhost:8787/callback',
       ENVIRONMENT: 'development',
     }));
 
     expect(config.mcp.resourceUri).toBe('http://localhost:8787/mcp');
     expect(config.app.environment).toBe('development');
-  });
-
-  it.each([
-    'https://attacker.example/callback',
-    'https://metro-mcp.anuragd.me/other',
-  ])('rejects callback %s outside the exact configured endpoint', redirectUri => {
-    expect(() => loadConfig(createMockEnv({ OAUTH_REDIRECT_URI: redirectUri }))).toThrow(
-      'OAUTH_REDIRECT_URI must equal',
-    );
   });
 
   it.each([
@@ -235,29 +170,14 @@ describe('deployment configuration', () => {
     }))).toThrow('must include the MCP_PUBLIC_ORIGIN hostname');
   });
 
-  it('requires a 32-byte MRTR key', () => {
+  it('requires the MRTR key to contain at least 32 bytes', () => {
     expect(() => loadConfig(createMockEnv({ MCP_REQUEST_STATE_KEY: 'short' }))).toThrow(
       'at least 32 bytes',
     );
-  });
-
-  it('measures the MRTR key as bytes', () => {
-    const config = loadConfig(createMockEnv({ MCP_REQUEST_STATE_KEY: '🔐'.repeat(8) }));
-    expect(config.mcp.requestStateKey).toBe('🔐'.repeat(8));
-  });
-
-  it('requires a 32-byte legacy JWT secret', () => {
-    expect(() => loadConfig(createMockEnv({ JWT_SECRET: 'short' }))).toThrow(
-      'JWT_SECRET must be at least 32 bytes',
-    );
-  });
-
-  it('measures the legacy JWT secret as bytes', () => {
-    const config = loadConfig(createMockEnv({ JWT_SECRET: '🔐'.repeat(8) }));
-    expect(config.legacyJwt.secret).toBe('🔐'.repeat(8));
-
-    expect(() => loadConfig(createMockEnv({ JWT_SECRET: '🔐'.repeat(7) }))).toThrow(
-      'JWT_SECRET must be at least 32 bytes',
+    expect(loadConfig(createMockEnv({ MCP_REQUEST_STATE_KEY: '🔐'.repeat(8) }))
+      .mcp.requestStateKey).toBe('🔐'.repeat(8));
+    expect(() => loadConfig(createMockEnv({ MCP_REQUEST_STATE_KEY: '🔐'.repeat(7) }))).toThrow(
+      'at least 32 bytes',
     );
   });
 
@@ -269,85 +189,59 @@ describe('deployment configuration', () => {
     );
   });
 
-  it('accepts the fixed preview environment name', () => {
-    const config = loadConfig(createMockEnv({ ENVIRONMENT: 'preview' }));
-    expect(config.app.environment).toBe('preview');
-  });
-
-  it.each([
-    ['accessTokenTtlSeconds', 3599, 'must equal 3600'],
-    ['refreshTokenTtlSeconds', 3600, 'must equal 2592000'],
-    ['clientRegistrationTtlSeconds', 3600, 'must equal 7776000'],
-  ])('rejects a changed OAuth %s policy', (field, value, message) => {
-    const config = loadConfig(createMockEnv());
-    Object.assign(config.oauth, { [field]: value });
-
-    expect(() => validateConfig(config)).toThrow(message);
-  });
-
-  it('rejects a changed legacy JWT cutoff', () => {
-    const config = loadConfig(createMockEnv());
-    Object.assign(config.legacyJwt, { cutoff: '2027-01-01T00:00:00Z' });
-
-    expect(() => validateConfig(config)).toThrow(
-      'legacy JWT cutoff must equal 2026-11-30T00:00:00Z',
-    );
-  });
-
-  it('isolates the production and preview OAuth origins', () => {
-    expect(wrangler.vars).toMatchObject({
+  it('declares only the public anonymous vars for production and preview', () => {
+    expect(wrangler.keep_vars).toBe(false);
+    expect(wrangler.vars).toEqual({
       MCP_PUBLIC_ORIGIN: 'https://metro-mcp.anuragd.me',
       MCP_ALLOWED_HOSTNAMES: 'metro-mcp.anuragd.me',
       MCP_ALLOWED_ORIGIN_HOSTNAMES: 'metro-mcp.anuragd.me',
-      OAUTH_REDIRECT_URI: 'https://metro-mcp.anuragd.me/callback',
       ENVIRONMENT: 'production',
     });
-    expect(wrangler.env.preview.vars).toMatchObject({
+    expect(wrangler.env.preview.vars).toEqual({
       MCP_PUBLIC_ORIGIN: 'https://metro-mcp-preview.anuragd.me',
       MCP_ALLOWED_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
       MCP_ALLOWED_ORIGIN_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
-      OAUTH_REDIRECT_URI: 'https://metro-mcp-preview.anuragd.me/callback',
       ENVIRONMENT: 'preview',
     });
+    expect(wrangler.kv_namespaces).toBeUndefined();
+    expect(wrangler.env.preview.kv_namespaces).toBeUndefined();
   });
 
-  it('uses distinct real OAuth Provider storage in production and preview', () => {
-    const productionId = oauthKvId(wrangler);
-    const previewId = oauthKvId(wrangler.env.preview);
-
-    expect(productionId).toBe('d93416b961b0442b80c04b0081105ff6');
-    expect(previewId).toBe('e66115284977469fa58e5537976647f7');
-    expect(previewId).not.toBe(productionId);
+  it('binds distinct production and preview anonymous MCP rate limit namespaces', () => {
+    expect(wrangler.ratelimits).toEqual([{
+      name: 'MCP_RATE_LIMITER',
+      namespace_id: '2026082101',
+      simple: { limit: 300, period: 60 },
+    }]);
+    expect(wrangler.env.preview.ratelimits).toEqual([{
+      name: 'MCP_RATE_LIMITER',
+      namespace_id: '2026082102',
+      simple: { limit: 300, period: 60 },
+    }]);
   });
 
-  it('routes preview only through its independently approved custom domain', () => {
+  it('contains none of the removed authentication deployment names', () => {
+    const removedNames = [
+      ['OAUTH', 'KV'].join('_'),
+      ['OAUTH', 'PROVIDER'].join('_'),
+      ['GITHUB', 'CLIENT_ID'].join('_'),
+      ['GITHUB', 'CLIENT_SECRET'].join('_'),
+      ['OAUTH', 'REDIRECT_URI'].join('_'),
+      ['JWT', 'SECRET'].join('_'),
+    ];
+    for (const name of removedNames) expect(wranglerSource).not.toContain(name);
+  });
+
+  it('keeps production and preview custom domains isolated', () => {
+    expect(wrangler.routes).toEqual([{
+      pattern: 'metro-mcp.anuragd.me',
+      custom_domain: true,
+    }]);
     expect(wrangler.env.preview.routes).toEqual([{
       pattern: 'metro-mcp-preview.anuragd.me',
       custom_domain: true,
     }]);
-    expect(wrangler.env.preview.routes).not.toContainEqual({
-      pattern: 'metro-mcp.anuragd.me',
-      custom_domain: true,
-    });
-  });
-
-  it('uses an independently coordinated GitHub OAuth app in preview', () => {
-    const productionClientId = wrangler.vars.GITHUB_CLIENT_ID;
-    const previewClientId = wrangler.env.preview.vars.GITHUB_CLIENT_ID;
-
-    expect(previewClientId).toBe('Ov23li2oFCt24EJJ0X1O');
-    expect(previewClientId).not.toBe(productionClientId);
-  });
-
-  it.each([
-    ['production', wrangler],
-    ['preview', wrangler.env?.preview],
-  ])('does not expose active legacy bindings in %s', (_name, config) => {
-    expect(bindingNames(config)).not.toEqual(expect.arrayContaining([
-      'MCP_SESSION',
-      'RATE_LIMIT_KV',
-      'OAUTH_CLIENTS',
-    ]));
+    expect(wrangler.env.preview.routes).not.toContainEqual(wrangler.routes[0]);
   });
 
   it('retains the original rollback migration without scheduling deletion', () => {
@@ -358,7 +252,7 @@ describe('deployment configuration', () => {
     expect(JSON.stringify(wrangler.migrations)).not.toContain('deleted_classes');
   });
 
-  it('enables strict public fetches without dropping deployment controls', () => {
+  it('preserves anonymous assets and deployment controls', () => {
     expect(wrangler.compatibility_flags).toEqual([
       'nodejs_compat',
       'global_fetch_strictly_public',
@@ -369,9 +263,5 @@ describe('deployment configuration', () => {
       binding: 'ASSETS',
     });
     expect(wrangler.observability.enabled).toBe(true);
-    expect(wrangler.routes).toContainEqual({
-      pattern: 'metro-mcp.anuragd.me',
-      custom_domain: true,
-    });
   });
 });

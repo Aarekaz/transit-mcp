@@ -11,11 +11,14 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
     author: 'Anurag Dhungana',
     links: {
       author: 'https://anuragd.me',
-      github: 'https://github.com/anuragdhungana/metro-mcp',
+      github: 'https://github.com/Aarekaz/metro-mcp',
       mcpServer: `${baseUrl}/mcp`,
       mcpServerLegacy: `${baseUrl}/sse`,
       website: baseUrl,
-      documentation: 'https://github.com/anuragdhungana/metro-mcp/blob/main/README.md',
+      documentation: 'https://metro-mcp.anuragd.me/docs/',
+      privacy: 'https://metro-mcp.anuragd.me/privacy/',
+      terms: 'https://metro-mcp.anuragd.me/terms/',
+      support: 'https://metro-mcp.anuragd.me/support/',
     },
     capabilities: {
       tools: {},
@@ -48,13 +51,7 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
     },
     endpoints: {
       mcp: ['/mcp', '/sse'],
-      mcpRecommended: '/mcp',
-      oauth: {
-        authorize: '/authorize',
-        token: '/token',
-        register: '/register'
-      },
-      discovery: '/.well-known/oauth-authorization-server'
+      mcpRecommended: '/mcp'
     },
     transport: {
       type: 'streamable-http',
@@ -65,12 +62,7 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
       supportsServerPush: false,
       supportsResumability: false
     },
-    authentication: {
-      type: 'OAuth 2.1',
-      pkce: true,
-      provider: 'GitHub',
-      scopes: ['transit:read']
-    },
+    authentication: { type: 'none' },
     tools: [
       'get_station_predictions',
       'search_stations',

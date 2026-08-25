@@ -1,5 +1,6 @@
 import { createExecutionContext, SELF } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
+import { CLIENT_CAPABILITIES_META_KEY } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import worker from '../../src/index';
@@ -9,7 +10,6 @@ import {
   modernEnvelope,
   modernMcpRequest,
   readMcpResponse,
-  testBearerToken,
   TEST_ORIGIN,
 } from '../helpers/mcp-request';
 import {
@@ -22,6 +22,75 @@ import {
   TRANSIT_BOARD_TOOL_META,
   TRANSIT_BOARD_URI,
 } from '../fixtures/mcp-contracts';
+
+const RATE_LIMIT_PERIOD_MS = 10_000;
+const RATE_LIMIT_EPOCH_SAFETY_MS = 1_000;
+const RATE_LIMIT_HEARTBEAT_MS = 250;
+const MCP_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
+let nextTestClient = 1;
+
+function workerFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const request = new Request(input, init);
+  const pathname = new URL(request.url).pathname;
+  if (
+    request.method === 'POST'
+    && (pathname === '/mcp' || pathname === '/sse')
+    && !request.headers.has('CF-Connecting-IP')
+  ) {
+    request.headers.set('CF-Connecting-IP', `198.51.100.${nextTestClient++}`);
+  }
+  return SELF.fetch(request);
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+function paddedModernDiscoverRequest(path: '/mcp' | '/sse', byteLength: number): Request {
+  const canary = 'metro-task6-oversized-body-canary';
+  const envelope = JSON.stringify(modernEnvelope('server/discover', { canary }));
+  if (envelope.length > byteLength) throw new Error('requested body is too small');
+  const body = envelope + ' '.repeat(byteLength - envelope.length);
+  return new Request(`${TEST_ORIGIN}${path}`, {
+    method: 'POST',
+    headers: {
+      Host: 'metro-mcp.anuragd.me',
+      'Content-Type': 'application/json',
+      'Content-Length': String(byteLength),
+      'MCP-Protocol-Version': '2026-07-28',
+      'Mcp-Method': 'server/discover',
+    },
+    body,
+  });
+}
+
+async function waitUntilWithPublicHeartbeats(targetTime: number): Promise<void> {
+  while (Date.now() < targetTime) {
+    const response = await workerFetch(`${TEST_ORIGIN}/info`, {
+      headers: { Host: 'metro-mcp.anuragd.me' },
+    });
+    expect(response.status).toBe(200);
+    await sleep(Math.min(RATE_LIMIT_HEARTBEAT_MS, Math.max(0, targetTime - Date.now())));
+  }
+}
+
+async function enterFreshRateLimitEpoch(): Promise<number> {
+  while (true) {
+    const now = Date.now();
+    const currentEpoch = Math.floor(now / RATE_LIMIT_PERIOD_MS);
+    const remaining = RATE_LIMIT_PERIOD_MS - (now % RATE_LIMIT_PERIOD_MS);
+    if (remaining >= RATE_LIMIT_EPOCH_SAFETY_MS) {
+      return currentEpoch;
+    }
+    const nextEpochAt = now - (now % RATE_LIMIT_PERIOD_MS) + RATE_LIMIT_PERIOD_MS;
+    await waitUntilWithPublicHeartbeats(nextEpochAt + 25);
+    const enteredAt = Date.now();
+    const enteredRemaining = RATE_LIMIT_PERIOD_MS - (enteredAt % RATE_LIMIT_PERIOD_MS);
+    if (enteredRemaining >= RATE_LIMIT_EPOCH_SAFETY_MS) {
+      return Math.floor(enteredAt / RATE_LIMIT_PERIOD_MS);
+    }
+  }
+}
 
 function record(value: unknown): Record<string, unknown> {
   expect(value).toBeTypeOf('object');
@@ -49,21 +118,45 @@ afterEach(() => {
 });
 
 describe('assembled MCP Worker', () => {
-  it('returns the RFC 9728 challenge before MCP dispatch', async () => {
-    const response = await SELF.fetch(`${TEST_ORIGIN}/mcp`, {
-      method: 'POST',
-      headers: { Host: 'metro-mcp.anuragd.me' },
-    });
+  it('serves anonymous modern server/discover without an authentication challenge', async () => {
+    const response = await workerFetch(await modernMcpRequest('server/discover'));
 
-    expect(response.status).toBe(401);
-    expect(response.headers.get('www-authenticate')).toContain(
-      `resource_metadata="${TEST_ORIGIN}/.well-known/oauth-protected-resource/mcp"`,
-    );
+    expect(response.status).toBe(200);
+    expect(response.headers.has('www-authenticate')).toBe(false);
+  });
+
+  it.each(['/mcp', '/sse'] as const)(
+    'rejects a body above 1 MiB through the shared %s handler without logging its canary',
+    async path => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+      const response = await workerFetch(paddedModernDiscoverRequest(
+        path,
+        MCP_REQUEST_BODY_LIMIT_BYTES + 1,
+      ));
+
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'MCP request body exceeds 1048576-byte limit' },
+        id: null,
+      });
+      expect(String(info.mock.calls[0]?.[0]))
+        .not.toContain('metro-task6-oversized-body-canary');
+    },
+  );
+
+  it('admits a legitimate modern request exactly at the 1 MiB boundary', async () => {
+    const response = await workerFetch(paddedModernDiscoverRequest(
+      '/mcp',
+      MCP_REQUEST_BODY_LIMIT_BYTES,
+    ));
+
+    expect(response.status).toBe(200);
   });
 
   it('serves modern server/discover without initialize', async () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
-    const response = await SELF.fetch(await modernMcpRequest('server/discover'));
+    const response = await workerFetch(await modernMcpRequest('server/discover'));
     const messages = await readMcpResponse(response);
 
     expect(response.status).toBe(200);
@@ -92,9 +185,9 @@ describe('assembled MCP Worker', () => {
 
   it('exposes exactly 13 tools, 3 resource templates, and 3 prompts with modern cache hints', async () => {
     const [toolsResponse, resourcesResponse, promptsResponse] = await Promise.all([
-      SELF.fetch(await modernMcpRequest('tools/list')),
-      SELF.fetch(await modernMcpRequest('resources/templates/list')),
-      SELF.fetch(await modernMcpRequest('prompts/list')),
+      workerFetch(await modernMcpRequest('tools/list')),
+      workerFetch(await modernMcpRequest('resources/templates/list')),
+      workerFetch(await modernMcpRequest('prompts/list')),
     ]);
 
     const tools = onlyResult(await readMcpResponse(toolsResponse));
@@ -119,13 +212,13 @@ describe('assembled MCP Worker', () => {
     }
   });
 
-  it('lists and reads the committed Transit Board asset through authenticated MCP', async () => {
-    const publicAssetResponse = await SELF.fetch(`${TEST_ORIGIN}/apps/transit-board.html`, {
+  it('lists and reads the committed Transit Board asset through anonymous MCP', async () => {
+    const publicAssetResponse = await workerFetch(`${TEST_ORIGIN}/apps/transit-board.html`, {
       headers: { Host: 'metro-mcp.anuragd.me' },
     });
     const [listResponse, readResponse] = await Promise.all([
-      SELF.fetch(await modernMcpRequest('resources/list')),
-      SELF.fetch(await modernMcpRequest('resources/read', { uri: TRANSIT_BOARD_URI })),
+      workerFetch(await modernMcpRequest('resources/list')),
+      workerFetch(await modernMcpRequest('resources/read', { uri: TRANSIT_BOARD_URI })),
     ]);
     const listed = onlyResult(await readMcpResponse(listResponse));
     const read = onlyResult(await readMcpResponse(readResponse));
@@ -147,7 +240,7 @@ describe('assembled MCP Worker', () => {
       _meta: {
         'io.modelcontextprotocol/serverInfo': {
           name: 'metro-mcp',
-          version: '5.0.0',
+          version: '6.0.0',
         },
       },
       contents: [{
@@ -159,7 +252,7 @@ describe('assembled MCP Worker', () => {
     });
   });
 
-  it('protects Transit Board resource reads before the asset binding is reached', async () => {
+  it('serves Transit Board resource reads without a token', async () => {
     const request = new Request(`${TEST_ORIGIN}/mcp`, {
       method: 'POST',
       headers: {
@@ -173,22 +266,22 @@ describe('assembled MCP Worker', () => {
       body: JSON.stringify(modernEnvelope('resources/read', { uri: TRANSIT_BOARD_URI })),
     });
 
-    const response = await SELF.fetch(request);
+    const response = await workerFetch(request);
 
-    expect(response.status).toBe(401);
-    expect(response.headers.get('www-authenticate')).toContain('resource_metadata=');
+    expect(response.status).toBe(200);
+    expect(response.headers.has('www-authenticate')).toBe(false);
   });
 
   it('serves representative modern tool, resource, and prompt calls', async () => {
     const [toolResponse, resourceResponse, promptResponse] = await Promise.all([
-      SELF.fetch(await modernMcpRequest('tools/call', {
+      workerFetch(await modernMcpRequest('tools/call', {
         name: 'search_stations',
         arguments: { city: 'nyc', query: 'Times Sq' },
       })),
-      SELF.fetch(await modernMcpRequest('resources/read', {
+      workerFetch(await modernMcpRequest('resources/read', {
         uri: 'transit://stations/nyc/127',
       })),
-      SELF.fetch(await modernMcpRequest('prompts/get', {
+      workerFetch(await modernMcpRequest('prompts/get', {
         name: 'service-briefing',
         arguments: { city: 'dc' },
       })),
@@ -221,14 +314,77 @@ describe('assembled MCP Worker', () => {
     expect(prompt).not.toHaveProperty('ttlMs');
   });
 
+  it('completes modern ambiguous-station MRTR through the assembled Worker', async () => {
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const request = new Request(input);
+      if (request.url.startsWith('https://api-endpoint.mta.info/')) {
+        return new Response('upstream unavailable in deterministic MRTR test', { status: 503 });
+      }
+      throw new Error(`Unmatched outbound request: ${request.url}`);
+    });
+
+    const arguments_ = { city: 'nyc', stationName: 'Times Sq' };
+    const mrtrMeta = {
+      [CLIENT_CAPABILITIES_META_KEY]: { elicitation: { form: {} } },
+    };
+    const ambiguousResponse = await workerFetch(await modernMcpRequest('tools/call', {
+      name: 'get_station_predictions',
+      arguments: arguments_,
+    }, { meta: mrtrMeta }));
+    const ambiguousMessages = await readMcpResponse(ambiguousResponse);
+    expect(ambiguousResponse.status, JSON.stringify(ambiguousMessages)).toBe(200);
+    const ambiguous = onlyResult(ambiguousMessages);
+    const inputRequests = record(ambiguous.inputRequests);
+    const stationRequest = record(inputRequests.station);
+    const stationParams = record(stationRequest.params);
+    const requestedSchema = record(stationParams.requestedSchema);
+    const stationProperty = record(record(requestedSchema.properties).stationId);
+
+    expect(ambiguous).toMatchObject({ resultType: 'input_required' });
+    expect(ambiguous.requestState).toMatch(/^v1\./);
+    expect(stationRequest.method).toBe('elicitation/create');
+    expect(stationParams.message).toBe('Multiple stations match "Times Sq". Choose one.');
+    expect(stationProperty.enum).toEqual(['127', '725', '902', 'R16']);
+
+    const completionResponse = await workerFetch(await modernMcpRequest('tools/call', {
+      name: 'get_station_predictions',
+      arguments: arguments_,
+      inputResponses: {
+        station: { action: 'accept', content: { stationId: '127' } },
+      },
+      requestState: ambiguous.requestState,
+    }, { id: 2, meta: mrtrMeta }));
+    const completionMessages = await readMcpResponse(completionResponse);
+    expect(completionResponse.status, JSON.stringify(completionMessages)).toBe(200);
+    const completion = onlyResult(completionMessages);
+    const structuredContent = {
+      city: 'nyc',
+      station: '127',
+      predictions: [],
+    };
+
+    expect(completion).toEqual({
+      resultType: 'complete',
+      structuredContent,
+      content: [{ type: 'text', text: JSON.stringify(structuredContent) }],
+      _meta: {
+        'io.modelcontextprotocol/serverInfo': {
+          name: 'metro-mcp',
+          version: '6.0.0',
+        },
+      },
+    });
+  });
+
   it('keeps ordinary 2025 stateless list/call behavior and legacy ambiguity guidance', async () => {
     const [listResponse, callResponse, ambiguousResponse] = await Promise.all([
-      SELF.fetch(await legacyMcpRequest('tools/list')),
-      SELF.fetch(await legacyMcpRequest('tools/call', {
+      workerFetch(await legacyMcpRequest('tools/list')),
+      workerFetch(await legacyMcpRequest('tools/call', {
         name: 'search_stations',
         arguments: { city: 'nyc', query: 'Times Sq' },
       })),
-      SELF.fetch(await legacyMcpRequest('tools/call', {
+      workerFetch(await legacyMcpRequest('tools/call', {
         name: 'get_station_predictions',
         arguments: { city: 'nyc', stationName: 'Broadway' },
       })),
@@ -251,8 +407,8 @@ describe('assembled MCP Worker', () => {
     expect(JSON.stringify(ambiguous)).toContain('please call get_station_predictions again');
   });
 
-  it('keeps /sse as an exact POST alias and rejects unsupported MCP methods before OAuth', async () => {
-    const aliasResponse = await SELF.fetch(await modernMcpRequest(
+  it('keeps /sse as an exact POST alias and rejects unsupported MCP methods before dispatch', async () => {
+    const aliasResponse = await workerFetch(await modernMcpRequest(
       'server/discover',
       {},
       { path: '/sse' },
@@ -269,7 +425,7 @@ describe('assembled MCP Worker', () => {
       ['/sse/', 'POST'],
       ['/sse/events', 'POST'],
     ] as const) {
-      const response = await SELF.fetch(`${TEST_ORIGIN}${path}`, {
+      const response = await workerFetch(`${TEST_ORIGIN}${path}`, {
         method,
         headers: { Host: 'metro-mcp.anuragd.me' },
       });
@@ -278,23 +434,22 @@ describe('assembled MCP Worker', () => {
     }
   });
 
-  it('ignores query-string credentials', async () => {
+  it('does not create an authentication path for query-string credentials', async () => {
     for (const query of ['access_token=not-a-token', 'token=not-a-token']) {
-      const response = await SELF.fetch(`${TEST_ORIGIN}/mcp?${query}`, {
-        method: 'POST',
-        headers: { Host: 'metro-mcp.anuragd.me' },
-      });
-      expect(response.status).toBe(401);
+      const request = await modernMcpRequest('server/discover');
+      const url = new URL(request.url);
+      url.search = query;
+      const response = await workerFetch(new Request(url, request));
+      expect(response.status).toBe(200);
+      expect(response.headers.has('www-authenticate')).toBe(false);
     }
   });
 
   it('returns SDK-defined errors for version, method, and name mismatches', async () => {
-    const token = await testBearerToken();
     const cases = [
       new Request(`${TEST_ORIGIN}/mcp`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${token}`,
           Host: 'metro-mcp.anuragd.me',
           'Content-Type': 'application/json',
           Accept: 'application/json',
@@ -306,7 +461,6 @@ describe('assembled MCP Worker', () => {
       new Request(`${TEST_ORIGIN}/mcp`, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${token}`,
           Host: 'metro-mcp.anuragd.me',
           'Content-Type': 'application/json',
           Accept: 'application/json',
@@ -315,16 +469,16 @@ describe('assembled MCP Worker', () => {
         },
         body: JSON.stringify(modernEnvelope('tools/list')),
       }),
-      await modernMcpRequest('tools/list', {}, { token }),
+      await modernMcpRequest('tools/list'),
       await modernMcpRequest('tools/call', {
         name: 'search_stations',
         arguments: { city: 'nyc', query: 'Times Sq' },
-      }, { token }),
+      }),
     ];
     cases[2]!.headers.set('Mcp-Method', 'prompts/list');
     cases[3]!.headers.set('Mcp-Name', 'wrong_tool');
 
-    const responses = await Promise.all(cases.map(request => SELF.fetch(request)));
+    const responses = await Promise.all(cases.map(request => workerFetch(request)));
     for (const response of responses) {
       expect(response.status).toBe(400);
     }
@@ -338,7 +492,7 @@ describe('assembled MCP Worker', () => {
     const request = await modernMcpRequest('server/discover');
     request.headers.delete('MCP-Protocol-Version');
 
-    const response = await SELF.fetch(request);
+    const response = await workerFetch(request);
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
@@ -352,7 +506,7 @@ describe('assembled MCP Worker', () => {
     const request = await legacyMcpRequest('tools/list');
     expect(request.headers.has('MCP-Protocol-Version')).toBe(false);
 
-    const response = await SELF.fetch(request);
+    const response = await workerFetch(request);
 
     expect(response.status).toBe(200);
     const result = onlyResult(await readMcpResponse(response));
@@ -361,29 +515,76 @@ describe('assembled MCP Worker', () => {
   });
 
   it('enforces Host and browser Origin while allowing Origin-less desktop requests', async () => {
-    const token = await testBearerToken();
-    const allowed = await SELF.fetch(await modernMcpRequest('server/discover', {}, {
-      token,
+    const allowed = await workerFetch(await modernMcpRequest('server/discover', {}, {
       headers: { Origin: TEST_ORIGIN },
     }));
-    const desktop = await SELF.fetch(await modernMcpRequest('server/discover', {}, { token }));
-    const badOrigin = await SELF.fetch(await modernMcpRequest('server/discover', {}, {
-      token,
+    const desktop = await workerFetch(await modernMcpRequest('server/discover'));
+    const badOrigin = await workerFetch(await modernMcpRequest('server/discover', {}, {
       headers: { Origin: 'https://attacker.example' },
     }));
-    const malformedOrigin = await SELF.fetch(await modernMcpRequest('server/discover', {}, {
-      token,
+    const malformedOrigin = await workerFetch(await modernMcpRequest('server/discover', {}, {
       headers: { Origin: 'not a url' },
     }));
-    const badHostRequest = await modernMcpRequest('server/discover', {}, { token });
+    const badHostRequest = await modernMcpRequest('server/discover');
     badHostRequest.headers.set('Host', 'attacker.example');
-    const badHost = await SELF.fetch(badHostRequest);
+    const badHost = await workerFetch(badHostRequest);
+    const insecureRequest = await modernMcpRequest('server/discover');
+    const insecureUrl = new URL(insecureRequest.url);
+    insecureUrl.protocol = 'http:';
+    const insecureOrigin = await workerFetch(new Request(insecureUrl, insecureRequest));
 
     expect(allowed.status).toBe(200);
     expect(desktop.status).toBe(200);
     expect(badOrigin.status).toBe(403);
     expect(malformedOrigin.status).toBe(403);
     expect(badHost.status).toBe(403);
+    expect(insecureOrigin.status).toBe(403);
+  });
+
+  it('serves canonical preflight without consuming an authentication boundary', async () => {
+    const response = await workerFetch(`${TEST_ORIGIN}/mcp`, {
+      method: 'OPTIONS',
+      headers: {
+        Host: 'metro-mcp.anuragd.me',
+        Origin: TEST_ORIGIN,
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'MCP-Protocol-Version, Mcp-Method, Mcp-Name',
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('access-control-allow-methods'))
+      .toBe('GET, POST, DELETE, OPTIONS');
+    expect(response.headers.has('www-authenticate')).toBe(false);
+  });
+
+  it.each([
+    ['GET', '/authorize'],
+    ['POST', '/authorize/decision'],
+    ['GET', '/callback'],
+    ['POST', '/token'],
+    ['POST', '/register'],
+    ['GET', '/.well-known/oauth-authorization-server'],
+    ['GET', '/.well-known/oauth-protected-resource'],
+    ['GET', '/.well-known/oauth-protected-resource/mcp'],
+  ])('returns 404 for former OAuth endpoint %s %s', async (method, pathname) => {
+    const response = await workerFetch(`${TEST_ORIGIN}${pathname}`, {
+      method,
+      headers: { Host: 'metro-mcp.anuragd.me' },
+    });
+
+    expect(response.status).toBe(404);
+  });
+
+  it('accepts a stale Authorization header as anonymous input', async () => {
+    const request = await modernMcpRequest('server/discover', {}, {
+      token: 'canary-do-not-log',
+    });
+
+    const response = await workerFetch(request);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.has('www-authenticate')).toBe(false);
   });
 
   it('streams request-scoped progress before the final result', async () => {
@@ -396,7 +597,7 @@ describe('assembled MCP Worker', () => {
       throw new Error(`Unmatched outbound request: ${request.url}`);
     });
 
-    const response = await SELF.fetch(await modernMcpRequest('tools/call', {
+    const response = await workerFetch(await modernMcpRequest('tools/call', {
       name: 'get_all_stations',
       arguments: { city: 'dc' },
     }, {
@@ -444,4 +645,30 @@ describe('assembled MCP Worker', () => {
     await reader.cancel('client stopped reading');
     await vi.waitFor(() => expect(upstreamAborted).toBe(true));
   });
+
+  it('enforces and recovers a Workerd limiter quota at the public MCP boundary', async () => {
+    const rateLimitKey = '198.51.100.250';
+    const request = async () => {
+      const next = await modernMcpRequest('server/discover');
+      next.headers.set('CF-Connecting-IP', rateLimitKey);
+      return workerFetch(next);
+    };
+
+    const deniedEpoch = await enterFreshRateLimitEpoch();
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      expect((await request()).status).toBe(200);
+    }
+    const denied = await request();
+    expect(denied.status).toBe(429);
+    expect(Math.floor(Date.now() / RATE_LIMIT_PERIOD_MS)).toBe(deniedEpoch);
+    expect(await denied.json()).toEqual({
+      jsonrpc: '2.0',
+      error: { code: -32029, message: 'Rate limit exceeded' },
+      id: null,
+    });
+
+    await waitUntilWithPublicHeartbeats((deniedEpoch + 1) * RATE_LIMIT_PERIOD_MS + 25);
+    expect(Math.floor(Date.now() / RATE_LIMIT_PERIOD_MS)).toBeGreaterThan(deniedEpoch);
+    expect((await request()).status).toBe(200);
+  }, 35_000);
 });

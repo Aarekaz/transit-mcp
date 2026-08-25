@@ -60,4 +60,12 @@ describe('MCP Apps build pipeline', () => {
     expect(testIndex).toBeGreaterThan(typeCheckIndex);
     expect(dryRunIndex).toBeGreaterThan(testIndex);
   });
+
+  it('keeps the Playwright Wrangler state directory portable across CI operating systems', () => {
+    const config = readProjectFile('playwright.apps.config.ts');
+
+    expect(config).not.toContain('/private/tmp');
+    expect(config).toContain("from 'node:os'");
+    expect(config).toContain("from 'node:path'");
+  });
 });

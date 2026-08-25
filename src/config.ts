@@ -1,15 +1,10 @@
 import type { Env } from './types';
 
 /** Single source of truth for the public Metro MCP release version. */
-export const SERVER_VERSION = '5.0.0';
+export const SERVER_VERSION = '6.0.0';
 
 /** Protocol revision advertised by the public server metadata. */
 export const MCP_PROTOCOL_VERSION = '2026-07-28';
-
-const ACCESS_TOKEN_TTL_SECONDS = 3600 as const;
-const REFRESH_TOKEN_TTL_SECONDS = 2_592_000 as const;
-const CLIENT_REGISTRATION_TTL_SECONDS = 7_776_000 as const;
-const LEGACY_JWT_CUTOFF = '2026-11-30T00:00:00Z' as const;
 
 export interface Config {
   mcp: {
@@ -19,15 +14,7 @@ export interface Config {
     allowedOriginHostnames: string[];
     requestStateKey: string;
   };
-  oauth: {
-    github: { clientId: string; clientSecret: string };
-    redirectUri: string;
-    accessTokenTtlSeconds: 3600;
-    refreshTokenTtlSeconds: 2_592_000;
-    clientRegistrationTtlSeconds: 7_776_000;
-  };
   apis: { wmata: string };
-  legacyJwt: { secret: string; cutoff: '2026-11-30T00:00:00Z' };
   app: { environment: 'development' | 'preview' | 'production'; version: string };
 }
 
@@ -36,11 +23,7 @@ const REQUIRED_STRING_ENV = [
   'MCP_ALLOWED_HOSTNAMES',
   'MCP_ALLOWED_ORIGIN_HOSTNAMES',
   'MCP_REQUEST_STATE_KEY',
-  'GITHUB_CLIENT_ID',
-  'GITHUB_CLIENT_SECRET',
-  'OAUTH_REDIRECT_URI',
   'WMATA_API_KEY',
-  'JWT_SECRET',
   'ENVIRONMENT',
 ] as const satisfies readonly (keyof Env)[];
 
@@ -80,21 +63,7 @@ export function loadConfig(env: Env): Config {
       allowedOriginHostnames: parseHostnameList(env.MCP_ALLOWED_ORIGIN_HOSTNAMES),
       requestStateKey: env.MCP_REQUEST_STATE_KEY,
     },
-    oauth: {
-      github: {
-        clientId: env.GITHUB_CLIENT_ID,
-        clientSecret: env.GITHUB_CLIENT_SECRET,
-      },
-      redirectUri: env.OAUTH_REDIRECT_URI,
-      accessTokenTtlSeconds: ACCESS_TOKEN_TTL_SECONDS,
-      refreshTokenTtlSeconds: REFRESH_TOKEN_TTL_SECONDS,
-      clientRegistrationTtlSeconds: CLIENT_REGISTRATION_TTL_SECONDS,
-    },
     apis: { wmata: env.WMATA_API_KEY },
-    legacyJwt: {
-      secret: env.JWT_SECRET,
-      cutoff: LEGACY_JWT_CUTOFF,
-    },
     app: {
       environment: env.ENVIRONMENT,
       version: SERVER_VERSION,
@@ -119,29 +88,8 @@ export function validateConfig(config: Config): void {
     throw new Error('MCP_ALLOWED_HOSTNAMES must include the MCP_PUBLIC_ORIGIN hostname');
   }
 
-  const expectedRedirectUri = `${config.mcp.publicOrigin}/callback`;
-  if (config.oauth.redirectUri !== expectedRedirectUri) {
-    throw new Error(`OAUTH_REDIRECT_URI must equal ${expectedRedirectUri}`);
-  }
-
   if (new TextEncoder().encode(config.mcp.requestStateKey).byteLength < 32) {
     throw new Error('MCP_REQUEST_STATE_KEY must be at least 32 bytes');
-  }
-  if (new TextEncoder().encode(config.legacyJwt.secret).byteLength < 32) {
-    throw new Error('JWT_SECRET must be at least 32 bytes');
-  }
-
-  if (config.oauth.accessTokenTtlSeconds !== ACCESS_TOKEN_TTL_SECONDS) {
-    throw new Error('OAuth accessTokenTtlSeconds must equal 3600');
-  }
-  if (config.oauth.refreshTokenTtlSeconds !== REFRESH_TOKEN_TTL_SECONDS) {
-    throw new Error('OAuth refreshTokenTtlSeconds must equal 2592000');
-  }
-  if (config.oauth.clientRegistrationTtlSeconds !== CLIENT_REGISTRATION_TTL_SECONDS) {
-    throw new Error('OAuth clientRegistrationTtlSeconds must equal 7776000');
-  }
-  if (config.legacyJwt.cutoff !== LEGACY_JWT_CUTOFF) {
-    throw new Error(`legacy JWT cutoff must equal ${LEGACY_JWT_CUTOFF}`);
   }
   if (!['development', 'preview', 'production'].includes(config.app.environment)) {
     throw new Error('ENVIRONMENT must be one of development, preview, production');

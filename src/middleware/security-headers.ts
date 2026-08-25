@@ -22,11 +22,10 @@
  * 
  * WHY DIFFERENT CONTEXTS:
  * - HTML pages need different CSP than JSON API responses
- * - OAuth flows need inline scripts, APIs don't
  * - Static content can use stricter policies
  */
 export type ResponseContext = 
-  | 'html'        // HTML pages (OAuth callbacks)
+  | 'html'        // Scriptless HTML pages
   | 'json'        // JSON responses (MCP API, error responses)
   | 'static'      // Static content (images, CSS)
   | 'stream';     // SSE streams
@@ -49,36 +48,16 @@ export type ResponseContext =
  * - form-action: Where forms can submit to
  */
 const CSP_POLICIES: Record<ResponseContext, string> = {
-  /**
-   * HTML context (OAuth callbacks)
-   * 
-   * WHY 'unsafe-inline' FOR SCRIPTS:
-   * OAuth callback pages need inline scripts to:
-   * 1. Extract authorization code from URL
-   * 2. Display the code to the user
-   * 3. Handle the OAuth flow completion
-   * 
-   * SECURITY TRADEOFF:
-   * We accept 'unsafe-inline' for OAuth pages because:
-   * - These pages are generated server-side
-   * - No user-controlled content is rendered
-   * - The inline scripts are minimal and audited
-   * - Alternative (nonces) would complicate deployment
-   * 
-   * MITIGATION:
-   * - OAuth pages don't accept user input
-   * - Scripts are static and reviewed
-   * - frame-ancestors prevents clickjacking
-   */
+  /** Scriptless HTML documents use only first-party styles and images. */
   html: [
     "default-src 'none'",
-    "script-src 'self' 'unsafe-inline'",  // Allow inline scripts for OAuth
-    "style-src 'self' 'unsafe-inline'",   // Allow inline styles
-    "img-src 'self' data:",               // Allow images from same origin and data URIs
-    "connect-src 'self'",                 // Allow AJAX to same origin
-    "frame-ancestors 'none'",             // Prevent embedding in frames
-    "base-uri 'self'",                    // Restrict <base> tag
-    "form-action 'self'"                  // Forms can only submit to same origin
+    "script-src 'none'",
+    "style-src 'self'",
+    "img-src 'self'",
+    "connect-src 'none'",
+    "frame-ancestors 'none'",
+    "base-uri 'none'",
+    "form-action 'none'"
   ].join('; '),
 
   /**
@@ -172,8 +151,8 @@ const SECURITY_HEADERS = {
    * Protects against clickjacking attacks.
    * 
    * CLICKJACKING EXPLAINED:
-   * Attacker embeds your site in invisible iframe, tricks user
-   * into clicking on hidden buttons (e.g., "Authorize" button).
+   * Attacker embeds your site in an invisible iframe and tricks a user
+   * into clicking a hidden action.
    * 
    * WHY DENY:
    * This service doesn't need to be embedded anywhere.
@@ -189,19 +168,16 @@ const SECURITY_HEADERS = {
    * Referrer-Policy: strict-origin-when-cross-origin
    * 
    * WHY THIS POLICY:
-   * Balances privacy with functionality:
-   * - Same-origin: Full URL in referrer (needed for OAuth)
+   * Balances privacy with ordinary navigation:
+   * - Same-origin: Full URL in referrer
    * - Cross-origin HTTPS: Only send origin, not full URL
    * - Cross-origin HTTP: No referrer (protect against downgrade)
    * 
    * PRIVACY BENEFIT:
-   * Prevents leaking sensitive URL parameters to third parties.
-   * Example: /callback?code=secret doesn't leak 'secret' to other sites.
+   * Prevents leaking sensitive URL paths and parameters to third parties.
    * 
-   * ALTERNATIVES CONSIDERED:
-   * - no-referrer: Too strict, breaks OAuth flows
-   * - same-origin: Good but doesn't handle cross-origin well
-   * - strict-origin-when-cross-origin: Best balance (CHOSEN)
+   * Cross-origin requests receive only the origin and downgrade requests
+   * receive no referrer.
    */
   'Referrer-Policy': 'strict-origin-when-cross-origin',
 
@@ -263,14 +239,10 @@ const SECURITY_HEADERS = {
  * We need CORS headers to allow legitimate cross-origin requests.
  * 
  * SECURITY NOTE:
- * We allow all origins (*) because:
- * 1. Authentication via OAuth + JWT provides real security
- * 2. MCP protocol requires cross-origin access
- * 3. Public API doesn't have CSRF concerns (uses Bearer tokens)
- * 
- * IF WE USED COOKIES:
- * We would need to restrict origins and set credentials: true
- * But we use Bearer tokens, so * is safe.
+ * Metro MCP is a public, anonymous, read-only API with no cookies or
+ * credentialed browser requests. Authorization remains an allowed request
+ * header only so clients with stale configuration can reach the boundary
+ * that removes it before dispatch.
  */
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -293,7 +265,7 @@ const CORS_HEADERS = {
  * const response = new Response(JSON.stringify(data));
  * return addSecurityHeaders(response, 'json', true);
  * 
- * // For HTML OAuth callback
+ * // For a scriptless HTML response
  * const response = new Response(html, { headers: { 'Content-Type': 'text/html' } });
  * return addSecurityHeaders(response, 'html', false);
  * ```

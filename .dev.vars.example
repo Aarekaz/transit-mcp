@@ -6,18 +6,12 @@
 MCP_PUBLIC_ORIGIN=http://localhost:8787
 MCP_ALLOWED_HOSTNAMES=localhost
 MCP_ALLOWED_ORIGIN_HOSTNAMES=localhost
-OAUTH_REDIRECT_URI=http://localhost:8787/callback
 ENVIRONMENT=development
-
-# Use a dedicated local GitHub OAuth App with the callback above.
-GITHUB_CLIENT_ID=replace-with-your-local-github-oauth-app-client-id
-GITHUB_CLIENT_SECRET=replace-with-your-local-github-oauth-app-client-secret
 
 # Get a development key from https://developer.wmata.com/.
 WMATA_API_KEY=replace-with-your-local-wmata-api-key
 
-# Generate independent stable local values with `openssl rand -hex 32`.
-# These clear placeholders are intentionally at least 32 bytes so loadConfig()
-# can validate the complete checked-in example; replace both before use.
+# Generate a stable local value with `openssl rand -hex 32`.
+# This clear placeholder is intentionally at least 32 bytes so loadConfig()
+# can validate the complete checked-in example; replace it before use.
 MCP_REQUEST_STATE_KEY=replace-with-a-local-request-state-key-at-least-32-bytes
-JWT_SECRET=replace-with-a-local-jwt-secret-at-least-32-bytes

@@ -1,9 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import {
-  parseMetroMcpProps,
-  requireTransitRead,
-  type MetroMcpProps,
-} from '../../src/mcp/context';
+import type { MetroMcpContext } from '../../src/mcp/context';
+import { createMockEnv } from '../setup';
 import {
   PRIVATE_NO_CACHE,
   PUBLIC_24H,
@@ -13,70 +10,15 @@ import {
   withTransitErrors,
 } from '../../src/mcp/shared';
 
-describe('Metro MCP authentication context', () => {
-  it('accepts only the normalized read-only auth shape', () => {
-    expect(parseMetroMcpProps({
-      userId: '42',
-      userLogin: 'anurag',
-      clientId: 'claude',
-      scopes: ['transit:read'],
-    })).toEqual({
-      userId: '42',
-      userLogin: 'anurag',
-      clientId: 'claude',
-      scopes: ['transit:read'],
-    });
-  });
+describe('Metro MCP anonymous context', () => {
+  it('contains only request-independent server construction inputs', () => {
+    const context = {
+      env: createMockEnv(),
+      era: 'modern',
+    } satisfies MetroMcpContext;
 
-  it.each([
-    ['an array', []],
-    ['missing fields', { userId: '42', scopes: [] }],
-    ['blank fields', {
-      userId: ' ', userLogin: 'anurag', clientId: 'claude', scopes: ['transit:read'],
-    }],
-    ['an empty scope tuple', {
-      userId: '42', userLogin: 'anurag', clientId: 'claude', scopes: [],
-    }],
-    ['an extra scope', {
-      userId: '42',
-      userLogin: 'anurag',
-      clientId: 'claude',
-      scopes: ['transit:read', 'transit:write'],
-    }],
-    ['a different scope', {
-      userId: '42', userLogin: 'anurag', clientId: 'claude', scopes: ['transit:write'],
-    }],
-  ])('rejects %s', (_description, props) => {
-    expect(() => parseMetroMcpProps(props)).toThrow('Invalid OAuth props');
-  });
-
-  it('rejects missing transit scope before server creation', () => {
-    expect(() => requireTransitRead({
-      userId: '42',
-      userLogin: 'a',
-      clientId: 'c',
-      scopes: [],
-    })).toThrow('insufficient_scope');
-  });
-
-  it('returns authorized props unchanged', () => {
-    const props = parseMetroMcpProps({
-      userId: '42',
-      userLogin: 'anurag',
-      clientId: 'claude',
-      scopes: ['transit:read'],
-    });
-
-    expect(requireTransitRead(props)).toBe(props);
-  });
-
-  it('preserves the static and runtime identity of scope-only input', () => {
-    const scopeOnly = { scopes: ['transit:read'] as const };
-    const authorized = requireTransitRead(scopeOnly);
-
-    expect(authorized).toBe(scopeOnly);
-    expectTypeOf(authorized).toEqualTypeOf<typeof scopeOnly>();
-    expectTypeOf(authorized).not.toMatchTypeOf<MetroMcpProps>();
+    expect(context.era).toBe('modern');
+    expectTypeOf(context).toMatchTypeOf<MetroMcpContext>();
   });
 });
 

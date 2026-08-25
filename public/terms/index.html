@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Terms of Use · Metro MCP</title>
+  <meta name="description" content="Terms for using the public, read-only Metro MCP transit information service.">
+  <link rel="canonical" href="https://metro-mcp.anuragd.me/terms/">
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="stylesheet" href="/legal.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <header class="site-header">
+    <a class="brand" href="/">Metro MCP</a>
+    <nav class="site-nav" aria-label="Primary">
+      <a href="/docs/">Docs</a>
+      <a href="/privacy/">Privacy</a>
+      <a href="/terms/" aria-current="page">Terms</a>
+      <a href="/support/">Support</a>
+    </nav>
+  </header>
+
+  <main id="main-content" class="page-shell">
+    <div class="route-line" aria-hidden="true"></div>
+    <header class="page-intro">
+      <p class="eyebrow">Service information</p>
+      <h1>Terms of Use</h1>
+      <p class="lede">Metro MCP is a public, read-only informational service for current DC Metro and NYC Subway data. Use it as a convenient interface to transit feeds, not as an official guarantee.</p>
+      <p class="page-meta">Last updated <time datetime="2026-08-21">August 21, 2026</time></p>
+    </header>
+
+    <article class="legal-copy">
+      <section aria-labelledby="acceptable-use">
+        <h2 id="acceptable-use">Using the service</h2>
+        <p>Metro MCP is an unofficial community project. It is not affiliated with or endorsed by WMATA, MTA, OpenAI, Anthropic, or any transit agency. You may use it to retrieve public, read-only transit information through its website, server-information endpoint, and MCP tools. The service does not sell tickets, control transit operations, or modify agency data.</p>
+      </section>
+
+      <section aria-labelledby="upstream-data">
+        <h2 id="upstream-data">Live data has limits</h2>
+        <p>WMATA and MTA control the availability and accuracy of their upstream feeds. Results can be delayed, incomplete, inaccurate, unavailable, omitted, stale, or changed by the agencies without notice. Metro MCP can also be interrupted by network, edge-platform, deployment, or maintenance events.</p>
+        <div class="plain-callout">
+          <strong>Do not rely on Metro MCP for an emergency or other safety-critical decision.</strong>
+          Do not treat any result as a guaranteed arrival. Use official agency alerts and emergency services when timing or safety is critical.
+        </div>
+      </section>
+
+      <section aria-labelledby="fair-use">
+        <h2 id="fair-use">Fair use and rate limits</h2>
+        <p>Please use reasonable request rates. Abuse, disruption, attempts to circumvent service protections, and unlawful use are prohibited. Avoid automated traffic that disrupts the service or its upstream providers. Metro MCP uses abuse controls and rate limits, currently configured at roughly 300 requests per 60-second window per source-IP key per Cloudflare location. Shared networks can share that allowance, and enforcement is eventually consistent.</p>
+        <p>Requests may be refused, throttled, or limited to protect the service, other users, and upstream systems. The policy can change as operational needs change.</p>
+      </section>
+
+      <section aria-labelledby="third-party-terms">
+        <h2 id="third-party-terms">Third-party services and data</h2>
+        <p>Use of Cloudflare, GitHub, WMATA, MTA, MCP clients, and transit data remains subject to applicable third-party service and data-source terms. Metro MCP does not replace those terms.</p>
+      </section>
+
+      <section aria-labelledby="warranty">
+        <h2 id="warranty">No warranty</h2>
+        <p>Metro MCP is provided &ldquo;as is&rdquo; and &ldquo;as available,&rdquo; without warranties of availability, accuracy, fitness for a particular purpose, or non-infringement. To the extent permitted by law, the project author is not liable for losses arising from use of, inability to use, or reliance on the service or its data.</p>
+      </section>
+
+      <section aria-labelledby="source-license">
+        <h2 id="source-license">Open source</h2>
+        <p>The <a href="https://github.com/Aarekaz/metro-mcp">source on GitHub</a> is available under the MIT License. The source license covers the software; transit data and provider names remain subject to their respective owners and terms.</p>
+      </section>
+
+      <section aria-labelledby="changes">
+        <h2 id="changes">Changes and questions</h2>
+        <p>Metro MCP may change or discontinue the service, and these terms may change when the service or its dependencies change. The date above identifies the current published version. Visit <a href="/support/">Support</a> with questions.</p>
+      </section>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <p>&copy; 2026 Anurag Dhungana · MIT</p>
+    <nav class="footer-nav" aria-label="Legal and support">
+      <a href="/privacy/">Privacy</a>
+      <a href="/terms/" aria-current="page">Terms</a>
+      <a href="/support/">Support</a>
+    </nav>
+  </footer>
+</body>
+</html>

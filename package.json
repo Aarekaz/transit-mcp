@@ -1,6 +1,6 @@
 {
   "name": "metro-mcp",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "type": "module",
   "description": "MCP server for US transit systems (DC Metro, NYC Subway) on Cloudflare Workers",
   "main": "src/index.ts",
@@ -20,7 +20,6 @@
     "type-check": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit && tsc -p apps/transit-board/tsconfig.json --noEmit && tsc -p tests/apps/tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@cloudflare/workers-oauth-provider": "0.10.3",
     "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@modelcontextprotocol/server": "2.0.0",

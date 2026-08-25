@@ -1,26 +1,125 @@
-import { isLegacyRequest, type AuthInfo } from '@modelcontextprotocol/server';
+import { isLegacyRequest } from '@modelcontextprotocol/server';
 import { createMcpHandler } from 'agents/mcp/server';
 
 import type { Config } from '../config';
 import { loadConfig } from '../config';
 import type { TelemetryInput } from '../telemetry';
 import type { Env } from '../types';
-import { parseMetroMcpProps, requireTransitRead } from './context';
 import { createMetroMcpServer } from './server';
 
-function insufficientScope(): Response {
-  return Response.json(
-    {
-      error: 'insufficient_scope',
-      error_description: 'The transit:read scope is required.',
+/** Anonymous MCP requests are intentionally small; 1 MiB leaves ample protocol headroom. */
+export const MCP_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
+const MCP_REQUEST_BODY_LIMIT_MESSAGE =
+  `MCP request body exceeds ${MCP_REQUEST_BODY_LIMIT_BYTES}-byte limit`;
+
+export type McpBodyAccumulator = {
+  append: (chunk: Uint8Array) => boolean;
+  bytes: () => Uint8Array;
+};
+
+/** Copy streamed bytes into one geometrically growing buffer capped at limit plus sentinel. */
+export function createMcpBodyAccumulator(): McpBodyAccumulator {
+  const maximumLength = MCP_REQUEST_BODY_LIMIT_BYTES + 1;
+  let storage = new Uint8Array(0);
+  let byteLength = 0;
+
+  return {
+    append(chunk) {
+      const requiredLength = Math.min(maximumLength, byteLength + chunk.byteLength);
+      if (requiredLength > storage.byteLength) {
+        let capacity = Math.max(8 * 1024, storage.byteLength);
+        while (capacity < requiredLength) {
+          capacity = Math.min(maximumLength, capacity * 2);
+        }
+        const grown = new Uint8Array(capacity);
+        grown.set(storage.subarray(0, byteLength));
+        storage = grown;
+      }
+
+      const copiedLength = requiredLength - byteLength;
+      storage.set(chunk.subarray(0, copiedLength), byteLength);
+      byteLength = requiredLength;
+      return byteLength <= MCP_REQUEST_BODY_LIMIT_BYTES;
     },
-    {
-      status: 403,
-      headers: {
-        'WWW-Authenticate': 'Bearer error="insufficient_scope", scope="transit:read"',
-      },
+    bytes() {
+      return storage.subarray(0, byteLength);
     },
-  );
+  };
+}
+
+function requestBodyTooLargeResponse(): Response {
+  return Response.json({
+    jsonrpc: '2.0',
+    error: { code: -32000, message: MCP_REQUEST_BODY_LIMIT_MESSAGE },
+    id: null,
+  }, { status: 413 });
+}
+
+function validDeclaredBodyLength(request: Request): bigint | undefined {
+  const value = request.headers.get('Content-Length');
+  if (value === null || !/^\d+$/.test(value)) return undefined;
+  return BigInt(value);
+}
+
+function rebuildRequestBody(request: Request, body: Uint8Array): Request {
+  const headers = new Headers(request.headers);
+  headers.delete('Content-Length');
+  headers.set('Content-Length', String(body.byteLength));
+  return new Request(request, { body, headers });
+}
+
+async function boundedMcpPostRequest(request: Request): Promise<Request | Response> {
+  if (request.method.toUpperCase() !== 'POST') return request;
+
+  const declaredLength = validDeclaredBodyLength(request);
+  if (declaredLength !== undefined
+    && declaredLength > BigInt(MCP_REQUEST_BODY_LIMIT_BYTES)) {
+    return requestBodyTooLargeResponse();
+  }
+
+  if (request.signal.aborted) {
+    if (request.body !== null) throw request.signal.reason;
+    return request;
+  }
+
+  if (request.body === null) return request;
+
+  const reader = request.body.getReader();
+  const accumulator = createMcpBodyAccumulator();
+  let rejectAbort: (reason?: unknown) => void = () => undefined;
+  let abortCancellation: Promise<void> | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const forwardAbort = () => {
+    const reason = request.signal.reason;
+    rejectAbort(reason);
+    abortCancellation = reader.cancel(reason).catch(() => undefined);
+  };
+  request.signal.addEventListener('abort', forwardAbort, { once: true });
+
+  try {
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), aborted]);
+      if (done) break;
+      if (value === undefined || value.byteLength === 0) continue;
+      if (!accumulator.append(value)) {
+        await reader.cancel(new Error(MCP_REQUEST_BODY_LIMIT_MESSAGE)).catch(() => undefined);
+        return requestBodyTooLargeResponse();
+      }
+    }
+  } catch (error) {
+    if (request.signal.aborted) {
+      await abortCancellation;
+      throw request.signal.reason;
+    }
+    throw error;
+  } finally {
+    request.signal.removeEventListener('abort', forwardAbort);
+    reader.releaseLock();
+  }
+
+  return rebuildRequestBody(request, accumulator.bytes());
 }
 
 async function missingModernVersionHeaderResponse(
@@ -63,15 +162,18 @@ type LinkedMcpRequest = {
   cleanup: () => void;
 };
 
-function linkMcpRequestSignal(request: Request): LinkedMcpRequest {
+function linkMcpRequestSignal(
+  request: Request,
+  sourceSignal: AbortSignal = request.signal,
+): LinkedMcpRequest {
   const controller = new AbortController();
   let listening = false;
-  const forwardAbort = () => controller.abort(request.signal.reason);
+  const forwardAbort = () => controller.abort(sourceSignal.reason);
 
-  if (request.signal.aborted) {
+  if (sourceSignal.aborted) {
     forwardAbort();
   } else {
-    request.signal.addEventListener('abort', forwardAbort, { once: true });
+    sourceSignal.addEventListener('abort', forwardAbort, { once: true });
     listening = true;
   }
 
@@ -81,7 +183,7 @@ function linkMcpRequestSignal(request: Request): LinkedMcpRequest {
     cleanup() {
       if (listening) {
         listening = false;
-        request.signal.removeEventListener('abort', forwardAbort);
+        sourceSignal.removeEventListener('abort', forwardAbort);
       }
     },
   };
@@ -136,27 +238,17 @@ function bridgeResponseCancellation(
   });
 }
 
-/** Serve one authenticated stateless MCP request from Provider-owned props. */
+/** Serve one anonymous stateless MCP request. */
 export async function handleMcpRequest(
   request: Request,
   env: Env,
-  authInfo: AuthInfo | undefined,
-  rawProps: unknown,
   config: Config = loadConfig(env),
   telemetry?: TelemetryInput,
 ): Promise<Response> {
-  let props;
-  try {
-    props = requireTransitRead(parseMetroMcpProps(rawProps));
-  } catch {
-    return insufficientScope();
-  }
+  const bounded = await boundedMcpPostRequest(request);
+  if (bounded instanceof Response) return bounded;
 
-  if (telemetry) {
-    telemetry.clientId = props.clientId;
-  }
-
-  const missingVersion = await missingModernVersionHeaderResponse(request);
+  const missingVersion = await missingModernVersionHeaderResponse(bounded);
   if (missingVersion) {
     return missingVersion;
   }
@@ -166,16 +258,14 @@ export async function handleMcpRequest(
       if (telemetry) {
         telemetry.era = sdkContext.era;
         if (sdkContext.era === 'modern') {
-          telemetry.protocolVersion = request.headers.get('MCP-Protocol-Version') ?? undefined;
-          telemetry.mcpMethod = request.headers.get('Mcp-Method') ?? undefined;
-          telemetry.mcpName = request.headers.get('Mcp-Name') ?? undefined;
+          telemetry.protocolVersion = bounded.headers.get('MCP-Protocol-Version') ?? undefined;
+          telemetry.mcpMethod = bounded.headers.get('Mcp-Method') ?? undefined;
+          telemetry.mcpName = bounded.headers.get('Mcp-Name') ?? undefined;
         }
       }
       return createMetroMcpServer({
         env,
         era: sdkContext.era,
-        authInfo: sdkContext.authInfo,
-        props,
       });
     },
     {
@@ -184,17 +274,16 @@ export async function handleMcpRequest(
       responseMode: 'auto',
       allowedHostnames: config.mcp.allowedHostnames,
       allowedOriginHostnames: config.mcp.allowedOriginHostnames,
-      authContext: { props },
     },
   );
 
-  const linked = linkMcpRequestSignal(request);
+  const headers = new Headers(bounded.headers);
+  headers.delete('Authorization');
+  const anonymousRequest = new Request(bounded, { headers });
+  const linked = linkMcpRequestSignal(anonymousRequest, request.signal);
   let response: Response;
   try {
-    response = await handler.fetch(
-      linked.request,
-      authInfo ? { authInfo } : undefined,
-    );
+    response = await handler.fetch(linked.request);
   } catch (error) {
     linked.cleanup();
     throw error;

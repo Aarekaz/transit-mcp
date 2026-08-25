@@ -87,7 +87,7 @@ type Observations = {
 const observations = new WeakMap<Page, Observations>();
 const hostUrl = '/tests/apps/host.html';
 
-test('uses Playwright-managed Chromium and a dedicated gate server', async ({ browserName }, testInfo) => {
+test('uses Playwright-managed Chromium and isolated Vite and Worker gate servers', async ({ browserName }, testInfo) => {
   const webServers = Array.isArray(appsConfig.webServer)
     ? appsConfig.webServer
     : [appsConfig.webServer];
@@ -95,8 +95,14 @@ test('uses Playwright-managed Chromium and a dedicated gate server', async ({ br
   expect(browserName).toBe('chromium');
   expect(testInfo.project.use.channel).toBeUndefined();
   expect(appsConfig.use?.channel).toBeUndefined();
-  expect(webServers).toHaveLength(1);
+  expect(webServers).toHaveLength(2);
   expect(webServers[0]?.reuseExistingServer).toBe(false);
+  expect(webServers[0]?.command).toContain('vite');
+  expect(webServers[1]?.reuseExistingServer).toBe(false);
+  expect(webServers[1]?.command).toContain('wrangler dev --local');
+  expect(webServers[1]?.command).toContain('MCP_REQUEST_STATE_KEY:playwright-local-placeholder-key-000000');
+  expect(webServers[1]?.command).toContain('WMATA_API_KEY:playwright-local-placeholder');
+  expect(webServers[1]?.url).toBe('http://127.0.0.1:4179/info');
 });
 
 function isUnexpectedExternalRequest(page: Page, request: Request): boolean {
