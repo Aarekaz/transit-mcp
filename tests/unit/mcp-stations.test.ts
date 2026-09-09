@@ -259,6 +259,7 @@ describe('station tool contracts', () => {
     for (const registration of registrations.values()) {
       expect(registration.config.annotations).toEqual({
         readOnlyHint: true,
+        destructiveHint: false,
         idempotentHint: true,
         openWorldHint: true,
       });

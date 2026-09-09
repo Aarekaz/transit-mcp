@@ -30,6 +30,7 @@ export const stationItemSchema = z.object({
 
 export const READ_ONLY_LIVE = {
   readOnlyHint: true,
+  destructiveHint: false,
   idempotentHint: true,
   openWorldHint: true,
 } as const satisfies ToolAnnotations;

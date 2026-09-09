@@ -25,6 +25,7 @@ export const TRANSIT_BOARD_TOOL_META = {
 
 export const TRANSIT_BOARD_RESOURCE_META = {
   ui: {
+    domain: 'https://metro-mcp.anuragd.me',
     csp: {
       connectDomains: [],
       resourceDomains: [],
@@ -196,6 +197,7 @@ export const EXPECTED_INTENTIONAL_DEVIATIONS = [
 
 const READ_ONLY_LIVE = {
   readOnlyHint: true,
+  destructiveHint: false,
   idempotentHint: true,
   openWorldHint: true,
 } as const;
