@@ -242,7 +242,7 @@ export type TransitRenderModel =
 
 export type NarrowResult =
   | { ok: true; model: TransitRenderModel }
-  | { ok: false; viewLabel: string };
+  | { ok: false; viewLabel: string; detail?: string };
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -268,11 +268,11 @@ function nonNegativeInteger(value: unknown): number | undefined {
 }
 
 function nullableFiniteNumber(value: unknown): number | null | undefined {
-  return value === null ? null : finiteNumber(value);
+  return value === null || value === undefined ? null : finiteNumber(value);
 }
 
 function nullableNonNegativeInteger(value: unknown): number | null | undefined {
-  return value === null ? null : nonNegativeInteger(value);
+  return value === null || value === undefined ? null : nonNegativeInteger(value);
 }
 
 function city(value: unknown): TransitCity | undefined {
@@ -280,7 +280,7 @@ function city(value: unknown): TransitCity | undefined {
 }
 
 function nullableDisplayString(value: unknown): string | null | undefined {
-  return value === null ? null : displayString(value);
+  return value === null || value === undefined ? null : displayString(value);
 }
 
 const TRANSIT_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?(Z)?$/;
@@ -334,7 +334,7 @@ function timestamp(value: unknown): string | undefined {
 }
 
 function nullableTimestamp(value: unknown): string | null | undefined {
-  return value === null ? null : timestamp(value);
+  return value === null || value === undefined ? null : timestamp(value);
 }
 
 function displayStringArray(value: unknown): string[] | undefined {
@@ -371,7 +371,7 @@ function parseArray<Item>(
 }
 
 function parseAddress(value: unknown): StationAddress | null | undefined {
-  if (value === null) {
+  if (value === null || value === undefined) {
     return null;
   }
   if (!isRecord(value)) {
@@ -421,7 +421,7 @@ function parseRailPrediction(value: unknown): RailPrediction | undefined {
   }
   const line = displayString(value.line);
   const destination = displayString(value.destination);
-  const minutesAway = value.minutesAway === null
+  const minutesAway = value.minutesAway === null || value.minutesAway === undefined
     ? null
     : nonNegativeInteger(value.minutesAway);
   const arrivalTime = nullableDisplayString(value.arrivalTime);
@@ -454,6 +454,32 @@ function parseRailPrediction(value: unknown): RailPrediction | undefined {
     direction,
     track,
   };
+}
+
+function invalidRailPredictionField(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  if (displayString(value.line) === undefined) return 'line';
+  if (displayString(value.destination) === undefined) return 'destination';
+  if (
+    value.minutesAway !== null
+    && value.minutesAway !== undefined
+    && nonNegativeInteger(value.minutesAway) === undefined
+  ) {
+    return 'minutesAway';
+  }
+  if (nullableDisplayString(value.arrivalTime) === undefined) return 'arrivalTime';
+  if (
+    value.arrivalStatus !== 'ARRIVING'
+    && value.arrivalStatus !== 'BOARDING'
+    && value.arrivalStatus !== 'DELAYED'
+    && value.arrivalStatus !== 'SCHEDULED'
+  ) {
+    return 'arrivalStatus';
+  }
+  if (nullableDisplayString(value.cars) === undefined) return 'cars';
+  if (nullableDisplayString(value.direction) === undefined) return 'direction';
+  if (nullableDisplayString(value.track) === undefined) return 'track';
+  return undefined;
 }
 
 function parseBusPrediction(value: unknown): BusPrediction | undefined {
@@ -611,7 +637,7 @@ function parseBusStop(value: unknown): BusStop | undefined {
 }
 
 function parseSearchLocation(value: unknown): SearchLocation | null | undefined {
-  if (value === null) {
+  if (value === null || value === undefined) {
     return null;
   }
   if (!isRecord(value)) {
@@ -689,20 +715,33 @@ function parseTrainPosition(value: unknown): TrainPosition | undefined {
   };
 }
 
-function malformed(viewLabel: string): NarrowResult {
-  return { ok: false, viewLabel };
+function malformed(viewLabel: string, detail?: string): NarrowResult {
+  return detail === undefined ? { ok: false, viewLabel } : { ok: false, viewLabel, detail };
 }
 
 function narrowRailArrivals(value: unknown): NarrowResult {
   if (!isRecord(value)) {
-    return malformed('train arrival');
+    return malformed('train arrival', 'Invalid result: expected an object.');
   }
   const resultCity = city(value.city);
   const station = displayString(value.station);
   const predictions = parseArray(value.predictions, parseRailPrediction);
-  return resultCity !== undefined && station !== undefined && predictions !== undefined
-    ? { ok: true, model: { kind: 'rail-arrivals', city: resultCity, station, predictions } }
-    : malformed('train arrival');
+  if (resultCity === undefined) return malformed('train arrival', 'Invalid field: city.');
+  if (station === undefined) return malformed('train arrival', 'Invalid field: station.');
+  if (predictions === undefined) {
+    if (!Array.isArray(value.predictions)) {
+      return malformed('train arrival', 'Invalid field: predictions.');
+    }
+    const invalidIndex = value.predictions.findIndex(
+      prediction => parseRailPrediction(prediction) === undefined,
+    );
+    const field = invalidRailPredictionField(value.predictions[invalidIndex]);
+    const path = field === undefined
+      ? `predictions[${invalidIndex}]`
+      : `predictions[${invalidIndex}].${field}`;
+    return malformed('train arrival', `Invalid field: ${path}.`);
+  }
+  return { ok: true, model: { kind: 'rail-arrivals', city: resultCity, station, predictions } };
 }
 
 function narrowBusArrivals(value: unknown): NarrowResult {
