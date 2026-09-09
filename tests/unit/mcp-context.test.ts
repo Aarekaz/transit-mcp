@@ -26,6 +26,7 @@ describe('shared MCP contracts', () => {
   it('defines read-only live annotations and cache policies', () => {
     expect(READ_ONLY_LIVE).toEqual({
       readOnlyHint: true,
+      destructiveHint: false,
       idempotentHint: true,
       openWorldHint: true,
     });

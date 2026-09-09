@@ -21,6 +21,7 @@ export const TRANSIT_BOARD_TOOL_META = Object.freeze({
 const EMPTY_DOMAINS = Object.freeze([] as string[]);
 const TRANSIT_BOARD_RESOURCE_META = Object.freeze({
   ui: Object.freeze({
+    domain: 'https://metro-mcp.anuragd.me',
     csp: Object.freeze({
       connectDomains: EMPTY_DOMAINS,
       resourceDomains: EMPTY_DOMAINS,
