@@ -242,7 +242,7 @@ export type TransitRenderModel =
 
 export type NarrowResult =
   | { ok: true; model: TransitRenderModel }
-  | { ok: false; viewLabel: string; detail?: string };
+  | { ok: false; viewLabel: string };
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -454,32 +454,6 @@ function parseRailPrediction(value: unknown): RailPrediction | undefined {
     direction,
     track,
   };
-}
-
-function invalidRailPredictionField(value: unknown): string | undefined {
-  if (!isRecord(value)) return undefined;
-  if (displayString(value.line) === undefined) return 'line';
-  if (displayString(value.destination) === undefined) return 'destination';
-  if (
-    value.minutesAway !== null
-    && value.minutesAway !== undefined
-    && nonNegativeInteger(value.minutesAway) === undefined
-  ) {
-    return 'minutesAway';
-  }
-  if (nullableDisplayString(value.arrivalTime) === undefined) return 'arrivalTime';
-  if (
-    value.arrivalStatus !== 'ARRIVING'
-    && value.arrivalStatus !== 'BOARDING'
-    && value.arrivalStatus !== 'DELAYED'
-    && value.arrivalStatus !== 'SCHEDULED'
-  ) {
-    return 'arrivalStatus';
-  }
-  if (nullableDisplayString(value.cars) === undefined) return 'cars';
-  if (nullableDisplayString(value.direction) === undefined) return 'direction';
-  if (nullableDisplayString(value.track) === undefined) return 'track';
-  return undefined;
 }
 
 function parseBusPrediction(value: unknown): BusPrediction | undefined {
@@ -715,33 +689,20 @@ function parseTrainPosition(value: unknown): TrainPosition | undefined {
   };
 }
 
-function malformed(viewLabel: string, detail?: string): NarrowResult {
-  return detail === undefined ? { ok: false, viewLabel } : { ok: false, viewLabel, detail };
+function malformed(viewLabel: string): NarrowResult {
+  return { ok: false, viewLabel };
 }
 
 function narrowRailArrivals(value: unknown): NarrowResult {
   if (!isRecord(value)) {
-    return malformed('train arrival', 'Invalid result: expected an object.');
+    return malformed('train arrival');
   }
   const resultCity = city(value.city);
   const station = displayString(value.station);
   const predictions = parseArray(value.predictions, parseRailPrediction);
-  if (resultCity === undefined) return malformed('train arrival', 'Invalid field: city.');
-  if (station === undefined) return malformed('train arrival', 'Invalid field: station.');
-  if (predictions === undefined) {
-    if (!Array.isArray(value.predictions)) {
-      return malformed('train arrival', 'Invalid field: predictions.');
-    }
-    const invalidIndex = value.predictions.findIndex(
-      prediction => parseRailPrediction(prediction) === undefined,
-    );
-    const field = invalidRailPredictionField(value.predictions[invalidIndex]);
-    const path = field === undefined
-      ? `predictions[${invalidIndex}]`
-      : `predictions[${invalidIndex}].${field}`;
-    return malformed('train arrival', `Invalid field: ${path}.`);
-  }
-  return { ok: true, model: { kind: 'rail-arrivals', city: resultCity, station, predictions } };
+  return resultCity !== undefined && station !== undefined && predictions !== undefined
+    ? { ok: true, model: { kind: 'rail-arrivals', city: resultCity, station, predictions } }
+    : malformed('train arrival');
 }
 
 function narrowBusArrivals(value: unknown): NarrowResult {

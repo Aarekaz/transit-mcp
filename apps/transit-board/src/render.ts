@@ -53,14 +53,14 @@ function unsupportedTool(): HTMLElement {
   ]);
 }
 
-function unsupportedResult(viewLabel: string, detail?: string): HTMLElement {
+function unsupportedResult(viewLabel: string): HTMLElement {
   return element('section', {
     className: 'transit-view state-view state-view--error',
     attributes: { 'data-view': 'unsupported-result', role: 'alert' },
   }, [
     element('p', { className: 'board-kicker', text: 'Metro MCP · Result unavailable' }),
     element('h1', { text: `This ${viewLabel} result can’t be displayed` }),
-    element('p', { text: detail ?? 'Required transit fields are missing or invalid.' }),
+    element('p', { text: 'Required transit fields are missing or invalid.' }),
   ]);
 }
 
@@ -78,7 +78,7 @@ export function renderToolResult(
 
   const result = narrowToolResult(toolName, structuredContent);
   if (!result.ok) {
-    container.append(unsupportedResult(result.viewLabel, result.detail));
+    container.append(unsupportedResult(result.viewLabel));
     return false;
   }
   container.append(renderModel(result.model));

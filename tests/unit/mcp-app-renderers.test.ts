@@ -646,27 +646,6 @@ describe('Transit Board rendering boundary', () => {
     expect(container.querySelector('pre')).toBeNull();
   });
 
-  it('identifies the first invalid rail-arrival field without echoing transit values', () => {
-    const container = mountResult('get_station_predictions', {
-      city: 'dc',
-      station: 'A01',
-      predictions: [{
-        line: 'RD',
-        destination: 'Glenmont',
-        minutesAway: 5,
-        arrivalTime: 123,
-        arrivalStatus: 'SCHEDULED',
-        cars: '8',
-        direction: null,
-        track: null,
-      }],
-    });
-
-    const alert = queryRequired(container, '[role="alert"]');
-    expect(alert.textContent).toContain('Invalid field: predictions[0].arrivalTime.');
-    expect(alert.textContent).not.toContain('123');
-  });
-
   it.each([
     {
       toolName: 'get_bus_predictions',
