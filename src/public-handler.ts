@@ -3,6 +3,8 @@ import { loadConfig } from './config';
 import { getServerInfo } from './server-info';
 import type { Env } from './types';
 
+const OPENAI_APPS_CHALLENGE = 'A4dphR5uRWU44rm5ytkVkwHt8wj3aJmxoRja8nLMnsg';
+
 /** Serve public server metadata and static assets. */
 export async function handlePublicRequest(
   request: Request,
@@ -17,6 +19,11 @@ export async function handlePublicRequest(
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
       },
+    });
+  }
+  if (pathname === '/.well-known/openai-apps-challenge' && request.method === 'GET') {
+    return new Response(OPENAI_APPS_CHALLENGE, {
+      headers: { 'Content-Type': 'text/plain; charset=UTF-8' },
     });
   }
   if (request.method === 'GET') {

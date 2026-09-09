@@ -54,6 +54,22 @@ describe('public route characterization', () => {
     });
   });
 
+  it('serves the exact OpenAI domain-verification token without using static assets', async () => {
+    const assetFetch = vi.fn();
+    const env = createMockEnv({ ASSETS: { fetch: assetFetch } as unknown as Fetcher });
+
+    const response = await worker.fetch(
+      new Request('https://metro-mcp.anuragd.me/.well-known/openai-apps-challenge'),
+      env,
+      executionContext(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/plain; charset=UTF-8');
+    expect(await response.text()).toBe('A4dphR5uRWU44rm5ytkVkwHt8wj3aJmxoRja8nLMnsg');
+    expect(assetFetch).not.toHaveBeenCalled();
+  });
+
   it('delegates every unmatched GET asset path and rejects unmatched writes', async () => {
     const assetFetch = vi.fn().mockResolvedValue(new Response('asset', { status: 203 }));
     const env = createMockEnv({ ASSETS: { fetch: assetFetch } as unknown as Fetcher });
