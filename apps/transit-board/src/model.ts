@@ -268,11 +268,11 @@ function nonNegativeInteger(value: unknown): number | undefined {
 }
 
 function nullableFiniteNumber(value: unknown): number | null | undefined {
-  return value === null ? null : finiteNumber(value);
+  return value === null || value === undefined ? null : finiteNumber(value);
 }
 
 function nullableNonNegativeInteger(value: unknown): number | null | undefined {
-  return value === null ? null : nonNegativeInteger(value);
+  return value === null || value === undefined ? null : nonNegativeInteger(value);
 }
 
 function city(value: unknown): TransitCity | undefined {
@@ -280,7 +280,7 @@ function city(value: unknown): TransitCity | undefined {
 }
 
 function nullableDisplayString(value: unknown): string | null | undefined {
-  return value === null ? null : displayString(value);
+  return value === null || value === undefined ? null : displayString(value);
 }
 
 const TRANSIT_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?(Z)?$/;
@@ -334,7 +334,7 @@ function timestamp(value: unknown): string | undefined {
 }
 
 function nullableTimestamp(value: unknown): string | null | undefined {
-  return value === null ? null : timestamp(value);
+  return value === null || value === undefined ? null : timestamp(value);
 }
 
 function displayStringArray(value: unknown): string[] | undefined {
@@ -371,7 +371,7 @@ function parseArray<Item>(
 }
 
 function parseAddress(value: unknown): StationAddress | null | undefined {
-  if (value === null) {
+  if (value === null || value === undefined) {
     return null;
   }
   if (!isRecord(value)) {
@@ -421,7 +421,7 @@ function parseRailPrediction(value: unknown): RailPrediction | undefined {
   }
   const line = displayString(value.line);
   const destination = displayString(value.destination);
-  const minutesAway = value.minutesAway === null
+  const minutesAway = value.minutesAway === null || value.minutesAway === undefined
     ? null
     : nonNegativeInteger(value.minutesAway);
   const arrivalTime = nullableDisplayString(value.arrivalTime);
@@ -611,7 +611,7 @@ function parseBusStop(value: unknown): BusStop | undefined {
 }
 
 function parseSearchLocation(value: unknown): SearchLocation | null | undefined {
-  if (value === null) {
+  if (value === null || value === undefined) {
     return null;
   }
   if (!isRecord(value)) {

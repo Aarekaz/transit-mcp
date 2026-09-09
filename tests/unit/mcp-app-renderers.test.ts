@@ -48,6 +48,20 @@ const deepFreeze = <Value>(value: Value): Readonly<Value> => {
   return value;
 };
 
+const omitNullObjectFields = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map(omitNullObjectFields);
+  }
+  if (value === null || typeof value !== 'object') {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, nested]) => nested !== null)
+      .map(([key, nested]) => [key, omitNullObjectFields(nested)]),
+  );
+};
+
 afterEach(() => {
   document.body.replaceChildren();
 });
@@ -571,6 +585,35 @@ describe('Transit Board vehicle renderers', () => {
 describe('Transit Board rendering boundary', () => {
   it('supports exactly the canonical thirteen tool names in wire order', () => {
     expect(SUPPORTED_RENDERER_NAMES).toEqual(EXPECTED_TOOL_NAMES);
+  });
+
+  it.each(EXPECTED_TOOL_NAMES)(
+    'renders %s when the ChatGPT host omits null-valued object fields',
+    (toolName) => {
+      const structuredContent = omitNullObjectFields(
+        EXPECTED_TOOL_CONTRACTS[toolName].structuredContent,
+      );
+      const container = mountResult(toolName, structuredContent);
+
+      expect(container.querySelector('[data-view="unsupported-result"]')).toBeNull();
+    },
+  );
+
+  it('normalizes omitted nullable rail fields from the live ChatGPT host boundary', () => {
+    const container = mountResult('get_station_predictions', {
+      city: 'dc',
+      station: 'A01',
+      predictions: [{
+        line: 'RD',
+        destination: 'Shady Grove',
+        arrivalStatus: 'ARRIVING',
+        cars: '8',
+      }],
+    });
+
+    expect(queryRequired(container, '[data-view="rail-arrivals"]')).toBeTruthy();
+    expect(container.textContent).toContain('Shady Grove');
+    expect(container.textContent).toContain('Arriving');
   });
 
   it('keeps hostile transit text inert while preserving it for the rider', () => {
