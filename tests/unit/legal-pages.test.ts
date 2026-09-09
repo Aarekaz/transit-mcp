@@ -34,9 +34,21 @@ function staticHeadersForPath(source: string, pathname: string): Record<string, 
 }
 
 const legalPages = [
-  { slug: 'privacy', title: /privacy/i },
-  { slug: 'terms', title: /terms/i },
-  { slug: 'support', title: /support/i },
+  {
+    slug: 'privacy',
+    title: /privacy/i,
+    lastUpdated: { datetime: '2026-08-21', text: 'August 21, 2026' },
+  },
+  {
+    slug: 'terms',
+    title: /terms/i,
+    lastUpdated: { datetime: '2026-08-21', text: 'August 21, 2026' },
+  },
+  {
+    slug: 'support',
+    title: /support/i,
+    lastUpdated: { datetime: '2026-09-08', text: 'September 8, 2026' },
+  },
 ] as const;
 
 function cssHexVariable(css: string, name: string): string {
@@ -67,7 +79,7 @@ function contrastRatio(first: string, second: string): number {
 }
 
 describe('public legal and support pages', () => {
-  it.each(legalPages)('publishes /$slug/ as a complete static document', ({ slug, title }) => {
+  it.each(legalPages)('publishes /$slug/ as a complete static document', ({ slug, title, lastUpdated }) => {
     const html = readRequiredProjectFile(`public/${slug}/index.html`);
 
     expect(html).toMatch(/^<!DOCTYPE html>/i);
@@ -83,8 +95,8 @@ describe('public legal and support pages', () => {
     expect(html).toMatch(/<main\b[^>]*id="main-content"/i);
     expect(html).toMatch(/<footer\b/i);
     expect(html.match(/<h1\b/gi)).toHaveLength(1);
-    expect(html).toMatch(
-      /<time\s+datetime="2026-08-21">August 21, 2026<\/time>/i,
+    expect(html).toContain(
+      `<time datetime="${lastUpdated.datetime}">${lastUpdated.text}</time>`,
     );
     expect(html).toMatch(/class="skip-link"[^>]*href="#main-content"/i);
     expect(html).toMatch(/href="\/"[^>]*>\s*Metro MCP\s*</i);
@@ -176,9 +188,10 @@ describe('public legal and support pages', () => {
     }
     expect(html).toMatch(/never post[^.]*API keys?[^.]*bearer tokens?[^.]*secrets/i);
     expect(html).toMatch(/private conversation/i);
+    expect(html).toMatch(/href="https:\/\/anuragd\.me\/"[^>]*>Anurag Dhungana</i);
+    expect(html).toMatch(/href="mailto:hey@anuragd\.me"[^>]*>hey@anuragd\.me</i);
     expect(html).not.toMatch(/security\/advisories\/new/i);
     expect(html).not.toMatch(/respond within|response time of|SLA/i);
-    expect(html).not.toMatch(/mailto:/i);
   });
 
   it.each(legalPages)('keeps /$slug/ inert and first-party', ({ slug }) => {

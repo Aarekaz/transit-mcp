@@ -12,16 +12,19 @@ const pages = [
     slug: 'privacy',
     heading: 'Privacy',
     content: [/without creating an account/i, /WMATA/i, /MTA/i, /does not sell/i],
+    lastUpdated: { datetime: '2026-08-21', text: 'August 21, 2026' },
   },
   {
     slug: 'terms',
     heading: 'Terms of Use',
     content: [/public, read-only informational service/i, /fair use/i, /emergency/i],
+    lastUpdated: { datetime: '2026-08-21', text: 'August 21, 2026' },
   },
   {
     slug: 'support',
     heading: 'Support',
-    content: [/Documentation/i, /GitHub issues/i, /no guaranteed response time/i],
+    content: [/Documentation/i, /GitHub issues/i, /hey@anuragd\.me/i, /no guaranteed response time/i],
+    lastUpdated: { datetime: '2026-09-08', text: 'September 8, 2026' },
   },
 ] as const;
 
@@ -295,7 +298,8 @@ for (const viewport of viewports) {
       await expect(page.getByRole('main')).toHaveCount(1);
       await expect(page.getByRole('contentinfo')).toHaveCount(1);
       await expect(page.getByRole('heading', { level: 1, name: legalPage.heading })).toHaveCount(1);
-      await expect(page.locator('time[datetime="2026-08-21"]')).toHaveText('August 21, 2026');
+      await expect(page.locator(`time[datetime="${legalPage.lastUpdated.datetime}"]`))
+        .toHaveText(legalPage.lastUpdated.text);
       for (const pattern of legalPage.content) {
         await expect(page.locator('main')).toContainText(pattern);
       }
