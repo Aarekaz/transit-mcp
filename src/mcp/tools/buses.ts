@@ -5,9 +5,9 @@ import type { WMATAClient } from '../../transit/wmata-client';
 import type { MetroMcpContext } from '../context';
 import { TRANSIT_BOARD_TOOL_META } from '../apps';
 import {
-  READ_ONLY_LIVE,
   complete,
   coordinatesSchema,
+  readOnlyLive,
   withTransitErrors,
 } from '../shared';
 
@@ -21,7 +21,7 @@ export function registerBusTools(
     {
       title: 'Bus arrival predictions',
       description: 'Get real-time bus arrival predictions for a DC Metro bus stop.',
-      annotations: READ_ONLY_LIVE,
+      annotations: readOnlyLive('Bus arrival predictions'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({
         stopId: z.string().describe(
@@ -65,7 +65,7 @@ export function registerBusTools(
     {
       title: 'All bus routes',
       description: 'Get all DC Metro bus routes with route IDs and descriptions.',
-      annotations: READ_ONLY_LIVE,
+      annotations: readOnlyLive('All bus routes'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({}),
       outputSchema: z.object({
@@ -101,7 +101,7 @@ export function registerBusTools(
     {
       title: 'Bus stops',
       description: 'Get DC Metro bus stops. Returns all stops or filters by lat/lon/radius.',
-      annotations: READ_ONLY_LIVE,
+      annotations: readOnlyLive('Bus stops'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({
         latitude: z.number().optional().describe('Center latitude for geographic search'),
@@ -151,7 +151,7 @@ export function registerBusTools(
     {
       title: 'Live bus positions',
       description: 'Get real-time positions of DC Metro buses, optionally filtered by route.',
-      annotations: READ_ONLY_LIVE,
+      annotations: readOnlyLive('Live bus positions'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({
         routeId: z.string().optional().describe(

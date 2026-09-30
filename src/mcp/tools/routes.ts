@@ -4,7 +4,7 @@ import { getTransitClient } from '../../transit/registry';
 import type { SupportedCity } from '../../transit/base';
 import type { MetroMcpContext } from '../context';
 import { TRANSIT_BOARD_TOOL_META } from '../apps';
-import { READ_ONLY_LIVE, complete, withTransitErrors } from '../shared';
+import { complete, readOnlyLive, withTransitErrors } from '../shared';
 
 /** Register the NYC route information tool. */
 export function registerRouteTools(
@@ -17,7 +17,7 @@ export function registerRouteTools(
       title: 'Route information',
       description:
         'Get detailed information about a transit route including service patterns. NYC Subway only.',
-      annotations: READ_ONLY_LIVE,
+      annotations: readOnlyLive('Route information'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({
         city: z.enum(['nyc']),

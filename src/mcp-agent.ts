@@ -44,9 +44,14 @@ const stationItemSchema = z.object({
 // Default annotations: every Metro MCP tool is a pure live-data read.
 const READ_ONLY_LIVE = {
   readOnlyHint: true,
+  destructiveHint: false,
   idempotentHint: true,
   openWorldHint: true
 } as const;
+
+function readOnlyLive(title: string) {
+  return { title, ...READ_ONLY_LIVE } as const;
+}
 
 /**
  * Wrap a tool body so transit-API errors map to readable messages.
@@ -234,7 +239,7 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
         title: 'Train arrival predictions',
         description:
           'Get real-time train arrival predictions for a transit station. Supports DC Metro and NYC Subway.',
-        annotations: READ_ONLY_LIVE,
+        annotations: readOnlyLive('Train arrival predictions'),
         inputSchema: {
           city: citySchema,
           stationName: z
@@ -326,7 +331,7 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
       {
         title: 'Search stations',
         description: 'Search for transit stations by name or code. Supports DC Metro and NYC Subway.',
-        annotations: READ_ONLY_LIVE,
+        annotations: readOnlyLive('Search stations'),
         inputSchema: {
           city: citySchema,
           query: z.string().describe('Search query (station name or code)')
@@ -364,7 +369,7 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
       {
         title: 'Stations on a line',
         description: 'Get all stations on a specific transit line. Supports DC Metro and NYC Subway.',
-        annotations: READ_ONLY_LIVE,
+        annotations: readOnlyLive('Stations on a line'),
         inputSchema: {
           city: citySchema,
           lineCode: z.string().describe(
@@ -404,7 +409,7 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
       {
         title: 'All stations',
         description: 'Get complete list of all transit stations with coordinates.',
-        annotations: READ_ONLY_LIVE,
+        annotations: readOnlyLive('All stations'),
         inputSchema: { city: citySchema },
         outputSchema: {
           city: citySchema,
@@ -456,7 +461,7 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
         title: 'Station transfers',
         description:
           'Get transfer connections and nearby stations from a transit station. NYC Subway only.',
-        annotations: READ_ONLY_LIVE,
+        annotations: readOnlyLive('Station transfers'),
         inputSchema: {
           city: z.enum(['nyc']),
           stationId: z.string().describe('Station ID (e.g., "127" for Times Square)')
@@ -513,7 +518,7 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
       {
         title: 'Service incidents',
         description: 'Get current transit incidents and service advisories.',
-        annotations: READ_ONLY_LIVE,
+        annotations: readOnlyLive('Service incidents'),
         inputSchema: { city: citySchema },
         outputSchema: {
           city: citySchema,
@@ -556,7 +561,7 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
       {
         title: 'Elevator outages',
         description: 'Get current elevator and escalator outages. DC Metro only.',
-        annotations: READ_ONLY_LIVE,
+        annotations: readOnlyLive('Elevator outages'),
         inputSchema: { city: z.enum(['dc']) },
         outputSchema: {
           city: z.enum(['dc']),
@@ -600,7 +605,7 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
       {
         title: 'Bus arrival predictions',
         description: 'Get real-time bus arrival predictions for a DC Metro bus stop.',
-        annotations: READ_ONLY_LIVE,
+        annotations: readOnlyLive('Bus arrival predictions'),
         inputSchema: {
           stopId: z.string().describe('DC Metro 7-digit regional bus stop ID (e.g., "1001195")')
         },
@@ -645,7 +650,7 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
       {
         title: 'All bus routes',
         description: 'Get all DC Metro bus routes with route IDs and descriptions.',
-        annotations: READ_ONLY_LIVE,
+        annotations: readOnlyLive('All bus routes'),
         inputSchema: {},
         outputSchema: {
           city: z.literal('dc'),
@@ -685,7 +690,7 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
         title: 'Bus stops',
         description:
           'Get DC Metro bus stops. Returns all stops or filters by lat/lon/radius.',
-        annotations: READ_ONLY_LIVE,
+        annotations: readOnlyLive('Bus stops'),
         inputSchema: {
           latitude: z.number().optional().describe('Center latitude for geographic search'),
           longitude: z.number().optional().describe('Center longitude for geographic search'),
@@ -741,7 +746,7 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
       {
         title: 'Live bus positions',
         description: 'Get real-time positions of DC Metro buses, optionally filtered by route.',
-        annotations: READ_ONLY_LIVE,
+        annotations: readOnlyLive('Live bus positions'),
         inputSchema: {
           routeId: z
             .string()
@@ -798,7 +803,7 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
       {
         title: 'Live train positions',
         description: 'Get real-time positions of all trains on the DC Metro system.',
-        annotations: READ_ONLY_LIVE,
+        annotations: readOnlyLive('Live train positions'),
         inputSchema: {},
         outputSchema: {
           city: z.literal('dc'),
@@ -855,7 +860,7 @@ export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
         title: 'Route information',
         description:
           'Get detailed information about a transit route including service patterns. NYC Subway only.',
-        annotations: READ_ONLY_LIVE,
+        annotations: readOnlyLive('Route information'),
         inputSchema: {
           city: z.enum(['nyc']),
           routeId: z.string().describe(
