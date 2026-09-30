@@ -258,6 +258,7 @@ describe('station tool contracts', () => {
     expect(registerTool).toHaveBeenCalledTimes(5);
     for (const registration of registrations.values()) {
       expect(registration.config.annotations).toEqual({
+        title: registration.config.title,
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,

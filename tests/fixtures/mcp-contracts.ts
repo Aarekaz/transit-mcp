@@ -202,10 +202,12 @@ const READ_ONLY_LIVE = {
   openWorldHint: true,
 } as const;
 
+const readOnlyLive = (title: string) => ({ title, ...READ_ONLY_LIVE } as const);
+
 type ToolContract = {
   title: string;
   description: string;
-  annotations: typeof READ_ONLY_LIVE;
+  annotations: ReturnType<typeof readOnlyLive>;
   input: { keys: readonly string[]; required: readonly string[] };
   output: { keys: readonly string[]; required: readonly string[] };
   structuredContent: Record<string, unknown>;
@@ -229,7 +231,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
     title: 'Train arrival predictions',
     description:
       'Get real-time train arrival predictions for a transit station. Supports DC Metro and NYC Subway.',
-    annotations: READ_ONLY_LIVE,
+    annotations: readOnlyLive('Train arrival predictions'),
     input: { keys: ['city', 'stationName'], required: ['city', 'stationName'] },
     output: {
       keys: ['city', 'station', 'predictions'],
@@ -253,7 +255,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
   search_stations: {
     title: 'Search stations',
     description: 'Search for transit stations by name or code. Supports DC Metro and NYC Subway.',
-    annotations: READ_ONLY_LIVE,
+    annotations: readOnlyLive('Search stations'),
     input: { keys: ['city', 'query'], required: ['city', 'query'] },
     output: { keys: ['city', 'query', 'results'], required: ['city', 'query', 'results'] },
     structuredContent: { city: 'nyc', query: 'Times Square', results: [station] },
@@ -261,7 +263,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
   get_stations_by_line: {
     title: 'Stations on a line',
     description: 'Get all stations on a specific transit line. Supports DC Metro and NYC Subway.',
-    annotations: READ_ONLY_LIVE,
+    annotations: readOnlyLive('Stations on a line'),
     input: { keys: ['city', 'lineCode'], required: ['city', 'lineCode'] },
     output: { keys: ['city', 'line', 'stations'], required: ['city', 'line', 'stations'] },
     structuredContent: { city: 'nyc', line: '1', stations: [station] },
@@ -269,7 +271,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
   get_all_stations: {
     title: 'All stations',
     description: 'Get complete list of all transit stations with coordinates.',
-    annotations: READ_ONLY_LIVE,
+    annotations: readOnlyLive('All stations'),
     input: { keys: ['city'], required: ['city'] },
     output: {
       keys: ['city', 'totalStations', 'stations'],
@@ -281,7 +283,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
     title: 'Station transfers',
     description:
       'Get transfer connections and nearby stations from a transit station. NYC Subway only.',
-    annotations: READ_ONLY_LIVE,
+    annotations: readOnlyLive('Station transfers'),
     input: { keys: ['city', 'stationId'], required: ['city', 'stationId'] },
     output: {
       keys: ['city', 'stationId', 'stationName', 'totalTransfers', 'transfers'],
@@ -304,7 +306,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
   get_incidents: {
     title: 'Service incidents',
     description: 'Get current transit incidents and service advisories.',
-    annotations: READ_ONLY_LIVE,
+    annotations: readOnlyLive('Service incidents'),
     input: { keys: ['city'], required: ['city'] },
     output: { keys: ['city', 'incidents'], required: ['city', 'incidents'] },
     structuredContent: {
@@ -322,7 +324,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
   get_elevator_incidents: {
     title: 'Elevator outages',
     description: 'Get current elevator and escalator outages. DC Metro only.',
-    annotations: READ_ONLY_LIVE,
+    annotations: readOnlyLive('Elevator outages'),
     input: { keys: ['city'], required: ['city'] },
     output: {
       keys: ['city', 'elevatorIncidents'],
@@ -348,7 +350,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
   get_bus_predictions: {
     title: 'Bus arrival predictions',
     description: 'Get real-time bus arrival predictions for a DC Metro bus stop.',
-    annotations: READ_ONLY_LIVE,
+    annotations: readOnlyLive('Bus arrival predictions'),
     input: { keys: ['stopId'], required: ['stopId'] },
     output: {
       keys: ['city', 'stopId', 'predictions'],
@@ -369,7 +371,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
   get_bus_routes: {
     title: 'All bus routes',
     description: 'Get all DC Metro bus routes with route IDs and descriptions.',
-    annotations: READ_ONLY_LIVE,
+    annotations: readOnlyLive('All bus routes'),
     input: { keys: [], required: [] },
     output: {
       keys: ['city', 'totalRoutes', 'routes'],
@@ -384,7 +386,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
   get_bus_stops: {
     title: 'Bus stops',
     description: 'Get DC Metro bus stops. Returns all stops or filters by lat/lon/radius.',
-    annotations: READ_ONLY_LIVE,
+    annotations: readOnlyLive('Bus stops'),
     input: { keys: ['latitude', 'longitude', 'radius'], required: [] },
     output: {
       keys: ['city', 'totalStops', 'searchLocation', 'stops'],
@@ -405,7 +407,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
   get_bus_positions: {
     title: 'Live bus positions',
     description: 'Get real-time positions of DC Metro buses, optionally filtered by route.',
-    annotations: READ_ONLY_LIVE,
+    annotations: readOnlyLive('Live bus positions'),
     input: { keys: ['routeId'], required: [] },
     output: {
       keys: ['city', 'routeFilter', 'totalBuses', 'buses'],
@@ -429,7 +431,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
   get_train_positions: {
     title: 'Live train positions',
     description: 'Get real-time positions of all trains on the DC Metro system.',
-    annotations: READ_ONLY_LIVE,
+    annotations: readOnlyLive('Live train positions'),
     input: { keys: [], required: [] },
     output: {
       keys: ['city', 'totalTrains', 'trains'],
@@ -465,7 +467,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
     title: 'Route information',
     description:
       'Get detailed information about a transit route including service patterns. NYC Subway only.',
-    annotations: READ_ONLY_LIVE,
+    annotations: readOnlyLive('Route information'),
     input: { keys: ['city', 'routeId'], required: ['city', 'routeId'] },
     output: {
       keys: ['city', 'routeId', 'shortName', 'longName', 'description'],

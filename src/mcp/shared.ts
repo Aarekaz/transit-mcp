@@ -35,6 +35,11 @@ export const READ_ONLY_LIVE = {
   openWorldHint: true,
 } as const satisfies ToolAnnotations;
 
+/** Add the MCP-standard human-readable title to our shared read-only hints. */
+export function readOnlyLive(title: string): ToolAnnotations {
+  return { title, ...READ_ONLY_LIVE };
+}
+
 export const PUBLIC_24H = {
   ttlMs: 24 * 60 * 60 * 1_000,
   cacheScope: 'public',

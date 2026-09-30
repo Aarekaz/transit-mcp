@@ -7,9 +7,9 @@ import type { WMATAClient } from '../../transit/wmata-client';
 import type { MetroMcpContext } from '../context';
 import { TRANSIT_BOARD_TOOL_META } from '../apps';
 import {
-  READ_ONLY_LIVE,
   citySchema,
   complete,
+  readOnlyLive,
   withTransitErrors,
 } from '../shared';
 
@@ -23,7 +23,7 @@ export function registerIncidentTools(
     {
       title: 'Service incidents',
       description: 'Get current transit incidents and service advisories.',
-      annotations: READ_ONLY_LIVE,
+      annotations: readOnlyLive('Service incidents'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({ city: citySchema }),
       outputSchema: z.object({
@@ -63,7 +63,7 @@ export function registerIncidentTools(
     {
       title: 'Elevator outages',
       description: 'Get current elevator and escalator outages. DC Metro only.',
-      annotations: READ_ONLY_LIVE,
+      annotations: readOnlyLive('Elevator outages'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({ city: z.enum(['dc']) }),
       outputSchema: z.object({

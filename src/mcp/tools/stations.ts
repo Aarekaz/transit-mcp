@@ -14,9 +14,9 @@ import type { SupportedCity, TransitStation } from '../../transit/base';
 import type { MetroMcpContext, MetroRequestState } from '../context';
 import { TRANSIT_BOARD_TOOL_META } from '../apps';
 import {
-  READ_ONLY_LIVE,
   citySchema,
   complete,
+  readOnlyLive,
   stationItemSchema,
   toolError,
   withTransitErrors,
@@ -72,7 +72,7 @@ export function registerStationTools(
       title: 'Train arrival predictions',
       description:
         'Get real-time train arrival predictions for a transit station. Supports DC Metro and NYC Subway.',
-      annotations: READ_ONLY_LIVE,
+      annotations: readOnlyLive('Train arrival predictions'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({
         city: citySchema,
@@ -195,7 +195,7 @@ export function registerStationTools(
     {
       title: 'Search stations',
       description: 'Search for transit stations by name or code. Supports DC Metro and NYC Subway.',
-      annotations: READ_ONLY_LIVE,
+      annotations: readOnlyLive('Search stations'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({
         city: citySchema,
@@ -226,7 +226,7 @@ export function registerStationTools(
     {
       title: 'Stations on a line',
       description: 'Get all stations on a specific transit line. Supports DC Metro and NYC Subway.',
-      annotations: READ_ONLY_LIVE,
+      annotations: readOnlyLive('Stations on a line'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({
         city: citySchema,
@@ -259,7 +259,7 @@ export function registerStationTools(
     {
       title: 'All stations',
       description: 'Get complete list of all transit stations with coordinates.',
-      annotations: READ_ONLY_LIVE,
+      annotations: readOnlyLive('All stations'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({ city: citySchema }),
       outputSchema: z.object({
@@ -308,7 +308,7 @@ export function registerStationTools(
       title: 'Station transfers',
       description:
         'Get transfer connections and nearby stations from a transit station. NYC Subway only.',
-      annotations: READ_ONLY_LIVE,
+      annotations: readOnlyLive('Station transfers'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({
         city: z.enum(['nyc']),
