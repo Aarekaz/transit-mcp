@@ -4,6 +4,8 @@ export interface TelemetryInput extends Record<string, unknown> {
   protocolVersion?: unknown;
   mcpMethod?: unknown;
   mcpName?: unknown;
+  clientName?: unknown;
+  sessionId?: unknown;
   alias?: unknown;
   upstream?: unknown;
   durationMs?: unknown;
@@ -16,6 +18,8 @@ export interface SafeTelemetry {
   protocolVersion?: string;
   mcpMethod?: string;
   mcpName?: string;
+  clientName?: string;
+  sessionId?: string;
   alias?: '/mcp' | '/sse';
   upstream?: string;
   durationMs?: number;
@@ -75,6 +79,12 @@ export function sanitizeTelemetry(input: TelemetryInput): SafeTelemetry {
       && input.durationMs >= 0
       ? input.durationMs
       : undefined,
+  );
+  addIfDefined(safe, 'clientName', safeString(input.clientName, /^[A-Za-z0-9_.: -]+$/, 64));
+  addIfDefined(
+    safe,
+    'sessionId',
+    safeString(input.sessionId, /^[A-Za-z0-9._:-]+$/, 128),
   );
   if (typeof input.status === 'number'
     && Number.isInteger(input.status)

@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { SERVER_VERSION } from '../../src/config';
+import { SERVER_IDENTITY } from '../../src/mcp/server';
 import { getServerInfo } from '../../src/server-info';
 
 const packageJson = JSON.parse(
@@ -7,6 +9,9 @@ const packageJson = JSON.parse(
 );
 const exampleClientConfig = JSON.parse(
   readFileSync(new URL('../../mcp-config.json', import.meta.url).pathname, 'utf8'),
+);
+const registryServer = JSON.parse(
+  readFileSync(new URL('../../server.json', import.meta.url).pathname, 'utf8'),
 );
 
 describe('getServerInfo', () => {
@@ -41,23 +46,40 @@ describe('getServerInfo', () => {
 
   it('keeps release and client configuration metadata aligned', () => {
     expect(packageJson.version).toBe('6.0.0');
-    expect(exampleClientConfig.mcpServers['metro-mcp']).toEqual({
+    expect(exampleClientConfig.mcpServers['transit-mcp']).toEqual({
       type: 'http',
-      url: 'https://metro-mcp.anuragd.me/mcp',
+      url: 'https://transitmcp.com/mcp',
     });
   });
 
-  it('publishes canonical anonymous connection and legal links', () => {
-    const body = getServerInfo('https://metro-mcp.anuragd.me', '2026-08-21T12:00:00.000Z');
+  it('keeps the MCP Registry server.json aligned with the served identity', () => {
+    expect(registryServer.$schema).toBe(
+      'https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json',
+    );
+    expect(registryServer.name).toMatch(/^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/);
+    expect(registryServer.description.length).toBeLessThanOrEqual(100);
+    expect(registryServer.version).toBe(SERVER_VERSION);
+    expect(registryServer.version).toBe(packageJson.version);
+    expect(registryServer.title).toBe(SERVER_IDENTITY.title);
+    expect(registryServer.websiteUrl).toBe(SERVER_IDENTITY.websiteUrl);
+    expect(registryServer.icons).toEqual(SERVER_IDENTITY.icons);
+    expect(registryServer.remotes).toEqual([
+      { type: 'streamable-http', url: exampleClientConfig.mcpServers['transit-mcp'].url },
+    ]);
+  });
 
+  it('publishes canonical anonymous connection and legal links', () => {
+    const body = getServerInfo('https://transitmcp.com', '2026-08-21T12:00:00.000Z');
+
+    expect(body.name).toBe('Transit MCP');
     expect(body.links).toMatchObject({
       github: 'https://github.com/Aarekaz/metro-mcp',
-      mcpServer: 'https://metro-mcp.anuragd.me/mcp',
-      mcpServerLegacy: 'https://metro-mcp.anuragd.me/sse',
-      documentation: 'https://metro-mcp.anuragd.me/docs/',
-      privacy: 'https://metro-mcp.anuragd.me/privacy/',
-      terms: 'https://metro-mcp.anuragd.me/terms/',
-      support: 'https://metro-mcp.anuragd.me/support/',
+      mcpServer: 'https://transitmcp.com/mcp',
+      mcpServerLegacy: 'https://transitmcp.com/sse',
+      documentation: 'https://transitmcp.com/docs/',
+      privacy: 'https://transitmcp.com/privacy/',
+      terms: 'https://transitmcp.com/terms/',
+      support: 'https://transitmcp.com/support/',
     });
   });
 

@@ -1,3 +1,7 @@
+import {
+  CLIENT_INFO_META_KEY,
+  PROTOCOL_VERSION_META_KEY,
+} from '@modelcontextprotocol/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const handlerFetch = vi.hoisted(() => vi.fn<(request: Request) => Promise<Response>>());
@@ -15,6 +19,7 @@ import {
   handleMcpRequest,
 } from '../../src/mcp/http-handler';
 import { addSecurityHeadersAuto } from '../../src/middleware/security-headers';
+import type { TelemetryInput } from '../../src/telemetry';
 import { createMockEnv } from '../setup';
 
 const MCP_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
@@ -332,5 +337,101 @@ describe('handleMcpRequest', () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('"id":1');
+  });
+});
+
+describe('handleMcpRequest telemetry capture', () => {
+  function mcpPost(body: unknown, headers: Record<string, string> = {}): Request {
+    return new Request('https://metro-mcp.anuragd.me/mcp', {
+      method: 'POST',
+      headers: {
+        Host: 'metro-mcp.anuragd.me',
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        ...headers,
+      },
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    });
+  }
+
+  async function capture(request: Request): Promise<{ telemetry: TelemetryInput; forwarded: string }> {
+    let forwarded = '';
+    handlerFetch.mockImplementationOnce(async dispatched => {
+      forwarded = await dispatched.text();
+      return Response.json({ jsonrpc: '2.0', id: 1, result: {} });
+    });
+    const telemetry: TelemetryInput = {};
+    const response = await handleMcpRequest(request, createMockEnv(), undefined, telemetry);
+    expect(response.status).toBe(200);
+    return { telemetry, forwarded };
+  }
+
+  it('records the legacy initialize client name and leaves the body intact for the SDK', async () => {
+    const body = {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'openai-mcp', version: '1.0.0' },
+      },
+    };
+    const { telemetry, forwarded } = await capture(mcpPost(body));
+
+    expect(telemetry).toMatchObject({ mcpMethod: 'initialize', clientName: 'openai-mcp' });
+    expect(JSON.parse(forwarded)).toEqual(body);
+  });
+
+  it('records method and tool name for legacy tools/call bodies', async () => {
+    const { telemetry } = await capture(mcpPost({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: { name: 'get_incidents', arguments: { city: 'nyc' } },
+    }));
+
+    expect(telemetry).toMatchObject({ mcpMethod: 'tools/call', mcpName: 'get_incidents' });
+    expect(telemetry.clientName).toBeUndefined();
+  });
+
+  it('records the per-request client name on modern tools/call', async () => {
+    const { telemetry, forwarded } = await capture(mcpPost({
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
+      params: {
+        name: 'get_incidents',
+        arguments: { city: 'dc' },
+        _meta: {
+          [PROTOCOL_VERSION_META_KEY]: '2026-07-28',
+          [CLIENT_INFO_META_KEY]: { name: 'claude-ai', version: '1.0.0' },
+        },
+      },
+    }, {
+      'MCP-Protocol-Version': '2026-07-28',
+      'Mcp-Method': 'tools/call',
+      'Mcp-Name': 'get_incidents',
+    }));
+
+    expect(telemetry.clientName).toBe('claude-ai');
+    expect(JSON.parse(forwarded).params.name).toBe('get_incidents');
+  });
+
+  it('does not read modern bodies for methods that are never recorded', async () => {
+    const { telemetry } = await capture(mcpPost('{"jsonrpc":"2.0","id":4,"method":"tools/list","params":{}}', {
+      'MCP-Protocol-Version': '2026-07-28',
+      'Mcp-Method': 'tools/list',
+    }));
+
+    expect(telemetry.clientName).toBeUndefined();
+    expect(telemetry.mcpMethod).toBeUndefined();
+  });
+
+  it('ignores malformed JSON without affecting dispatch', async () => {
+    const { telemetry, forwarded } = await capture(mcpPost('{not json'));
+
+    expect(forwarded).toBe('{not json');
+    expect(telemetry.mcpMethod).toBeUndefined();
   });
 });

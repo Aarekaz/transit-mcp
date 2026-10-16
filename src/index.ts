@@ -4,6 +4,7 @@ import {
 } from '@modelcontextprotocol/server';
 
 import { loadConfig } from './config';
+import { recordMcpUsage } from './metrics';
 import { addSecurityHeadersAuto } from './middleware/security-headers';
 import { handleMcpRequest } from './mcp/http-handler';
 import { handlePublicRequest } from './public-handler';
@@ -22,7 +23,13 @@ function mcpTrustRejection(
   allowedHostnames: string[],
   allowedOriginHostnames?: string[],
 ): Response | undefined {
-  if (new URL(request.url).origin !== publicOrigin) {
+  // The canonical origin (including loopback development) is always trusted;
+  // any other custom domain must be HTTPS on the default port and allowlisted.
+  const url = new URL(request.url);
+  const isAllowedCustomDomain = url.protocol === 'https:'
+    && url.port === ''
+    && allowedHostnames.includes(url.hostname.toLowerCase());
+  if (url.origin !== publicOrigin && !isAllowedCustomDomain) {
     return Response.json(
       {
         jsonrpc: '2.0',
@@ -92,6 +99,7 @@ export default {
 
     telemetry.durationMs = Math.max(0, performance.now() - startedAt);
     telemetry.status = response.status;
+    recordMcpUsage(env, telemetry);
     const correlationId = typeof telemetry.correlationId === 'string'
       ? telemetry.correlationId
       : crypto.randomUUID();

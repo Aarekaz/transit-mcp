@@ -65,3 +65,24 @@ describe('serializeTelemetry', () => {
     }))).toEqual({});
   });
 });
+
+describe('serializeTelemetry usage fields', () => {
+  it('keeps a well-formed client name and session id', () => {
+    expect(JSON.parse(serializeTelemetry({
+      mcpMethod: 'initialize',
+      clientName: 'Claude Desktop',
+      sessionId: 'abc-123_XYZ',
+    }))).toEqual({
+      mcpMethod: 'initialize',
+      clientName: 'Claude Desktop',
+      sessionId: 'abc-123_XYZ',
+    });
+  });
+
+  it('drops malformed client names and session ids', () => {
+    expect(JSON.parse(serializeTelemetry({
+      clientName: 'evil<script>',
+      sessionId: 'has space',
+    }))).toEqual({});
+  });
+});

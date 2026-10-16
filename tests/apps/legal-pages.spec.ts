@@ -43,7 +43,7 @@ const internalRouteExpectations = {
   '/privacy/': { contentType: 'text/html', body: /Privacy, in plain language/i },
   '/terms/': { contentType: 'text/html', body: /Terms of Use/i },
   '/support/': { contentType: 'text/html', body: /<h1>Support<\/h1>/i },
-  '/info': { contentType: 'application/json', body: /"name":\s*"Metro MCP"/i },
+  '/info': { contentType: 'application/json', body: /"name":\s*"Transit MCP"/i },
 } as const;
 
 const expectedObserverLabels = [
@@ -291,7 +291,7 @@ for (const viewport of viewports) {
       await expect(page).toHaveTitle(new RegExp(legalPage.heading, 'i'));
       await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
         'href',
-        `https://metro-mcp.anuragd.me/${legalPage.slug}/`,
+        `https://transitmcp.com/${legalPage.slug}/`,
       );
       await expect(page.getByRole('banner')).toHaveCount(1);
       await expect(page.getByRole('navigation', { name: 'Primary' })).toHaveCount(1);

@@ -1,5 +1,5 @@
 {
-  "name": "metro-mcp",
+  "name": "transit-mcp",
   "version": "6.0.0",
   "type": "module",
   "description": "MCP server for US transit systems (DC Metro, NYC Subway) on Cloudflare Workers",
@@ -20,10 +20,10 @@
     "type-check": "tsc -p tsconfig.json --noEmit && tsc -p tests/tsconfig.json --noEmit && tsc -p apps/transit-board/tsconfig.json --noEmit && tsc -p tests/apps/tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/sdk": "1.30.0",
-    "@modelcontextprotocol/server": "2.0.0",
-    "agents": "0.20.1",
+    "@modelcontextprotocol/server": "2.3.1",
+    "agents": "0.28.1",
     "gtfs-realtime-bindings": "^1.1.1",
     "zod": "4.4.3"
   },

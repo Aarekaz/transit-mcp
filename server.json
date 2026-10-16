@@ -1,0 +1,25 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.transitmcp/transit-mcp",
+  "title": "Transit MCP",
+  "description": "Real-time DC Metro and NYC Subway arrivals, alerts, stations, and DC buses. Read-only, no login.",
+  "version": "6.0.0",
+  "websiteUrl": "https://transitmcp.com",
+  "repository": {
+    "url": "https://github.com/Aarekaz/metro-mcp",
+    "source": "github"
+  },
+  "icons": [
+    {
+      "src": "https://transitmcp.com/metro-mcp.png",
+      "mimeType": "image/png",
+      "sizes": ["1024x1024"]
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://transitmcp.com/mcp"
+    }
+  ]
+}

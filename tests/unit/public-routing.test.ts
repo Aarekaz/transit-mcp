@@ -48,7 +48,7 @@ describe('public route characterization', () => {
     expect(response.headers.get('content-type')).toBe('application/json');
     expect(response.headers.get('access-control-allow-origin')).toBe('*');
     await expect(response.json()).resolves.toMatchObject({
-      name: 'Metro MCP',
+      name: 'Transit MCP',
       links: { mcpServer: 'https://metro-mcp.anuragd.me/mcp' },
       endpoints: { mcpRecommended: '/mcp' },
     });

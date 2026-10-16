@@ -1,0 +1,46 @@
+/* Theme button in the nav: cycles System, Light, Dark. Colors come from the
+   host page's tokens. */
+.theme-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  color: var(--ink-2);
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+/* Hidden until theme.js runs; without it the page simply follows the system. */
+:root:not([data-theme-choice]) .theme-button { display: none; }
+.theme-button:hover {
+  color: var(--ink);
+  background: var(--surface);
+  border-color: var(--border);
+}
+.theme-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.theme-button .theme-icon {
+  display: none;
+  animation: theme-icon-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+:root[data-theme-choice="system"] .theme-button .theme-icon[data-for="system"],
+:root[data-theme-choice="light"] .theme-button .theme-icon[data-for="light"],
+:root[data-theme-choice="dark"] .theme-button .theme-icon[data-for="dark"] { display: block; }
+
+@keyframes theme-icon-in {
+  from { opacity: 0; transform: rotate(-40deg) scale(0.7); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-button { transition: none; }
+  .theme-button .theme-icon { animation: none; }
+}

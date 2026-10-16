@@ -69,9 +69,9 @@ const REMOVED_IMPLEMENTATION_FILES = [
 describe('MCP dependency policy', () => {
   it('pins the mutually compatible anonymous MCP stack exactly', () => {
     expect(packageJson.dependencies).toMatchObject({
-      agents: '0.20.1',
-      '@modelcontextprotocol/server': '2.0.0',
-      '@modelcontextprotocol/client': '2.0.0',
+      agents: '0.28.1',
+      '@modelcontextprotocol/server': '2.3.1',
+      '@modelcontextprotocol/client': '2.3.1',
       '@modelcontextprotocol/sdk': '1.30.0',
       zod: '4.4.3',
     });
@@ -122,16 +122,16 @@ describe('MCP dependency policy', () => {
   });
 
   it('allows only the exact inert provider marker embedded by both pinned Agents entrypoints', () => {
-    const activeAgentsEntry = readProjectFile('node_modules/agents/dist/mcp/server.js');
+    const activeAgentsEntry = readProjectFile('node_modules/agents/dist/mcp/server/index.js');
     const rollbackAgentsEntry = readProjectFile('node_modules/agents/dist/mcp/index.js');
     const vendorHandler = readProjectFile(
-      'node_modules/agents/dist/handler-stateless-CIkKPETH.js',
+      'node_modules/agents/dist/handler-stateless-Bly_nSH3.js',
     );
-    const sharedHandlerModule = '../handler-stateless-CIkKPETH.js';
+    const sharedHandlerModule = 'handler-stateless-Bly_nSH3.js';
     const allowedVendorMarker = 'cloudflare.workers-oauth-provider.verified-context.v1';
 
-    expect(activeAgentsEntry).toContain(sharedHandlerModule);
-    expect(rollbackAgentsEntry).toContain(sharedHandlerModule);
+    expect(activeAgentsEntry).toContain(`../../${sharedHandlerModule}`);
+    expect(rollbackAgentsEntry).toContain(`../${sharedHandlerModule}`);
     expect(vendorHandler.match(/workers-oauth-provider/g)).toEqual([
       'workers-oauth-provider',
     ]);

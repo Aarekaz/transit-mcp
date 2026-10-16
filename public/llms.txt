@@ -1,0 +1,44 @@
+# Transit MCP
+
+> Transit MCP is a free, anonymous, read-only Model Context Protocol (MCP) server for real-time DC Metro and NYC Subway information. Transit MCP was formerly Metro MCP; it is the same server.
+
+- MCP endpoint (Streamable HTTP): https://transitmcp.com/mcp
+- Legacy endpoint, still supported: https://metro-mcp.anuragd.me/mcp
+- Authentication: none. No login, API key, bearer token, or OAuth flow is required. Stale Authorization headers are ignored.
+- Server description (JSON): https://transitmcp.com/info
+- Works with Claude, Cursor, Codex, Gemini, and any MCP client that speaks Streamable HTTP.
+- ChatGPT plugin listing: https://chatgpt.com/plugins/plugin_asdk_app_6a9078f4d6dc8191be735cc1c2ff45b5
+
+## Tool areas
+
+- Arrivals: real-time train arrivals for DC Metro and NYC Subway stations, plus DC Metrobus stop predictions (`get_station_predictions`, `get_bus_predictions`).
+- Incidents: service disruptions and DC Metro elevator and escalator outages (`get_incidents`, `get_elevator_incidents`).
+- Stations: station search, listing by line, full station lists, and transfers (`search_stations`, `get_stations_by_line`, `get_all_stations`, `get_station_transfers`).
+- Routes: NYC Subway route detail, DC Metrobus routes and stops (`get_route_info`, `get_bus_routes`, `get_bus_stops`).
+- Live positions: DC Metro train positions and Metrobus vehicle positions (`get_train_positions`, `get_bus_positions`).
+
+Data comes from official WMATA (DC Metro and Metrobus) and MTA (NYC Subway) feeds.
+
+## Quick connect
+
+```json
+{
+  "mcpServers": {
+    "transit-mcp": {
+      "type": "http",
+      "url": "https://transitmcp.com/mcp"
+    }
+  }
+}
+```
+
+## Docs
+
+- [Transit MCP docs](https://transitmcp.com/docs/): client setup, HTTP endpoints, MCP tools, resources and prompts, and data sources.
+- [Source code on GitHub](https://github.com/Aarekaz/metro-mcp): MIT licensed.
+
+## Policies
+
+- [Privacy](https://transitmcp.com/privacy/): how anonymous requests, operational telemetry, and provider logs are handled.
+- [Terms of Use](https://transitmcp.com/terms/): fair use, rate limits, and live data limits.
+- [Support](https://transitmcp.com/support/): documentation, issue reporting, maintainer contact, and security reports.

@@ -192,9 +192,9 @@ describe('anonymous deployment configuration', () => {
   it('declares only the public anonymous vars for production and preview', () => {
     expect(wrangler.keep_vars).toBe(false);
     expect(wrangler.vars).toEqual({
-      MCP_PUBLIC_ORIGIN: 'https://metro-mcp.anuragd.me',
-      MCP_ALLOWED_HOSTNAMES: 'metro-mcp.anuragd.me',
-      MCP_ALLOWED_ORIGIN_HOSTNAMES: 'metro-mcp.anuragd.me',
+      MCP_PUBLIC_ORIGIN: 'https://transitmcp.com',
+      MCP_ALLOWED_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
+      MCP_ALLOWED_ORIGIN_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
       ENVIRONMENT: 'production',
     });
     expect(wrangler.env.preview.vars).toEqual({
@@ -233,15 +233,17 @@ describe('anonymous deployment configuration', () => {
   });
 
   it('keeps production and preview custom domains isolated', () => {
-    expect(wrangler.routes).toEqual([{
-      pattern: 'metro-mcp.anuragd.me',
-      custom_domain: true,
-    }]);
+    expect(wrangler.routes).toEqual([
+      { pattern: 'metro-mcp.anuragd.me', custom_domain: true },
+      { pattern: 'transitmcp.com', custom_domain: true },
+    ]);
     expect(wrangler.env.preview.routes).toEqual([{
       pattern: 'metro-mcp-preview.anuragd.me',
       custom_domain: true,
     }]);
-    expect(wrangler.env.preview.routes).not.toContainEqual(wrangler.routes[0]);
+    for (const route of wrangler.routes) {
+      expect(wrangler.env.preview.routes).not.toContainEqual(route);
+    }
   });
 
   it('retains the original rollback migration without scheduling deletion', () => {

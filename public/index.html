@@ -3,47 +3,254 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>metro-mcp · Plug your LLM into the subway</title>
-  <meta name="description" content="Anonymous, read-only access to live DC Metro and NYC Subway data for any MCP client.">
+  <title>Transit MCP · Real-time DC Metro and NYC Subway MCP server for Claude and ChatGPT</title>
+  <meta name="description" content="Free, anonymous Model Context Protocol (MCP) server for real-time transit arrivals on DC Metro and NYC Subway. Use it in Claude, Cursor, or as a ChatGPT plugin.">
+  <link rel="canonical" href="https://transitmcp.com/">
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
 
   <!-- Open Graph / Twitter -->
   <meta property="og:type" content="website">
-  <meta property="og:site_name" content="metro-mcp">
-  <meta property="og:url" content="https://metro-mcp.anuragd.me/">
-  <meta property="og:title" content="metro-mcp · Plug your LLM into the subway">
-  <meta property="og:description" content="Anonymous, read-only access to live DC Metro and NYC Subway data via the Model Context Protocol.">
-  <meta property="og:image" content="https://metro-mcp.anuragd.me/og-image.png">
+  <meta property="og:site_name" content="Transit MCP">
+  <meta property="og:url" content="https://transitmcp.com/">
+  <meta property="og:title" content="Transit MCP · Plug your LLM into the subway">
+  <meta property="og:description" content="Free, anonymous Model Context Protocol (MCP) server for real-time transit arrivals on DC Metro and NYC Subway. Use it in Claude, Cursor, or as a ChatGPT plugin.">
+  <meta property="og:image" content="https://transitmcp.com/og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="twitter:card" content="summary_large_image">
-  <meta property="twitter:url" content="https://metro-mcp.anuragd.me/">
-  <meta property="twitter:title" content="metro-mcp · Plug your LLM into the subway">
-  <meta property="twitter:description" content="Anonymous, read-only access to live DC Metro and NYC Subway data via the Model Context Protocol.">
-  <meta property="twitter:image" content="https://metro-mcp.anuragd.me/og-image.png">
+  <meta property="og:image:alt" content="Transit MCP: live DC Metro and NYC Subway data through MCP">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Transit MCP · Plug your LLM into the subway">
+  <meta name="twitter:description" content="Free, anonymous Model Context Protocol (MCP) server for real-time transit arrivals on DC Metro and NYC Subway. Use it in Claude, Cursor, or as a ChatGPT plugin.">
+  <meta name="twitter:image" content="https://transitmcp.com/og-image.png">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "@id": "https://transitmcp.com/#software",
+    "name": "Transit MCP",
+    "alternateName": "Metro MCP",
+    "url": "https://transitmcp.com/",
+    "description": "Anonymous, read-only Model Context Protocol (MCP) server for real-time DC Metro and NYC Subway arrivals, incidents, stations, and routes. Works with Claude, Cursor, Codex, and other MCP clients, and is available as a ChatGPT plugin.",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Any",
+    "image": "https://transitmcp.com/og-image.png",
+    "installUrl": "https://chatgpt.com/plugins/plugin_asdk_app_6a9078f4d6dc8191be735cc1c2ff45b5",
+    "isAccessibleForFree": true,
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "featureList": [
+      "Real-time DC Metro and NYC Subway arrivals",
+      "Service incidents and elevator outages",
+      "Station search and route detail",
+      "Anonymous access with no login, token, or OAuth flow",
+      "Available as a ChatGPT plugin"
+    ],
+    "author": {
+      "@type": "Person",
+      "name": "Anurag Dhungana",
+      "url": "https://www.anuragd.me"
+    },
+    "license": "https://github.com/Aarekaz/metro-mcp/blob/main/LICENSE",
+    "sameAs": [
+      "https://github.com/Aarekaz/metro-mcp",
+      "https://chatgpt.com/plugins/plugin_asdk_app_6a9078f4d6dc8191be735cc1c2ff45b5"
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "@id": "https://transitmcp.com/#website",
+    "name": "Transit MCP",
+    "alternateName": "Metro MCP",
+    "url": "https://transitmcp.com/",
+    "description": "Docs and connection details for Transit MCP, a free MCP server for real-time DC Metro and NYC Subway data.",
+    "inLanguage": "en",
+    "publisher": {
+      "@type": "Person",
+      "name": "Anurag Dhungana",
+      "url": "https://www.anuragd.me"
+    }
+  }
+  </script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600&family=Instrument+Serif:ital@1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/theme.css">
+  <script src="/theme.js"></script>
   <style>
     /* ─── Design tokens ─────────────────────────────────────── */
     :root {
+      color-scheme: light;
       --bg: #fafbfc;
+      --bg-rgb: 250, 251, 252;
       --ink: #0a2540;
-      --ink-2: #5b6470;
-      --ink-3: #8a93a0;
+      --ink-rgb: 10, 37, 64;
+      --ink-2: #3f4b59;
+      --ink-3: #66717e;
+      --on-ink: #ffffff;
       --border: #e6e8eb;
+      --hairline: rgba(10, 37, 64, 0.1);
       --accent: #ff6b1a;
+      /* Deeper orange for text so the accent word clears large-text contrast. */
+      --accent-text: #e2540a;
       --surface: #ffffff;
+      --surface-2: #fcfcfd;
+      /* Frosted pills that sit on top of the photos. */
+      --glass: rgba(255, 255, 255, 0.74);
+      /* Soft glow behind text that sits directly on a photo. */
+      --halo: rgba(250, 251, 252, 0.94);
+
+      --ok-bg: #ecfdf5;
+      --ok-fg: #047857;
+      --ok-border: #a7f3d0;
+      --pending-bg: #fff7ed;
+      --pending-fg: #c2410c;
+      --pending-border: #fed7aa;
+      --warn-fg: #b45309;
+      --units-bg: #f0fdf4;
+      --units-fg: #166534;
+      --units-border: #bbf7d0;
+      --json-key: #0e7490;
+      --json-str: #b45309;
+      --json-num: #047857;
+      /* Mono client logos ship gray; dark mode lifts them. */
+      --logo-filter: none;
+
+      /* Photo scene. Day screens the photos over a soft blue-gray so their
+         darkest tone stays light; night multiplies them into silhouettes. */
+      --hero-bg: var(--bg);
+      --hero-fog: #b4bfcc;
+      --action-fog: #bfc8d3;
+      --art-blend: screen;
+      --hero-art-filter: none;
+      --action-art-filter: none;
+      --action-art-opacity: 0.92;
+      --wash-top: 0.55;
+      --wash-upper: 0.1;
+      --wash-lower: 0.15;
+      --lamps-opacity: 0;
+      --lamps-anim: none;
+
+      /* Transit line colors — used only as small, non-text details. */
+      --line-red: #ee352e;
+      --line-blue: #009cde;
+      --line-green: #00933c;
+      --line-yellow: #fcd000;
 
       --radius-pill: 999px;
       --radius-card: 12px;
       --radius-input: 8px;
 
       --shadow-modal: 0 24px 60px rgba(10, 37, 64, 0.18);
+      --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
 
       --font-ui: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      --font-display: "Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      --font-serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
       --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    }
+
+    /* Night: the photos turn into silhouettes and their lamps switch on.
+       Follows the system unless the visitor picks a theme (data-theme). */
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --bg: #121a28;
+        --bg-rgb: 18, 26, 40;
+        --ink: #eef2f7;
+        --ink-rgb: 238, 242, 247;
+        --ink-2: #c4cdd8;
+        --ink-3: #97a3b2;
+        --on-ink: #0f1724;
+        --border: #263247;
+        --hairline: rgba(238, 242, 247, 0.13);
+        --accent-text: #ff8f4d;
+        --surface: #172133;
+        --surface-2: #151e2e;
+        --glass: rgba(21, 30, 46, 0.72);
+        --halo: rgba(18, 26, 40, 0.92);
+        --shadow-modal: 0 24px 60px rgba(0, 0, 0, 0.5);
+
+        --ok-bg: rgba(16, 185, 129, 0.13);
+        --ok-fg: #6ee7b7;
+        --ok-border: rgba(110, 231, 183, 0.3);
+        --pending-bg: rgba(251, 146, 60, 0.13);
+        --pending-fg: #fdba74;
+        --pending-border: rgba(253, 186, 116, 0.32);
+        --warn-fg: #fbbf24;
+        --units-bg: rgba(34, 197, 94, 0.1);
+        --units-fg: #86efac;
+        --units-border: rgba(134, 239, 172, 0.26);
+        --json-key: #67e8f9;
+        --json-str: #fcd34d;
+        --json-num: #6ee7b7;
+        --logo-filter: invert(1) hue-rotate(180deg) brightness(1.2);
+
+        --hero-bg: #283449;
+        --hero-fog: #283449;
+        --action-fog: #1c2638;
+        --art-blend: multiply;
+        --hero-art-filter: contrast(1.08);
+        --action-art-filter: contrast(1.1);
+        --action-art-opacity: 1;
+        --wash-top: 0.6;
+        --wash-upper: 0;
+        --wash-lower: 0.05;
+        --lamps-opacity: 1;
+        --lamps-anim: lamps-on;
+      }
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #121a28;
+      --bg-rgb: 18, 26, 40;
+      --ink: #eef2f7;
+      --ink-rgb: 238, 242, 247;
+      --ink-2: #c4cdd8;
+      --ink-3: #97a3b2;
+      --on-ink: #0f1724;
+      --border: #263247;
+      --hairline: rgba(238, 242, 247, 0.13);
+      --accent-text: #ff8f4d;
+      --surface: #172133;
+      --surface-2: #151e2e;
+      --glass: rgba(21, 30, 46, 0.72);
+      --halo: rgba(18, 26, 40, 0.92);
+      --shadow-modal: 0 24px 60px rgba(0, 0, 0, 0.5);
+
+      --ok-bg: rgba(16, 185, 129, 0.13);
+      --ok-fg: #6ee7b7;
+      --ok-border: rgba(110, 231, 183, 0.3);
+      --pending-bg: rgba(251, 146, 60, 0.13);
+      --pending-fg: #fdba74;
+      --pending-border: rgba(253, 186, 116, 0.32);
+      --warn-fg: #fbbf24;
+      --units-bg: rgba(34, 197, 94, 0.1);
+      --units-fg: #86efac;
+      --units-border: rgba(134, 239, 172, 0.26);
+      --json-key: #67e8f9;
+      --json-str: #fcd34d;
+      --json-num: #6ee7b7;
+      --logo-filter: invert(1) hue-rotate(180deg) brightness(1.2);
+
+      --hero-bg: #283449;
+      --hero-fog: #283449;
+      --action-fog: #1c2638;
+      --art-blend: multiply;
+      --hero-art-filter: contrast(1.08);
+      --action-art-filter: contrast(1.1);
+      --action-art-opacity: 1;
+      --wash-top: 0.6;
+      --wash-upper: 0;
+      --wash-lower: 0.05;
+      --lamps-opacity: 1;
+      --lamps-anim: lamps-on;
     }
 
     /* ─── Reset + base typography ───────────────────────────── */
@@ -131,7 +338,7 @@
 
     nav .cta-pill {
       background: var(--ink);
-      color: #fff;
+      color: var(--on-ink);
       padding: 7px 14px;
       border-radius: var(--radius-pill);
       font-size: 13px;
@@ -139,7 +346,9 @@
       white-space: nowrap;
       transition: filter 120ms ease;
     }
-    nav .cta-pill:hover { filter: brightness(1.15); }
+    nav .cta-pill:hover { filter: brightness(1.18); }
+    nav .nav-links a.cta-pill:hover { color: var(--on-ink); }
+    nav .wordmark .wordmark-dim { color: var(--ink-3); font-weight: 500; }
 
     @media (max-width: 560px) {
       nav {
@@ -180,31 +389,65 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 48px 24px 28px;
+      padding: 36px 24px 28px;
       overflow: hidden;
       min-height: calc(100vh - 64px - 40px - 480px);
-      background: var(--bg);
+      background: var(--hero-bg);
     }
-    .hero-section::before {
-      content: "";
+    /* Same placement the photo had as a background (1180px wide, x: 50% - 40px, y: 54%). */
+    .hero-art {
+      position: absolute;
+      top: 54%;
+      left: 50%;
+      width: 1180px;
+      aspect-ratio: 2400 / 1920;
+      transform: translate(calc(-50% - 40px), -54%);
+      z-index: 0;
+      pointer-events: none;
+    }
+    .hero-art img,
+    .hero-art svg,
+    .action-art img,
+    .action-art svg {
       position: absolute;
       inset: 0;
-      background-image: url("/train-classic-bg.jpg");
-      background-size: 1180px auto;
-      background-repeat: no-repeat;
-      background-position: calc(50% - 40px) 54%;
-      opacity: 0.9;
-      filter: saturate(0.8) contrast(1.18);
-      z-index: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
     }
+    /* Day: screen lifts the train's blacks to a soft blue-gray, so the photo
+       never gets darker than this tone and dark text always clears it. */
+    .hero-art { background: var(--hero-fog); }
+    .hero-art img { mix-blend-mode: var(--art-blend); filter: var(--hero-art-filter); }
     .hero-section::after {
       content: "";
       position: absolute;
       inset: 0;
       background:
-        linear-gradient(180deg, rgba(250, 251, 252, 0.66) 0%, rgba(250, 251, 252, 0.52) 46%, rgba(250, 251, 252, 0.9) 100%),
-        radial-gradient(ellipse 70% 44% at 50% 42%, rgba(250, 251, 252, 0.24), rgba(250, 251, 252, 0.86) 75%);
+        linear-gradient(180deg, rgba(var(--bg-rgb), var(--wash-top)) 0%, rgba(var(--bg-rgb), var(--wash-upper)) 28%, rgba(var(--bg-rgb), var(--wash-lower)) 60%, rgba(var(--bg-rgb), 0.95) 100%),
+        radial-gradient(ellipse 60% 55% at 50% 46%, rgba(var(--bg-rgb), 0), rgba(var(--bg-rgb), 0.94) 82%),
+        /* Reading pool: settles the photo under the subtitle, links, and chips. */
+        radial-gradient(ellipse 30% 26% at 50% 66%, rgba(var(--bg-rgb), 0.45), rgba(var(--bg-rgb), 0) 100%);
       z-index: 1;
+    }
+
+    /* Lamps: off by day, on at night. */
+    .lamps {
+      opacity: var(--lamps-opacity);
+      transition: opacity 600ms ease;
+      animation: var(--lamps-anim) 1400ms ease-out 300ms both;
+    }
+    .lamp-glow { mix-blend-mode: screen; }
+    .lamp-board { mix-blend-mode: color-dodge; }
+
+    /* A short flicker as the lamps warm up. */
+    @keyframes lamps-on {
+      0%   { opacity: 0; }
+      18%  { opacity: 0.7; }
+      26%  { opacity: 0.15; }
+      40%  { opacity: 0.85; }
+      48%  { opacity: 0.5; }
+      100% { opacity: 1; }
     }
 
     .hero {
@@ -228,17 +471,29 @@
       width: 100%;
       overflow: visible;
     }
-    .action-band::before {
-      content: "";
+    .action-art {
       position: absolute;
       inset: -190px 0 0;
-      background:
-        linear-gradient(180deg, rgba(250, 251, 252, 0.96) 0%, rgba(250, 251, 252, 0.72) 30%, rgba(250, 251, 252, 0.5) 58%, rgba(250, 251, 252, 0.48) 100%),
-        url("/action-bg.jpg") center 52% / cover no-repeat;
-      opacity: 0.92;
+      opacity: var(--action-art-opacity);
       -webkit-mask-image: linear-gradient(180deg, transparent 0, rgba(0, 0, 0, 0.12) 95px, rgba(0, 0, 0, 0.82) 220px, #000 330px, #000 100%);
       mask-image: linear-gradient(180deg, transparent 0, rgba(0, 0, 0, 0.12) 95px, rgba(0, 0, 0, 0.82) 220px, #000 330px, #000 100%);
+      overflow: hidden;
+      pointer-events: none;
       z-index: 0;
+    }
+    .action-art { background: var(--action-fog); }
+    .action-art img {
+      object-fit: cover;
+      object-position: center;
+      mix-blend-mode: var(--art-blend);
+      filter: var(--action-art-filter);
+    }
+    .action-art .lamps-svg { z-index: 1; }
+    .action-art::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, rgba(var(--bg-rgb), 0.96) 0%, rgba(var(--bg-rgb), 0.6) 30%, rgba(var(--bg-rgb), 0.3) 58%, rgba(var(--bg-rgb), 0.3) 100%);
     }
     @media (min-width: 720px) { .action-band { padding: 120px 48px 12px; } }
 
@@ -254,12 +509,11 @@
       z-index: 1;
       text-align: center;
       font-size: 11px;
-      color: rgba(10, 37, 64, 0.78);
+      color: var(--ink-2);
       text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin: 0 0 14px;
-      font-weight: 700;
-      text-shadow: 0 1px 0 rgba(255, 255, 255, 0.74);
+      letter-spacing: 0.14em;
+      font-weight: 600;
+      text-shadow: 0 0 2px var(--halo), 0 0 10px var(--halo);
     }
 
     .chat-panel {
@@ -267,16 +521,17 @@
       z-index: 1;
       display: flex;
       flex-direction: column;
-      height: 398px;
+      height: 528px;
       max-width: 760px;
       margin: 0 auto;
       background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 14px;
+      border: 1px solid var(--hairline);
+      border-radius: 18px;
       overflow: hidden;
       box-shadow:
-        0 24px 50px rgba(10, 37, 64, 0.08),
-        0 2px 6px rgba(10, 37, 64, 0.03);
+        0 0 0 6px rgba(var(--bg-rgb), 0.5),
+        0 30px 60px -20px rgba(10, 37, 64, 0.22),
+        0 2px 6px rgba(10, 37, 64, 0.04);
     }
 
     .chat-head {
@@ -284,11 +539,12 @@
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 12px 16px;
-      background: var(--bg);
+      padding: 11px 12px 11px 18px;
+      background: var(--surface);
       border-bottom: 1px solid var(--border);
       font-size: 12px;
     }
+    .chat-title { font-family: var(--font-mono); font-weight: 500; font-size: 12px; }
     .dot-live {
       width: 8px;
       height: 8px;
@@ -301,32 +557,36 @@
       0%, 100% { box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18); }
       50%      { box-shadow: 0 0 0 5px rgba(34, 197, 94, 0.06); }
     }
-    .chat-title { font-weight: 600; }
     .chat-meta { color: var(--ink-3); }
     .chat-spacer { flex: 1; }
     .chat-replay {
-      width: 26px;
-      height: 26px;
-      border-radius: 6px;
-      color: rgba(42, 52, 65, 0.96);
-      font-size: 14px;
-      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      color: var(--ink-2);
+      transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
     }
-    .chat-replay:hover { background: var(--surface); color: var(--ink); }
+    .chat-replay svg { width: 15px; height: 15px; }
+    .chat-replay:hover { background: var(--bg); border-color: var(--border); color: var(--ink); }
 
     .chat-body {
       flex: 1 1 auto;
       min-height: 0;
       overflow: hidden;
-      padding: 20px 22px;
+      padding: 22px 24px 8px;
       font-size: 14px;
       line-height: 1.55;
       color: var(--ink);
+      background: linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%);
     }
 
     .msg {
       display: flex;
-      gap: 10px;
+      gap: 12px;
       margin-bottom: 16px;
       opacity: 0;
       transform: translateY(4px);
@@ -358,27 +618,6 @@
       margin-bottom: 4px;
     }
     .msg .body { color: var(--ink); }
-    .msg .body ul {
-      margin: 6px 0 0 18px;
-      padding: 0;
-      font-size: 13.5px;
-      line-height: 1.7;
-    }
-
-    /* Inline line badge — reused inside chat responses. */
-    .line-badge {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 20px;
-      height: 20px;
-      padding: 0 6px;
-      border-radius: 10px;
-      color: #fff;
-      font-size: 11px;
-      font-weight: 700;
-      vertical-align: -3px;
-    }
 
     /* Typewriter caret for the user message. */
     .caret::after {
@@ -389,88 +628,418 @@
     }
     @keyframes blink { 50% { opacity: 0; } }
 
-    /* Tool call card. */
+    /* Tool call card: the MCP mechanics, kept quiet so the answer leads. */
     .tool-card {
-      margin-top: 8px;
+      position: relative;
+      max-width: 460px;
       border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--bg);
+      border-radius: 10px;
+      background: var(--surface);
+      box-shadow: 0 1px 2px rgba(10, 37, 64, 0.04);
       overflow: hidden;
     }
     .tool-head {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 9px 12px;
+      padding: 8px 10px 0 12px;
       font-size: 12px;
       color: var(--ink-2);
     }
-    .tool-head .arrow { color: var(--ink-3); font-family: var(--font-mono); }
+    .tool-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 5px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--ink-3);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 600;
+    }
     .tool-name {
       font-family: var(--font-mono);
       font-size: 12.5px;
       color: var(--ink);
       font-weight: 600;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .tool-tag {
       margin-left: auto;
-      font-size: 9px;
-      padding: 2px 6px;
-      border-radius: 4px;
+      flex-shrink: 0;
+      font-size: 9.5px;
+      padding: 2px 7px;
+      border-radius: var(--radius-pill);
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.05em;
-      transition: all 200ms ease;
+      font-variant-numeric: tabular-nums;
+      transition: background 200ms ease, color 200ms ease, border-color 200ms ease;
     }
-    .tool-tag.pending { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; }
-    .tool-tag.ok      { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+    .tool-tag.pending { background: var(--pending-bg); color: var(--pending-fg); border: 1px solid var(--pending-border); }
+    .tool-tag.ok      { background: var(--ok-bg); color: var(--ok-fg); border: 1px solid var(--ok-border); }
     .tool-body {
-      padding: 10px 14px 12px;
-      background: #0c1320;
-      color: #cde2ff;
+      padding: 6px 12px 9px 38px;
+      color: var(--ink-2);
       font-family: var(--font-mono);
       font-size: 11.5px;
-      line-height: 1.55;
-      border-top: 1px solid var(--border);
+      line-height: 1.5;
       overflow-x: auto;
+      white-space: nowrap;
     }
-    .json-key { color: #67e8f9; }
-    .json-str { color: #fca573; }
-    .json-num { color: #b1f0d1; }
+    .json-key { color: var(--json-key); }
+    .json-str { color: var(--json-str); }
+    .json-num { color: var(--json-num); }
+    /* Indeterminate progress line while the call is in flight. */
+    .tool-card::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      bottom: 0;
+      height: 2px;
+      width: 40%;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      animation: tool-run 900ms ease-in-out infinite;
+    }
+    .tool-card.done::after { display: none; }
+    @keyframes tool-run {
+      from { transform: translateX(-100%); }
+      to   { transform: translateX(250%); }
+    }
+
+    /* ─── Answer UIs: departure board, trip, alert, access ─── */
+    .verdict {
+      font-family: var(--font-display);
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: -0.015em;
+      line-height: 1.3;
+      margin-bottom: 10px;
+    }
+    .verdict .bullet { width: 20px; height: 20px; font-size: 11.5px; vertical-align: -2px; margin: -2px 0; }
+    .verdict .bullet.dc { width: auto; }
+    .note {
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--ink-2);
+    }
+    .note code {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--ink);
+    }
+    /* Each piece of the answer streams in, in reading order. */
+    .rv {
+      animation: rv-in 360ms var(--ease-out) both;
+      animation-delay: calc(var(--d, 0) * 110ms);
+    }
+    @keyframes rv-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: none; }
+    }
+
+    .card {
+      max-width: 460px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 1px 2px rgba(10, 37, 64, 0.04), 0 8px 20px -14px rgba(10, 37, 64, 0.2);
+      overflow: hidden;
+    }
+    .card-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .card-head .meta {
+      margin-left: auto;
+      font-weight: 500;
+      color: var(--ink-3);
+    }
+
+    /* Line bullets: NYC circles, WMATA two-letter pills. */
+    .bullet {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      color: #fff;
+      font-family: var(--font-ui);
+      font-size: 12.5px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .bullet.dc {
+      width: auto;
+      min-width: 30px;
+      padding: 0 6px;
+      border-radius: var(--radius-pill);
+      font-size: 10.5px;
+      letter-spacing: 0.03em;
+    }
+    .bullets { display: inline-flex; gap: 3px; }
+
+    /* Countdown: the hero of every departure row. */
+    .when {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      text-align: right;
+      white-space: nowrap;
+    }
+    .count {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 3px;
+      font-family: var(--font-display);
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: -0.03em;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+    .count small {
+      font-family: var(--font-ui);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0;
+      color: var(--ink-2);
+    }
+    .then {
+      margin-top: 3px;
+      font-size: 11.5px;
+      color: var(--ink-3);
+      font-variant-numeric: tabular-nums;
+    }
+    /* Realtime signal mark, Transit-app style. */
+    .rt {
+      width: 12px;
+      height: 12px;
+      margin-right: 1px;
+      align-self: flex-start;
+      color: #16a34a;
+      animation: rt-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes rt-pulse {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.35; }
+    }
+
+    .dep {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+    }
+    .dep + .dep { border-top: 1px solid var(--border); }
+    .dep-dest { flex: 1; min-width: 0; line-height: 1.3; }
+    .dep-dest b { display: block; font-size: 14px; font-weight: 600; }
+    .dep-dest span { font-size: 12px; color: var(--ink-3); }
+    .dep.quiet .count { font-size: 22px; color: var(--ink-2); }
+
+    /* Trip: vertical route with origin, ride, destination. */
+    .trip {
+      display: grid;
+      grid-template-columns: 14px 1fr auto;
+      column-gap: 14px;
+      padding: 14px 16px;
+    }
+    .trip .g { position: relative; }
+    .trip .g::before {
+      content: "";
+      position: absolute;
+      left: 4px;
+      width: 6px;
+      background: var(--c);
+    }
+    .trip .g.start::before { top: 11px; bottom: 0; border-radius: 3px 3px 0 0; }
+    .trip .g.mid::before   { top: 0; bottom: 0; }
+    .trip .g.end::before   { top: 0; height: 11px; }
+    .trip .g i {
+      position: absolute;
+      z-index: 1;
+      top: 4px;
+      left: 0;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 3px solid var(--c);
+    }
+    .trip .g.end i { background: var(--c); }
+    .trip-name { font-size: 14px; font-weight: 600; line-height: 22px; }
+    .trip-sub {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 3px;
+      font-size: 12px;
+      color: var(--ink-3);
+    }
+    .trip-sub .bullet { width: 18px; height: 18px; font-size: 10.5px; }
+    .trip-ride {
+      grid-column: 2 / 4;
+      padding: 14px 0;
+      font-size: 12px;
+      color: var(--ink-3);
+    }
+    .trip-ride b { color: var(--ink); font-weight: 600; }
+    .trip .arrive { font-size: 12px; color: var(--ink-3); line-height: 1.3; }
+    .trip .arrive b {
+      display: block;
+      font-family: var(--font-display);
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--ink);
+      letter-spacing: -0.01em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Alert card: kind, lines, where, impact. */
+    .alert { border-left: 3px solid var(--tone, #f59e0b); }
+    .alert-kind {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--tone-text, var(--warn-fg));
+    }
+    .alert-kind svg { width: 13px; height: 13px; }
+    .alert-main { padding: 12px 14px 4px; }
+    .alert-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--font-display);
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .facts { padding: 6px 14px 12px; }
+    .facts div {
+      display: flex;
+      gap: 12px;
+      padding: 5px 0;
+      font-size: 13px;
+    }
+    .facts dt {
+      flex: 0 0 64px;
+      color: var(--ink-3);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .facts dd { color: var(--ink); }
+    .facts dd b { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    /* Accessibility status. */
+    .access-status {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 14px 10px;
+    }
+    .access-check {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: var(--ok-bg);
+      color: var(--ok-fg);
+      flex-shrink: 0;
+    }
+    .access-check svg { width: 18px; height: 18px; }
+    .access-status b {
+      display: block;
+      font-family: var(--font-display);
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: -0.015em;
+      line-height: 1.2;
+    }
+    .access-status span { font-size: 12px; color: var(--ink-3); }
+    .units {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      padding: 0 14px 14px;
+    }
+    .units span {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      border-radius: 8px;
+      background: var(--units-bg);
+      border: 1px solid var(--units-border);
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--units-fg);
+    }
+    .units span::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #16a34a;
+    }
+    .card-head svg { width: 14px; height: 14px; color: var(--ink-3); }
 
     /* Carousel dots */
     .chat-dots {
       flex: 0 0 auto;
       display: flex;
       justify-content: center;
-      gap: 8px;
-      padding: 0 0 18px;
-      background: var(--surface);
+      gap: 6px;
+      padding: 10px 0 16px;
+      background: var(--surface-2);
     }
     .chat-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
+      width: 7px;
+      height: 7px;
+      border-radius: var(--radius-pill);
       background: var(--border);
-      transition: background 150ms ease, transform 150ms ease;
+      transition: background 150ms ease, width 200ms var(--ease-out);
     }
     .chat-dot:hover { background: var(--ink-3); }
     .chat-dot.active {
+      width: 20px;
       background: var(--ink);
-      transform: scale(1.15);
     }
 
     /* Reduced motion — skip animations, show final state. */
     @media (prefers-reduced-motion: reduce) {
       .msg { animation: none; opacity: 1; transform: none; }
-      .dot-live { animation: none; }
+      .rv { animation: none; }
+      .dot-live, .rt { animation: none; }
       .caret::after { animation: none; }
-      .tool-tag { transition: none; }
+      .tool-card::after { animation: none; display: none; }
+      .tool-tag, .chat-dot, .chat-replay { transition: none; }
     }
 
     @media (max-width: 560px) {
+      .chat-panel { height: 560px; border-radius: 16px; }
+      .chat-head { padding: 10px 10px 10px 14px; }
       .chat-body {
-        padding: 15px 14px;
+        padding: 16px 14px 6px;
         font-size: 13px;
         line-height: 1.45;
       }
@@ -478,29 +1047,93 @@
         gap: 9px;
         margin-bottom: 13px;
       }
-      .tool-card { margin-top: 6px; }
-      .tool-head { padding: 8px 10px; }
+      .msg .avatar { width: 22px; height: 22px; font-size: 10px; }
+      .tool-head { padding: 7px 9px 0 10px; }
+      .tool-name { font-size: 11.5px; }
       .tool-body {
-        padding: 9px 11px 10px;
+        padding: 5px 10px 8px 36px;
         font-size: 10.5px;
-        line-height: 1.45;
       }
+      .verdict { font-size: 16px; margin-bottom: 8px; }
+      .count { font-size: 24px; }
+      .dep { padding: 11px 12px; gap: 10px; }
+      .trip { padding: 12px 13px; column-gap: 12px; }
+      .trip-ride { padding: 12px 0; }
+      .units { grid-template-columns: repeat(2, 1fr); }
+      .facts dt { flex-basis: 56px; }
       .chat-dots { padding-bottom: 14px; }
     }
 
-    .hero h1 {
-      font-size: clamp(36px, 5.5vw, 56px);
-      font-weight: 600;
-      letter-spacing: -0.02em;
-      line-height: 1.05;
+    /* Status eyebrow — live dot + the one usage stat. */
+    .hero-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 5px 14px 5px 10px;
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-pill);
+      background: var(--glass);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      box-shadow: 0 1px 2px rgba(10, 37, 64, 0.04);
+      font-size: 12.5px;
+      color: var(--ink-2);
+      white-space: nowrap;
     }
-    .hero h1 .accent { color: var(--accent); }
+    .hero-status .status-live {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--ink);
+      font-weight: 600;
+    }
+    .hero-status .dot-live { width: 7px; height: 7px; }
+    .hero-status .status-sep {
+      width: 1px;
+      height: 12px;
+      background: var(--hairline);
+    }
+    .hero-status .stat {
+      font-variant-numeric: tabular-nums;
+    }
+    .hero-status .stat strong {
+      color: var(--ink);
+      font-weight: 600;
+    }
+
+    .hero h1 {
+      font-family: var(--font-display);
+      font-size: clamp(40px, 6vw, 68px);
+      font-weight: 600;
+      letter-spacing: -0.035em;
+      line-height: 1;
+      text-wrap: balance;
+    }
+    .hero h1 .accent {
+      font-family: var(--font-serif);
+      font-style: italic;
+      font-weight: 400;
+      font-size: 1.12em;
+      letter-spacing: -0.01em;
+      color: var(--accent-text);
+      padding-right: 0.04em;
+    }
+
+    /* Text set straight on the photo gets a soft halo so it never blends in. */
+    .hero h1,
+    .hero .subtitle,
+    .hero-tip,
+    .hero .footnote {
+      text-shadow: 0 0 2px var(--halo), 0 0 12px var(--halo), 0 0 28px var(--halo);
+    }
 
     .hero .subtitle {
-      max-width: 560px;
-      font-size: clamp(15px, 1.4vw, 17px);
-      line-height: 1.55;
+      max-width: 540px;
+      font-size: clamp(15.5px, 1.4vw, 17.5px);
+      line-height: 1.6;
       color: var(--ink-2);
+      font-weight: 450;
+      text-wrap: pretty;
     }
 
     .hero .footnote {
@@ -508,10 +1141,10 @@
       align-items: center;
       justify-content: center;
       flex-wrap: wrap;
-      gap: 6px 8px;
+      gap: 6px 10px;
       font-size: 13px;
-      color: var(--ink-3);
-      margin-top: 4px;
+      color: var(--ink-2);
+      margin-top: 6px;
     }
     .compat-examples {
       display: inline-flex;
@@ -524,14 +1157,23 @@
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      color: var(--ink-2);
+      color: var(--ink);
+      font-weight: 500;
       white-space: nowrap;
     }
+    a.compat-item {
+      text-decoration: none;
+      transition: transform 120ms ease, color 120ms ease;
+    }
+    /* Same lift as the infra chips below. */
+    a.compat-item:hover { color: var(--accent-text); transform: translateY(-1px); }
+    a.compat-item:hover .compat-logo { opacity: 1; }
     .compat-logo {
       width: 14px;
       height: 14px;
       display: block;
       opacity: 0.82;
+      filter: var(--logo-filter);
     }
 
     .infra-strip {
@@ -549,10 +1191,10 @@
       gap: 8px;
       min-height: 34px;
       padding: 7px 12px;
-      border: 1px solid rgba(10, 37, 64, 0.09);
+      border: 1px solid var(--hairline);
       border-radius: var(--radius-pill);
-      background: rgba(255, 255, 255, 0.54);
-      color: #506176;
+      background: var(--glass);
+      color: var(--ink-2);
       font-size: 12px;
       font-weight: 500;
       box-shadow: 0 1px 2px rgba(10, 37, 64, 0.03);
@@ -562,7 +1204,7 @@
       transition: border-color 120ms ease, transform 120ms ease;
     }
     a.infra-chip:hover {
-      border-color: rgba(10, 37, 64, 0.2);
+      border-color: rgba(var(--ink-rgb), 0.2);
       transform: translateY(-1px);
     }
     .infra-mark {
@@ -603,6 +1245,19 @@
     }
 
     /* ─── CTA row ───────────────────────────────────────────── */
+    .cta-stack {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      margin-top: 6px;
+    }
+    .hero-tip {
+      margin: 0;
+      font-size: 14px;
+      color: var(--ink-2);
+      text-align: center;
+    }
     .cta-row {
       display: flex;
       gap: 8px;
@@ -614,37 +1269,155 @@
       display: inline-flex;
       align-items: center;
       gap: 12px;
+      min-height: 46px;
       background: var(--surface);
       border: 1px solid var(--border);
-      padding: 10px 16px;
+      padding: 0 8px 0 18px;
       border-radius: var(--radius-pill);
       font-family: var(--font-mono);
       font-size: 14px;
       color: var(--ink);
-      transition: border-color 120ms ease, transform 120ms ease;
+      box-shadow: 0 1px 2px rgba(10, 37, 64, 0.04), 0 8px 24px -12px rgba(10, 37, 64, 0.18);
+      transition: border-color 160ms ease, box-shadow 160ms ease, transform 120ms ease;
     }
-    .url-pill:hover { border-color: var(--ink-2); }
+    .url-pill .url-scheme { color: var(--ink-3); }
+    .url-pill:hover {
+      border-color: rgba(var(--ink-rgb), 0.28);
+      box-shadow: 0 1px 2px rgba(10, 37, 64, 0.04), 0 12px 28px -12px rgba(10, 37, 64, 0.26);
+    }
     .url-pill:active { transform: translateY(1px); }
     .url-pill .url-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       font-family: var(--font-ui);
       font-size: 12px;
-      color: var(--ink-3);
-      padding-left: 12px;
-      border-left: 1px solid var(--border);
+      font-weight: 500;
+      color: var(--ink-2);
+      padding: 6px 11px;
+      border-radius: var(--radius-pill);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      transition: color 160ms ease, background 160ms ease, border-color 160ms ease;
     }
-    .url-pill[data-copied="true"] .url-status { color: var(--accent); }
+    .url-pill:hover .url-status { color: var(--ink); }
+    .url-pill[data-copied="true"] .url-status {
+      color: var(--ok-fg);
+      background: var(--ok-bg);
+      border-color: var(--ok-border);
+    }
 
     .cta-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 46px;
       background: var(--ink);
-      color: #fff;
-      padding: 10px 18px;
+      color: var(--on-ink);
+      padding: 0 20px 0 22px;
       border-radius: var(--radius-pill);
       font-size: 14px;
       font-weight: 500;
-      transition: filter 120ms ease, transform 120ms ease;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.14) inset, 0 10px 24px -10px rgba(10, 37, 64, 0.55);
+      transition: filter 160ms ease, transform 120ms ease;
     }
-    .cta-button:hover { filter: brightness(1.15); }
+    .cta-button .cta-arrow {
+      transition: transform 200ms var(--ease-out);
+    }
+    .cta-button:hover { filter: brightness(1.18); }
+    .cta-button:hover .cta-arrow { transform: translateX(3px); }
     .cta-button:active { transform: translateY(1px); }
+
+    /* ChatGPT plugin — secondary primary path, sits right under the URL. */
+    .plugin-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 14px 7px 8px;
+      border-radius: var(--radius-pill);
+      border: 1px solid var(--hairline);
+      background: var(--glass);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      font-size: 13px;
+      color: var(--ink-2);
+      transition: border-color 160ms ease, background 160ms ease, transform 160ms var(--ease-out);
+    }
+    .plugin-link .plugin-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+    }
+    .plugin-link .plugin-mark img { width: 14px; height: 14px; display: block; filter: var(--logo-filter); }
+    .plugin-link strong { color: var(--ink); font-weight: 600; }
+    .plugin-link .plugin-arrow {
+      color: var(--ink-3);
+      transition: transform 200ms var(--ease-out), color 160ms ease;
+    }
+    .plugin-link:hover {
+      border-color: rgba(var(--ink-rgb), 0.24);
+      background: var(--surface);
+      transform: translateY(-1px);
+    }
+    .plugin-link:hover .plugin-arrow {
+      color: var(--ink);
+      transform: translate(2px, -2px);
+    }
+
+    /* Route-line rule: a thin track with five stops in line colors. */
+    .route-rule {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      margin: 0 auto 16px;
+      max-width: 760px;
+    }
+    .route-rule::before,
+    .route-rule::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(var(--ink-rgb), 0.22));
+    }
+    .route-rule::after { background: linear-gradient(90deg, rgba(var(--ink-rgb), 0.22), transparent); }
+    .route-stops {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .route-stops i {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--c);
+      box-shadow: 0 0 0 2px rgba(var(--bg-rgb), 0.9);
+    }
+
+    /* Load-in: hero pieces rise in a short stagger. */
+    .rise {
+      opacity: 0;
+      transform: translateY(10px);
+      animation: rise 700ms var(--ease-out) forwards;
+      animation-delay: calc(var(--i, 0) * 70ms + 60ms);
+    }
+    @keyframes rise {
+      to { opacity: 1; transform: none; }
+    }
+
+    @media (max-width: 560px) {
+      .hero { gap: 18px; }
+      .hero-status { font-size: 12px; gap: 8px; }
+      .url-pill { min-height: 44px; padding-left: 16px; }
+      .url-pill .url-scheme { display: none; }
+      .cta-button { min-height: 44px; }
+      .plugin-link { font-size: 12.5px; }
+    }
 
     /* ─── Footer ────────────────────────────────────────────── */
     footer {
@@ -660,13 +1433,13 @@
       flex-wrap: wrap;
       font-size: 13px;
       color: var(--ink);
-      font-weight: 700;
-      text-shadow: 0 1px 1px rgba(255, 255, 255, 0.86);
+      font-weight: 600;
+      text-shadow: 0 0 2px var(--halo), 0 0 10px var(--halo);
     }
     @media (min-width: 720px) {
       footer { padding: 12px 48px 4px; }
     }
-    footer .dot-sep { color: rgba(10, 37, 64, 0.58); }
+    footer .dot-sep { color: var(--ink-3); }
     .footer-link {
       display: inline-flex;
       align-items: center;
@@ -692,14 +1465,15 @@
     .footer-action {
       min-height: 30px;
       padding: 5px 11px;
-      border: 1px solid rgba(10, 37, 64, 0.22);
+      border: 1px solid rgba(var(--ink-rgb), 0.16);
       border-radius: var(--radius-pill);
-      background: rgba(255, 255, 255, 0.98);
-      box-shadow: 0 5px 14px rgba(10, 37, 64, 0.11), 0 1px 0 rgba(255, 255, 255, 0.92) inset;
-      font-weight: 800;
+      background: var(--surface);
+      box-shadow: 0 4px 12px rgba(10, 37, 64, 0.08), 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+      font-size: 12.5px;
+      font-weight: 600;
     }
     .footer-action:hover {
-      border-color: rgba(10, 37, 64, 0.34);
+      border-color: rgba(var(--ink-rgb), 0.34);
       transform: translateY(-1px);
     }
     .footer-legal {
@@ -724,7 +1498,7 @@
       .footer-action {
         min-height: 32px;
         padding: 6px 12px;
-        background: #fff;
+        background: var(--surface);
       }
     }
 
@@ -841,7 +1615,7 @@
       width: 100%;
       padding: 9px 14px;
       background: var(--ink);
-      color: #fff;
+      color: var(--on-ink);
       font-size: 13px;
       font-weight: 500;
       border-radius: var(--radius-input);
@@ -856,7 +1630,7 @@
       left: 50%;
       transform: translateX(-50%);
       background: var(--ink);
-      color: #fff;
+      color: var(--on-ink);
       padding: 8px 16px;
       border-radius: var(--radius-pill);
       font-size: 13px;
@@ -871,6 +1645,12 @@
     @media (prefers-reduced-motion: reduce) {
       dialog#install-dialog[open] { animation: none; }
       #toast { transition: none; }
+      .rise { animation: none; opacity: 1; transform: none; }
+      .lamps { animation: none; transition: none; }
+      a.compat-item { transition: none; }
+      .cta-button .cta-arrow,
+      .plugin-link,
+      .plugin-link .plugin-arrow { transition: none; }
     }
   </style>
 </head>
@@ -878,42 +1658,98 @@
   <nav aria-label="Primary">
     <a class="brand" href="/">
       <img class="brand-icon" src="/metro-mcp-slick.svg" alt="" width="24" height="24">
-      <span class="wordmark">metro-mcp</span>
+      <span class="wordmark">Transit MCP</span>
     </a>
     <div class="nav-links">
       <a href="/docs/">Docs</a>
-      <a href="https://github.com/Aarekaz/metro-mcp">
+      <button type="button" class="theme-button" aria-label="Color theme">
+        <svg class="theme-icon" data-for="system" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+        <svg class="theme-icon" data-for="light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg class="theme-icon" data-for="dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg>
+      </button>
+      <a class="cta-pill" href="https://github.com/Aarekaz/metro-mcp">
         <svg class="github-icon" viewBox="0 0 24 24" aria-hidden="true">
           <path fill="currentColor" d="M12 .5A12 12 0 0 0 8.2 23.9c.6.1.82-.26.82-.58v-2.2c-3.34.73-4.04-1.42-4.04-1.42-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.2.09 1.84 1.24 1.84 1.24 1.08 1.84 2.82 1.31 3.5 1 .11-.78.42-1.31.76-1.61-2.66-.3-5.46-1.33-5.46-5.93 0-1.31.47-2.38 1.24-3.22-.13-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.4 11.4 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.66 1.66.25 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.8 5.62-5.48 5.92.43.37.82 1.1.82 2.22v3.29c0 .32.21.7.83.58A12 12 0 0 0 12 .5Z"/>
         </svg>
         <span>GitHub</span>
       </a>
-      <button type="button" class="cta-pill" data-open-install>Add to LLM</button>
     </div>
   </nav>
 
   <main>
     <section class="hero-section">
+      <div class="hero-art" aria-hidden="true">
+        <img src="/train-classic-bg.jpg" alt="" width="2400" height="1920" decoding="async">
+        <!-- Lamp layers share the photo's pixel grid (2400x1920). -->
+        <svg class="lamps lamp-glow" viewBox="0 0 2400 1920">
+          <defs>
+            <radialGradient id="lamp-hot">
+              <stop offset="0" stop-color="#fffaf0"/>
+              <stop offset="0.14" stop-color="#fff1d0"/>
+              <stop offset="0.4" stop-color="#ffcf87" stop-opacity="0.42"/>
+              <stop offset="1" stop-color="#ff9f43" stop-opacity="0"/>
+            </radialGradient>
+            <radialGradient id="lamp-soft">
+              <stop offset="0" stop-color="#ffe2a8" stop-opacity="0.5"/>
+              <stop offset="1" stop-color="#ffb35c" stop-opacity="0"/>
+            </radialGradient>
+            <linearGradient id="lamp-streak">
+              <stop offset="0" stop-color="#ffe9c2" stop-opacity="0"/>
+              <stop offset="0.5" stop-color="#fff4dc" stop-opacity="0.75"/>
+              <stop offset="1" stop-color="#ffe9c2" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <!-- Light thrown into the fog ahead of the train. -->
+          <ellipse cx="730" cy="1120" rx="520" ry="300" fill="url(#lamp-soft)"/>
+          <!-- Headlights. -->
+          <circle cx="568" cy="1030" r="150" fill="url(#lamp-hot)"/>
+          <circle cx="893" cy="1028" r="150" fill="url(#lamp-hot)"/>
+          <rect x="300" y="1026" width="540" height="8" rx="4" fill="url(#lamp-streak)"/>
+          <rect x="625" y="1024" width="540" height="8" rx="4" fill="url(#lamp-streak)"/>
+          <!-- Upper ditch lights. -->
+          <circle cx="860" cy="507" r="80" fill="url(#lamp-hot)"/>
+          <circle cx="902" cy="507" r="80" fill="url(#lamp-hot)"/>
+        </svg>
+        <!-- Numberboards light from behind; dark digits stay dark. -->
+        <svg class="lamps lamp-board" viewBox="0 0 2400 1920">
+          <rect x="727" y="489" width="106" height="45" rx="8" fill="#7d6038"/>
+          <rect x="947" y="483" width="130" height="44" rx="8" fill="#7d6038"/>
+        </svg>
+      </div>
       <div class="hero">
-        <h1>Plug your LLM into the <span class="accent">subway</span>.</h1>
-        <p class="subtitle">Anonymous access to live DC Metro and NYC Subway arrivals, incidents, and 598 stations. Read-only, with no account or client credentials required.</p>
-        <div class="cta-row">
-          <button type="button" class="url-pill" data-copy-url="https://metro-mcp.anuragd.me/mcp" aria-label="Copy MCP server URL">
-            <span class="url-text">metro-mcp.anuragd.me/mcp</span>
-            <span class="url-status" aria-hidden="true">Copy</span>
-          </button>
-          <button type="button" class="cta-button" data-open-install>Connect</button>
+        <p class="hero-status rise" style="--i:0">
+          <span class="status-live"><span class="dot-live" aria-hidden="true"></span>Live</span>
+          <span class="status-sep" aria-hidden="true"></span>
+          <span class="stat">~<strong>77K</strong> requests served weekly</span>
+        </p>
+        <h1 class="rise" style="--i:1">Plug your LLM into the <span class="accent">subway</span>.</h1>
+        <p class="subtitle rise" style="--i:2">Live arrivals, service alerts, and station details across 598 DC Metro and NYC Subway stations, right inside your AI.</p>
+        <div class="cta-stack rise" style="--i:3">
+          <div class="cta-row">
+            <button type="button" class="url-pill" data-copy-url="https://transitmcp.com/mcp" aria-label="Copy MCP server URL">
+              <span class="url-text"><span class="url-scheme">https://</span>transitmcp.com/mcp</span>
+              <span class="url-status" aria-hidden="true">Copy</span>
+            </button>
+            <button type="button" class="cta-button" data-open-install>Connect <span class="cta-arrow" aria-hidden="true">&rarr;</span></button>
+          </div>
+          <a class="plugin-link" href="https://chatgpt.com/plugins/plugin_asdk_app_6a9078f4d6dc8191be735cc1c2ff45b5" target="_blank" rel="noreferrer">
+            <span class="plugin-mark" aria-hidden="true"><img src="/client-openai.svg" alt="" width="14" height="14"></span>
+            <span>Also available as a <strong>ChatGPT plugin</strong></span>
+            <span class="plugin-arrow" aria-hidden="true">&nearr;</span>
+          </a>
+          <p class="hero-tip">Or just send this link to your AI. It will figure it out.</p>
         </div>
-        <p class="footnote">
+        <p class="footnote rise" style="--i:4">
           <span>Works with any MCP-compatible LLM/client</span>
           <span class="compat-examples" aria-label="Example clients">
-            <span class="compat-item"><img class="compat-logo" src="/client-claude.svg" alt="" width="14" height="14">Claude</span>
-            <span class="compat-item"><img class="compat-logo" src="/client-cursor.svg" alt="" width="14" height="14">Cursor</span>
-            <span class="compat-item"><img class="compat-logo" src="/client-openai.svg" alt="" width="14" height="14">Codex</span>
-            <span class="compat-item"><img class="compat-logo" src="/client-gemini.svg" alt="" width="14" height="14">Gemini</span>
+            <a class="compat-item" href="https://claude.com" target="_blank" rel="noreferrer"><img class="compat-logo" src="/client-claude.svg" alt="" width="14" height="14">Claude</a>
+            <a class="compat-item" href="https://grok.com" target="_blank" rel="noreferrer"><img class="compat-logo" src="/client-grok.svg" alt="" width="14" height="14">Grok Bot</a>
+            <a class="compat-item" href="https://instinct.com" target="_blank" rel="noreferrer"><img class="compat-logo" src="/client-instinct.svg" alt="" width="14" height="14">Instinct</a>
+            <a class="compat-item" href="https://orchid.ai/" target="_blank" rel="noreferrer"><img class="compat-logo" src="/client-orchid.svg" alt="" width="14" height="14">Orchid</a>
+            <a class="compat-item" href="https://muse.ai" target="_blank" rel="noreferrer"><img class="compat-logo" src="/client-muse.svg" alt="" width="14" height="14">Muse</a>
           </span>
         </p>
-        <div class="infra-strip" aria-label="Built on Cloudflare and official transit feeds">
+        <div class="infra-strip rise" style="--i:5" aria-label="Built on Cloudflare and official transit feeds">
           <a class="infra-chip" href="https://developers.cloudflare.com/workers/" target="_blank" rel="noreferrer" aria-label="Open Cloudflare Workers documentation">
             <svg class="infra-mark cloudflare-mark" viewBox="0 0 64 40" aria-hidden="true">
               <path fill="currentColor" d="M45.8 18.2c-.8-5.5-5.5-9.7-11.2-9.7-5.1 0-9.4 3.4-10.8 8.1a8.8 8.8 0 0 0-3.3-.6c-5.2 0-9.5 4-9.9 9.1H8.2C3.7 25.1 0 28.5 0 32.7 0 36.8 3.7 40 8.2 40h38.9c7.2 0 13-5.4 13-12.1 0-6.2-5-11.3-11.5-12a12 12 0 0 0-2.8 2.3Z"/>
@@ -934,15 +1770,43 @@
     </section>
 
     <div class="action-band">
+      <div class="action-art" aria-hidden="true">
+        <img src="/action-bg.jpg" alt="" width="1800" height="1350" decoding="async">
+        <!-- Lamp layers share the mural's pixel grid (1800x1350). -->
+        <svg class="lamps lamps-svg lamp-glow" viewBox="0 0 1800 1350" preserveAspectRatio="xMidYMid slice">
+          <!-- Station lantern under the canopy. -->
+          <circle cx="430" cy="636" r="90" fill="url(#lamp-hot)"/>
+          <ellipse cx="430" cy="760" rx="150" ry="120" fill="url(#lamp-soft)"/>
+          <!-- Locomotive headlights. -->
+          <circle cx="1138" cy="756" r="70" fill="url(#lamp-hot)"/>
+          <circle cx="1198" cy="756" r="70" fill="url(#lamp-hot)"/>
+          <circle cx="1398" cy="756" r="70" fill="url(#lamp-hot)"/>
+          <circle cx="1440" cy="756" r="70" fill="url(#lamp-hot)"/>
+          <ellipse cx="1290" cy="900" rx="330" ry="170" fill="url(#lamp-soft)"/>
+        </svg>
+        <!-- Station signs lit from behind. -->
+        <svg class="lamps lamps-svg lamp-board" viewBox="0 0 1800 1350" preserveAspectRatio="xMidYMid slice">
+          <rect x="315" y="556" width="228" height="32" rx="4" fill="#6e5432"/>
+          <rect x="586" y="621" width="30" height="29" rx="3" fill="#6e5432"/>
+        </svg>
+      </div>
       <section class="chat-section" aria-hidden="true">
-        <p class="chat-label">See it in action</p>
+        <div class="route-rule">
+          <span class="route-stops" aria-hidden="true">
+            <i style="--c:var(--line-red)"></i><i style="--c:var(--accent)"></i><i style="--c:var(--line-yellow)"></i>
+          </span>
+          <p class="chat-label">See it in action</p>
+          <span class="route-stops" aria-hidden="true">
+            <i style="--c:var(--line-green)"></i><i style="--c:var(--line-blue)"></i><i style="--c:var(--ink)"></i>
+          </span>
+        </div>
         <div class="chat-panel">
           <div class="chat-head">
             <span class="dot-live"></span>
-            <span class="chat-title">metro-mcp</span>
+            <span class="chat-title">Transit MCP</span>
             <span class="chat-meta">&middot; connected to your LLM</span>
             <span class="chat-spacer"></span>
-            <button type="button" class="chat-replay" data-replay aria-label="Replay current demo">&#8635;</button>
+            <button type="button" class="chat-replay" data-replay aria-label="Replay current demo"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.6 8a5.4 5.4 0 1 0 1.6-3.8M2.6 2.4v2.9h2.9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           </div>
           <div class="chat-body" data-chat-body></div>
           <div class="chat-dots" role="tablist">
@@ -965,6 +1829,8 @@
         <span class="dot-sep">·</span>
         <span>MIT</span>
         <span class="dot-sep">·</span>
+        <span>Transit MCP was formerly Metro MCP.</span>
+        <span class="dot-sep">·</span>
         <span class="footer-legal">
           <a href="/privacy/">Privacy</a>
           <a href="/terms/">Terms</a>
@@ -979,7 +1845,7 @@
   <dialog id="install-dialog" aria-labelledby="install-title">
     <div class="dialog-inner">
       <header class="dialog-header">
-        <h2 id="install-title">Add metro-mcp to your MCP client</h2>
+        <h2 id="install-title">Add Transit MCP to your MCP client</h2>
         <button type="button" class="dialog-close" data-close-install aria-label="Close">×</button>
       </header>
       <p class="dialog-subtitle">Paste the snippet for your client. No login is required; no client token or OAuth flow is required.</p>
@@ -995,8 +1861,8 @@
         <p class="tab-help">Add to <code>~/Library/Application Support/Claude/claude_desktop_config.json</code></p>
         <pre><code>{
   "mcpServers": {
-    "metro-mcp": {
-      "url": "https://metro-mcp.anuragd.me/mcp"
+    "transit-mcp": {
+      "url": "https://transitmcp.com/mcp"
     }
   }
 }</code></pre>
@@ -1007,8 +1873,8 @@
         <p class="tab-help">Add to <code>~/.cursor/mcp.json</code></p>
         <pre><code>{
   "mcpServers": {
-    "metro-mcp": {
-      "url": "https://metro-mcp.anuragd.me/mcp"
+    "transit-mcp": {
+      "url": "https://transitmcp.com/mcp"
     }
   }
 }</code></pre>
@@ -1017,15 +1883,15 @@
 
       <div role="tabpanel" id="tab-codex" aria-labelledby="tab-btn-codex" hidden>
         <p class="tab-help">Run in your terminal</p>
-        <pre><code>codex mcp add metro-mcp https://metro-mcp.anuragd.me/mcp</code></pre>
+        <pre><code>codex mcp add transit-mcp https://transitmcp.com/mcp</code></pre>
         <button type="button" class="copy-snippet">Copy</button>
       </div>
 
       <div role="tabpanel" id="tab-generic" aria-labelledby="tab-btn-generic" hidden>
         <p class="tab-help">For any MCP client following the Streamable HTTP convention</p>
         <pre><code>{
-  "name": "metro-mcp",
-  "url": "https://metro-mcp.anuragd.me/mcp",
+  "name": "transit-mcp",
+  "url": "https://transitmcp.com/mcp",
   "transport": "streamable-http"
 }</code></pre>
         <button type="button" class="copy-snippet">Copy</button>
@@ -1138,11 +2004,33 @@
       // ── Chat demo carousel ────────────────────────────────
       // SCENES is a hardcoded marketing-content array. It is NEVER mutated at
       // runtime, NEVER reads from user input / URL params / fetched data, and
-      // is the only source threaded into the innerHTML writes below. If you
-      // ever want to populate the demo from a live source, switch to
-      // createElement + textContent or sanitize with DOMPurify first.
+      // is the only source threaded into the innerHTML writes below. The small
+      // markup helpers just under this comment are called only with string
+      // literals from SCENES, so they don't change that. If you ever want to
+      // populate the demo from a live source, switch to createElement +
+      // textContent or sanitize with DOMPurify first.
+      const nyc = (line, bg, fg) =>
+        '<span class="bullet" style="background:' + bg + (fg ? ';color:' + fg : '') + '">' + line + '</span>';
+      const dc = (code, bg, fg) =>
+        '<span class="bullet dc" style="background:' + bg + (fg ? ';color:' + fg : '') + '">' + code + '</span>';
+      const RT =
+        '<svg class="rt" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6.5A4.5 4.5 0 0 1 6.5 2M2 10.5A8.5 8.5 0 0 1 10.5 2" ' +
+        'fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="2.2" cy="9.8" r="1.4" fill="currentColor"/></svg>';
+      const WARN =
+        '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 15 14H1L8 1.8Z" fill="currentColor"/>' +
+        '<path d="M8 6.2v3.6M8 11.6v.1" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg>';
+      const CAL =
+        '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.8" y="3" width="12.4" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/>' +
+        '<path d="M1.8 6.6h12.4M5 1.6v2.8M11 1.6v2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+      const LIFT =
+        '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.8" y="1.8" width="12.4" height="12.4" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/>' +
+        '<path d="M5.5 6.5 7.5 4.5 9.5 6.5M5.5 9.5 7.5 11.5 9.5 9.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" transform="translate(.5 0)"/></svg>';
+      const CHECK =
+        '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.4 3 3 6-6.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
       const SCENES = [
         // 1 — Real-life "can I make it?" (most natural opener — LLM has to reason)
+        // Verdict first, then the trip with its departure board, then one line of why.
         {
           user: "I'm at Union Square. Can I make it to Grand Central in 20 min?",
           tool: {
@@ -1151,12 +2039,23 @@
             ms: 610
           },
           response:
-            'Yes &mdash; the next ' +
-            '<span class="line-badge" style="background:#00933C">4</span>' +
-            '<span class="line-badge" style="background:#00933C">5</span>' +
-            '<span class="line-badge" style="background:#00933C">6</span> uptown trains: ' +
-            '<strong>2 min</strong>, <strong>5 min</strong>, and <strong>8 min</strong>. ' +
-            'Ride is ~6 min, so you should arrive in 8&ndash;14 min.'
+            '<p class="verdict rv">Yes, you\'ll make it.</p>' +
+            '<div class="card trip rv" style="--d:1;--c:#00933C">' +
+              '<span class="g start"><i></i></span>' +
+              '<div>' +
+                '<div class="trip-name">Union Sq &middot; 14 St</div>' +
+                '<div class="trip-sub"><span class="bullets">' +
+                  nyc('4', '#00933C') + nyc('5', '#00933C') + nyc('6', '#00933C') +
+                '</span>Uptown</div>' +
+              '</div>' +
+              '<div class="when"><span class="count">' + RT + '2<small>min</small></span><span class="then">then 5, 8 min</span></div>' +
+              '<span class="g mid"></span>' +
+              '<div class="trip-ride">Ride <b>about 6 min</b></div>' +
+              '<span class="g end"><i></i></span>' +
+              '<div class="trip-name">Grand Central &middot; 42 St</div>' +
+              '<div class="when arrive">Arrive in<b>8 to 14 min</b></div>' +
+            '</div>' +
+            '<p class="note rv" style="--d:2">Even the train in 8 min gets you there with 6 min to spare.</p>'
         },
         // 2 — Common worry: "any delays?"
         {
@@ -1167,10 +2066,18 @@
             ms: 210
           },
           response:
-            'Yes &mdash; there\'s an active delay at <strong>L\'Enfant Plaza</strong> affecting ' +
-            '<span class="line-badge" style="background:#009CDE">BL</span> and ' +
-            '<span class="line-badge" style="background:#FCD000;color:#0a2540">YL</span>. ' +
-            'Expect about <strong>+5 min</strong> on your trip through evening rush.'
+            '<p class="verdict rv">Yes. Plan on about 5 extra minutes.</p>' +
+            '<div class="card alert rv" style="--d:1">' +
+              '<div class="alert-main">' +
+                '<div class="alert-kind">' + WARN + 'Delay</div>' +
+                '<div class="alert-title">L\'Enfant Plaza</div>' +
+              '</div>' +
+              '<dl class="facts">' +
+                '<div><dt>Lines</dt><dd><span class="bullets">' + dc('BL', '#009CDE') + dc('YL', '#FCD000', '#0a2540') + '</span></dd></div>' +
+                '<div><dt>Impact</dt><dd><b>+5 min</b> on your trip</dd></div>' +
+                '<div><dt>Until</dt><dd>Through evening rush</dd></div>' +
+              '</dl>' +
+            '</div>'
         },
         // 3 — Friday afternoon: "any weekend service changes?"
         {
@@ -1181,8 +2088,17 @@
             ms: 210
           },
           response:
-            'Yes &mdash; the <span class="line-badge" style="background:#A7A9AC;color:#0a2540">L</span> is running every 8 min between 8th Ave and Bedford Ave ' +
-            '(vs the usual 5). Limited service to Canarsie all weekend.'
+            '<p class="verdict rv">Yes. The ' + nyc('L', '#A7A9AC', '#0a2540') + ' runs less often all weekend.</p>' +
+            '<div class="card alert rv" style="--d:1;--tone:var(--ink);--tone-text:var(--ink-2)">' +
+              '<div class="alert-main">' +
+                '<div class="alert-kind">' + CAL + 'Service change &middot; This weekend</div>' +
+                '<div class="alert-title">8 Av to Bedford Av</div>' +
+              '</div>' +
+              '<dl class="facts">' +
+                '<div><dt>Trains</dt><dd>Every <b>8 min</b> <span style="color:var(--ink-3)">(usually 5)</span></dd></div>' +
+                '<div><dt>Canarsie</dt><dd>Limited service</dd></div>' +
+              '</dl>' +
+            '</div>'
         },
         // 4 — Accessibility: "are the elevators working?"
         {
@@ -1193,7 +2109,16 @@
             ms: 330
           },
           response:
-            'All 4 elevators at <strong>Union Station</strong> are operational. No reported outages.'
+            '<p class="verdict rv">Yes, they\'re all working.</p>' +
+            '<div class="card rv" style="--d:1">' +
+              '<div class="card-head">' + LIFT + 'Union Station' +
+                '<span class="meta">Elevators</span></div>' +
+              '<div class="access-status">' +
+                '<span class="access-check">' + CHECK + '</span>' +
+                '<div><b>4 of 4 in service</b><span>No reported outages</span></div>' +
+              '</div>' +
+              '<div class="units"><span>Elevator 1</span><span>Elevator 2</span><span>Elevator 3</span><span>Elevator 4</span></div>' +
+            '</div>'
         },
         // 5 — Specific: "when's the next 1 train?"
         {
@@ -1204,12 +2129,18 @@
             ms: 190
           },
           response:
-            'The next <span class="line-badge" style="background:#EE352E">1</span> trains at <strong>Times Square &mdash; 42 St</strong>:' +
-            '<ul>' +
-              '<li><strong>3 min</strong> &nbsp;&middot;&nbsp; downtown to South Ferry</li>' +
-              '<li><strong>8 min</strong> &nbsp;&middot;&nbsp; uptown to Van Cortlandt Park</li>' +
-              '<li><strong>11 min</strong> &nbsp;&middot;&nbsp; downtown to South Ferry</li>' +
-            '</ul>'
+            '<p class="verdict rv">Next ' + nyc('1', '#EE352E') + ' is in 3 min, heading downtown.</p>' +
+            '<div class="card rv" style="--d:1">' +
+              '<div class="card-head">Times Sq &middot; 42 St<span class="meta">Next departures</span></div>' +
+              '<div class="dep">' + nyc('1', '#EE352E') +
+                '<div class="dep-dest"><b>South Ferry</b><span>Downtown</span></div>' +
+                '<div class="when"><span class="count">' + RT + '3<small>min</small></span><span class="then">then 11 min</span></div>' +
+              '</div>' +
+              '<div class="dep quiet">' + nyc('1', '#EE352E') +
+                '<div class="dep-dest"><b>Van Cortlandt Park</b><span>Uptown</span></div>' +
+                '<div class="when"><span class="count">8<small>min</small></span></div>' +
+              '</div>' +
+            '</div>'
         },
         // 6 — API-feeling: "where are the 30N buses?"
         {
@@ -1220,12 +2151,16 @@
             ms: 310
           },
           response:
-            'Live <span class="line-badge" style="background:#0a2540">30N</span> vehicle feed checked:' +
-            '<ul>' +
-              '<li>Active buses appear when WMATA reports vehicle positions</li>' +
-              '<li>Filter by route ID, then map vehicle IDs and coordinates</li>' +
-            '</ul>' +
-            'Use <strong>get_bus_predictions</strong> for stop-specific ETAs.'
+            '<p class="verdict rv">Checked the ' + dc('30N', '#0a2540') + ' vehicle feed.</p>' +
+            '<div class="card rv" style="--d:1">' +
+              '<div class="card-head">Metrobus 30N<span class="meta">Vehicle positions</span></div>' +
+              '<dl class="facts" style="padding-top:8px">' +
+                '<div><dt>Shows</dt><dd>Active buses, as WMATA reports them</dd></div>' +
+                '<div><dt>Per bus</dt><dd>Vehicle ID and coordinates</dd></div>' +
+                '<div><dt>Filter</dt><dd>Route ID <b>30N</b></dd></div>' +
+              '</dl>' +
+            '</div>' +
+            '<p class="note rv" style="--d:2">For stop-specific ETAs, use <code>get_bus_predictions</code>.</p>'
         }
       ];
 
@@ -1234,7 +2169,7 @@
         afterType: 350,
         toolMin: 180,
         afterTool: 380,
-        afterResponse: 4200
+        afterResponse: 5200
       };
 
       const chatBody = document.querySelector('[data-chat-body]');
@@ -1269,12 +2204,12 @@
         const wrap = document.createElement('div');
         wrap.className = 'msg';
         wrap.innerHTML =
-          '<span class="avatar assistant">M</span>' +
+          '<span class="avatar assistant">T</span>' +
           '<div class="content">' +
-            '<div class="role">Your LLM &middot; using metro-mcp</div>' +
-            '<div class="tool-card">' +
+            '<div class="role">Your LLM &middot; using Transit MCP</div>' +
+            '<div class="tool-card" data-tool-card>' +
               '<div class="tool-head">' +
-                '<span class="arrow">&rarr;</span>' +
+                '<span class="tool-icon">&fnof;</span>' +
                 '<span class="tool-name">' + tool.name + '</span>' +
                 '<span class="tool-tag pending" data-tag>PENDING</span>' +
               '</div>' +
@@ -1289,7 +2224,7 @@
         const wrap = document.createElement('div');
         wrap.className = 'msg';
         wrap.innerHTML =
-          '<span class="avatar assistant">M</span>' +
+          '<span class="avatar assistant">T</span>' +
           '<div class="content">' +
             '<div class="role">Your LLM</div>' +
             '<div class="body">' + html + '</div>' +
@@ -1315,6 +2250,7 @@
         runToken++;
         const token = runToken;
         const scene = SCENES[idx];
+        currentScene = idx;
         chatBody.innerHTML = '';
         setActiveDot(idx);
 
@@ -1335,10 +2271,11 @@
         tag.classList.remove('pending');
         tag.classList.add('ok');
         tag.textContent = 'DONE · ' + scene.tool.ms + ' ms';
+        toolEl.querySelector('[data-tool-card]').classList.add('done');
         await wait(TIMING.afterTool);
         if (token !== runToken) return;
 
-        // 3. Assistant response — inserted, fades in via .msg animation
+        // 3. Assistant response — inserted; its parts stream in via .rv delays
         renderAssistantMsg(scene.response);
         await wait(TIMING.afterResponse);
         if (token !== runToken) return;

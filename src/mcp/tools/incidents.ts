@@ -22,7 +22,7 @@ export function registerIncidentTools(
     'get_incidents',
     {
       title: 'Service incidents',
-      description: 'Get current transit incidents and service advisories.',
+      description: 'Get current transit incidents and service advisories for DC Metro or NYC Subway.',
       annotations: readOnlyLive('Service incidents'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({ city: citySchema }),

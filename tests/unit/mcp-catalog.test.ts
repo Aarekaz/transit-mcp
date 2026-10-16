@@ -21,6 +21,7 @@ import {
   EXPECTED_PROMPT_NAMES,
   EXPECTED_RESOURCE_CONTRACTS,
   EXPECTED_RESOURCE_NAMES,
+  EXPECTED_SERVER_INFO,
   EXPECTED_TOOL_CONTRACTS,
   EXPECTED_TOOL_NAMES,
   TRANSIT_BOARD_MIME,
@@ -430,6 +431,40 @@ describe('golden MCP catalog', () => {
     });
   });
 
+  it('reports server identity and instructions in both protocol eras', async () => {
+    const discover = await requestOverSdkWire(
+      metroServerFactory(),
+      'server/discover',
+      {},
+      { modern: true },
+    );
+    const initialize = await requestOverSdkWire(
+      metroServerFactory(),
+      'initialize',
+      {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'catalog-test', version: '1.0.0' },
+      },
+    );
+
+    expect(discover.error).toBeUndefined();
+    expect(initialize.error).toBeUndefined();
+    expect(initialize.result?.serverInfo).toEqual(EXPECTED_SERVER_INFO);
+    expect((discover.result?._meta as Record<string, unknown>)[
+      'io.modelcontextprotocol/serverInfo'
+    ]).toEqual(EXPECTED_SERVER_INFO);
+
+    const instructions = initialize.result?.instructions;
+    expect(typeof instructions).toBe('string');
+    expect(discover.result?.instructions).toBe(instructions);
+    const namedTools = String(instructions).match(/\b(?:get|search)_[a-z_]+/g) ?? [];
+    expect(namedTools.length).toBeGreaterThan(0);
+    for (const name of namedTools) {
+      expect(EXPECTED_TOOL_NAMES).toContain(name);
+    }
+  });
+
   it.each([
     ['modern', true],
     ['legacy', false],
@@ -611,10 +646,7 @@ describe('SDK v2 resource contracts', () => {
       ttlMs: 86_400_000,
       cacheScope: 'public',
       _meta: {
-        'io.modelcontextprotocol/serverInfo': {
-          name: 'metro-mcp',
-          version: '6.0.0',
-        },
+        'io.modelcontextprotocol/serverInfo': EXPECTED_SERVER_INFO,
       },
       contents: [{
         uri: TRANSIT_BOARD_URI,

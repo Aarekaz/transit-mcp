@@ -15,6 +15,7 @@ import {
 import {
   EXPECTED_PROMPT_NAMES,
   EXPECTED_RESOURCE_NAMES,
+  EXPECTED_SERVER_INFO,
   EXPECTED_TOOL_NAMES,
   TRANSIT_BOARD_MIME,
   TRANSIT_BOARD_RESOURCE_CONTRACT,
@@ -238,10 +239,7 @@ describe('assembled MCP Worker', () => {
       ttlMs: 86_400_000,
       cacheScope: 'public',
       _meta: {
-        'io.modelcontextprotocol/serverInfo': {
-          name: 'metro-mcp',
-          version: '6.0.0',
-        },
+        'io.modelcontextprotocol/serverInfo': EXPECTED_SERVER_INFO,
       },
       contents: [{
         uri: TRANSIT_BOARD_URI,
@@ -369,10 +367,7 @@ describe('assembled MCP Worker', () => {
       structuredContent,
       content: [{ type: 'text', text: JSON.stringify(structuredContent) }],
       _meta: {
-        'io.modelcontextprotocol/serverInfo': {
-          name: 'metro-mcp',
-          version: '6.0.0',
-        },
+        'io.modelcontextprotocol/serverInfo': EXPECTED_SERVER_INFO,
       },
     });
   });
@@ -539,6 +534,23 @@ describe('assembled MCP Worker', () => {
     expect(malformedOrigin.status).toBe(403);
     expect(badHost.status).toBe(403);
     expect(insecureOrigin.status).toBe(403);
+  });
+
+  it('accepts every allowlisted custom domain and rejects unknown hosts', async () => {
+    async function viaHost(hostname: string, origin?: string): Promise<Response> {
+      const template = await modernMcpRequest('server/discover');
+      const request = new Request(`https://${hostname}/mcp`, template);
+      request.headers.set('Host', hostname);
+      if (origin) request.headers.set('Origin', origin);
+      return workerFetch(request);
+    }
+
+    for (const hostname of ['transitmcp.com', 'metro-mcp.anuragd.me']) {
+      const response = await viaHost(hostname, `https://${hostname}`);
+      expect(response.status, hostname).toBe(200);
+    }
+    expect((await viaHost('attacker.example')).status).toBe(403);
+    expect((await viaHost('transitmcp.com', 'https://attacker.example')).status).toBe(403);
   });
 
   it('serves canonical preflight without consuming an authentication boundary', async () => {

@@ -29,6 +29,9 @@ export interface Env {
   MCP_REQUEST_STATE_KEY: string;
   MCP_RATE_LIMITER: RateLimit;
 
+  /** Optional usage-metrics sink (Analytics Engine); absent in local dev and tests. */
+  ANALYTICS?: AnalyticsEngineDataset;
+
   // API Keys
   WMATA_API_KEY: string;           // DC Metro (WMATA) API key (secret)
 

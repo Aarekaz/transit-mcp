@@ -224,6 +224,68 @@ describe('Worker entry routing', () => {
     expect(handleMcpRequest).not.toHaveBeenCalled();
   });
 
+  describe('with multiple allowlisted production custom domains', () => {
+    const multiDomainEnv = () => createMockEnv({
+      MCP_PUBLIC_ORIGIN: 'https://transitmcp.com',
+      MCP_ALLOWED_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
+      MCP_ALLOWED_ORIGIN_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
+    });
+
+    it.each(['transitmcp.com', 'metro-mcp.anuragd.me'])(
+      'dispatches trusted MCP requests arriving via %s',
+      async hostname => {
+        handleMcpRequest.mockClear();
+        handleMcpRequest.mockResolvedValue(new Response(null, { status: 204 }));
+
+        for (const path of ['/mcp', '/sse']) {
+          const response = await worker.fetch(new Request(`https://${hostname}${path}`, {
+            method: 'POST',
+            headers: { Host: hostname, Origin: `https://${hostname}` },
+          }), multiDomainEnv(), executionContext());
+          expect(response.status, path).toBe(204);
+        }
+
+        expect(handleMcpRequest).toHaveBeenCalledTimes(2);
+      },
+    );
+
+    it('rejects unknown, insecure, non-default-port, and cross-host requests', async () => {
+      for (const request of [
+        new Request('https://attacker.example/mcp', {
+          method: 'POST',
+          headers: { Host: 'attacker.example' },
+        }),
+        new Request('https://attacker.example/mcp', {
+          method: 'POST',
+          headers: { Host: 'transitmcp.com' },
+        }),
+        new Request('http://transitmcp.com/mcp', {
+          method: 'POST',
+          headers: { Host: 'transitmcp.com' },
+        }),
+        new Request('https://metro-mcp.anuragd.me:8443/mcp', {
+          method: 'POST',
+          headers: { Host: 'metro-mcp.anuragd.me:8443' },
+        }),
+        new Request('https://transitmcp.com/mcp', {
+          method: 'POST',
+          headers: { Host: 'attacker.example' },
+        }),
+        new Request('https://transitmcp.com/mcp', {
+          method: 'POST',
+          headers: { Host: 'transitmcp.com', Origin: 'https://attacker.example' },
+        }),
+      ]) {
+        handleMcpRequest.mockClear();
+
+        const response = await worker.fetch(request, multiDomainEnv(), executionContext());
+
+        expect(response.status, `${request.url} Host=${request.headers.get('Host')}`).toBe(403);
+        expect(handleMcpRequest).not.toHaveBeenCalled();
+      }
+    });
+  });
+
   it.each([
     {
       name: 'production',

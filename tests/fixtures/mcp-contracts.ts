@@ -14,6 +14,20 @@ export const EXPECTED_TOOL_NAMES = [
   'get_route_info',
 ] as const;
 
+export const EXPECTED_SERVER_INFO = {
+  name: 'transit-mcp',
+  title: 'Transit MCP',
+  version: '6.0.0',
+  description:
+    'Real-time DC Metro and NYC Subway arrivals, service alerts, stations, and DC buses.',
+  websiteUrl: 'https://transitmcp.com',
+  icons: [{
+    src: 'https://transitmcp.com/metro-mcp.png',
+    mimeType: 'image/png',
+    sizes: ['1024x1024'],
+  }],
+} as const;
+
 export const TRANSIT_BOARD_URI = 'ui://metro-mcp/transit-board.html';
 export const TRANSIT_BOARD_MIME = 'text/html;profile=mcp-app';
 export const TRANSIT_BOARD_TOOL_META = {
@@ -230,7 +244,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
   get_station_predictions: {
     title: 'Train arrival predictions',
     description:
-      'Get real-time train arrival predictions for a transit station. Supports DC Metro and NYC Subway.',
+      'Get real-time train arrival predictions for a transit station. Supports DC Metro and NYC Subway. Accepts a station name or an exact station ID; if a name matches several stations, the result lists the candidates to choose from.',
     annotations: readOnlyLive('Train arrival predictions'),
     input: { keys: ['city', 'stationName'], required: ['city', 'stationName'] },
     output: {
@@ -270,7 +284,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
   },
   get_all_stations: {
     title: 'All stations',
-    description: 'Get complete list of all transit stations with coordinates.',
+    description: 'Get the complete list of transit stations with coordinates for one city. Large result; prefer search_stations or get_stations_by_line when looking for specific stations.',
     annotations: readOnlyLive('All stations'),
     input: { keys: ['city'], required: ['city'] },
     output: {
@@ -305,7 +319,7 @@ export const EXPECTED_TOOL_CONTRACTS = {
   },
   get_incidents: {
     title: 'Service incidents',
-    description: 'Get current transit incidents and service advisories.',
+    description: 'Get current transit incidents and service advisories for DC Metro or NYC Subway.',
     annotations: readOnlyLive('Service incidents'),
     input: { keys: ['city'], required: ['city'] },
     output: { keys: ['city', 'incidents'], required: ['city', 'incidents'] },

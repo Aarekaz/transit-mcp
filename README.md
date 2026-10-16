@@ -1,26 +1,30 @@
-# Metro MCP
+# Transit MCP
 
-Metro MCP is an anonymous, read-only Model Context Protocol server for live DC Metro and NYC Subway information.
+Transit MCP is an anonymous, read-only Model Context Protocol server for live DC Metro and NYC Subway information.
+
+> **Metro MCP is now Transit MCP.** The new home is [transitmcp.com](https://transitmcp.com/) and the docs now live at [transitmcp.com/docs](https://transitmcp.com/docs/). It is the same server with the same docs. The old endpoint `https://metro-mcp.anuragd.me/mcp` and the old site will continue to be supported and keep working.
 
 [![MCP](https://img.shields.io/badge/MCP-2026--07--28-blue)](https://modelcontextprotocol.io)
-[![Metro MCP](https://img.shields.io/badge/Metro_MCP-6.0.0-0f766e)](CHANGELOG.md)
+[![Transit MCP](https://img.shields.io/badge/Transit_MCP-6.0.0-0f766e)](CHANGELOG.md)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange)](https://workers.cloudflare.com)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
 ## Connect
 
-The production endpoint is `https://metro-mcp.anuragd.me/mcp`. No login is required. No client credentials, bearer token, or OAuth flow is required; Metro MCP does not collect client credentials. Stale `Authorization` headers are ignored.
+The production endpoint is `https://transitmcp.com/mcp`. No login is required. No client credentials, bearer token, or OAuth flow is required; Transit MCP does not collect client credentials. Stale `Authorization` headers are ignored.
+
+The previous endpoint, `https://metro-mcp.anuragd.me/mcp`, remains available and serves the same Worker.
 
 ### Claude
 
 ```bash
-claude mcp add --transport http metro-mcp https://metro-mcp.anuragd.me/mcp
+claude mcp add --transport http transit-mcp https://transitmcp.com/mcp
 ```
 
 ### Codex
 
 ```bash
-codex mcp add metro-mcp https://metro-mcp.anuragd.me/mcp
+codex mcp add transit-mcp https://transitmcp.com/mcp
 ```
 
 ### Generic Streamable HTTP client
@@ -28,9 +32,9 @@ codex mcp add metro-mcp https://metro-mcp.anuragd.me/mcp
 ```json
 {
   "mcpServers": {
-    "metro-mcp": {
+    "transit-mcp": {
       "type": "http",
-      "url": "https://metro-mcp.anuragd.me/mcp"
+      "url": "https://transitmcp.com/mcp"
     }
   }
 }
@@ -40,7 +44,7 @@ codex mcp add metro-mcp https://metro-mcp.anuragd.me/mcp
 
 ## What it provides
 
-Metro MCP exposes 13 MCP tools across WMATA and MTA data, including arrivals, service incidents, stations, elevator outages, bus operations, train positions, transfer detail, and route information.
+Transit MCP exposes 13 MCP tools across WMATA and MTA data, including arrivals, service incidents, stations, elevator outages, bus operations, train positions, transfer detail, and route information.
 
 It also provides three `transit://` URI templates (stations, routes, and incidents) and three canned templates (`service-briefing`, `commute-planner`, and `accessibility-check`). Tool calls are read-only, idempotent, and open-world. Every result includes typed `structuredContent` and a JSON text fallback.
 
@@ -87,10 +91,10 @@ See [MCP 2026 verification](docs/mcp-2026-verification.md) for protocol coverage
 
 ## Support and legal
 
-- [Documentation](https://metro-mcp.anuragd.me/docs/)
-- [Privacy](https://metro-mcp.anuragd.me/privacy/)
-- [Terms](https://metro-mcp.anuragd.me/terms/)
-- [Support](https://metro-mcp.anuragd.me/support/)
+- [Documentation](https://transitmcp.com/docs/)
+- [Privacy](https://transitmcp.com/privacy/)
+- [Terms](https://transitmcp.com/terms/)
+- [Support](https://transitmcp.com/support/)
 - [Issues](https://github.com/Aarekaz/metro-mcp/issues)
 
 ## License

@@ -19,6 +19,20 @@
   --space-3xl: 4rem;
 }
 
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --paper: #121a28;
+    --paper-raised: #182234;
+    --ink: #eef2f7;
+    --ink-soft: #b9c3cf;
+    --rule: #2a364a;
+    --accent: #ff8f4d;
+    --accent-text: #ffa36b;
+    --focus: #ffa36b;
+  }
+}
+
 *,
 *::before,
 *::after {

@@ -30,9 +30,9 @@
   ],
 
   "vars": {
-    "MCP_PUBLIC_ORIGIN": "https://metro-mcp.anuragd.me",
-    "MCP_ALLOWED_HOSTNAMES": "metro-mcp.anuragd.me",
-    "MCP_ALLOWED_ORIGIN_HOSTNAMES": "metro-mcp.anuragd.me",
+    "MCP_PUBLIC_ORIGIN": "https://transitmcp.com",
+    "MCP_ALLOWED_HOSTNAMES": "transitmcp.com,metro-mcp.anuragd.me",
+    "MCP_ALLOWED_ORIGIN_HOSTNAMES": "transitmcp.com,metro-mcp.anuragd.me",
     "ENVIRONMENT": "production"
   },
 
@@ -41,6 +41,13 @@
       "name": "MCP_RATE_LIMITER",
       "namespace_id": "2026082101",
       "simple": { "limit": 300, "period": 60 }
+    }
+  ],
+
+  "analytics_engine_datasets": [
+    {
+      "binding": "ANALYTICS",
+      "dataset": "mcp_usage"
     }
   ],
 
@@ -65,6 +72,12 @@
           "name": "MCP_RATE_LIMITER",
           "namespace_id": "2026082102",
           "simple": { "limit": 300, "period": 60 }
+        }
+      ],
+      "analytics_engine_datasets": [
+        {
+          "binding": "ANALYTICS",
+          "dataset": "mcp_usage"
         }
       ]
     }
@@ -93,6 +106,10 @@
   "routes": [
     {
       "pattern": "metro-mcp.anuragd.me",
+      "custom_domain": true
+    },
+    {
+      "pattern": "transitmcp.com",
       "custom_domain": true
     }
   ]

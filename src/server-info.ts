@@ -2,7 +2,7 @@ import { MCP_PROTOCOL_VERSION, SERVER_VERSION } from './config';
 
 export function getServerInfo(baseUrl: string, timestamp = new Date().toISOString()) {
   return {
-    name: 'Metro MCP',
+    name: 'Transit MCP',
     version: SERVER_VERSION,
     description: 'MCP server for US transit systems (DC Metro, NYC Subway)',
     protocolVersion: MCP_PROTOCOL_VERSION,
@@ -15,10 +15,10 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
       mcpServer: `${baseUrl}/mcp`,
       mcpServerLegacy: `${baseUrl}/sse`,
       website: baseUrl,
-      documentation: 'https://metro-mcp.anuragd.me/docs/',
-      privacy: 'https://metro-mcp.anuragd.me/privacy/',
-      terms: 'https://metro-mcp.anuragd.me/terms/',
-      support: 'https://metro-mcp.anuragd.me/support/',
+      documentation: 'https://transitmcp.com/docs/',
+      privacy: 'https://transitmcp.com/privacy/',
+      terms: 'https://transitmcp.com/terms/',
+      support: 'https://transitmcp.com/support/',
     },
     capabilities: {
       tools: {},

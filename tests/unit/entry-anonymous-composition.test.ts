@@ -63,7 +63,7 @@ describe('assembled Worker anonymous stateless handler', () => {
     await expect(response.json()).resolves.toMatchObject({
       result: {
         _meta: {
-          'io.modelcontextprotocol/serverInfo': { name: 'metro-mcp' },
+          'io.modelcontextprotocol/serverInfo': { name: 'transit-mcp' },
         },
       },
     });

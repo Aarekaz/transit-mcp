@@ -71,7 +71,7 @@ export function registerStationTools(
     {
       title: 'Train arrival predictions',
       description:
-        'Get real-time train arrival predictions for a transit station. Supports DC Metro and NYC Subway.',
+        'Get real-time train arrival predictions for a transit station. Supports DC Metro and NYC Subway. Accepts a station name or an exact station ID; if a name matches several stations, the result lists the candidates to choose from.',
       annotations: readOnlyLive('Train arrival predictions'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({
@@ -258,7 +258,7 @@ export function registerStationTools(
     'get_all_stations',
     {
       title: 'All stations',
-      description: 'Get complete list of all transit stations with coordinates.',
+      description: 'Get the complete list of transit stations with coordinates for one city. Large result; prefer search_stations or get_stations_by_line when looking for specific stations.',
       annotations: readOnlyLive('All stations'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({ city: citySchema }),

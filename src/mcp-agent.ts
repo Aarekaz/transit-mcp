@@ -83,7 +83,7 @@ async function withTransitErrors<T>(fn: () => Promise<T>): Promise<T> {
  */
 export class MetroMcpAgent extends McpAgent<Env, unknown, Props> {
   server = new McpServer({
-    name: 'metro-mcp',
+    name: 'transit-mcp',
     version: SERVER_VERSION
   });
 

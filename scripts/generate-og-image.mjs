@@ -41,7 +41,7 @@ const svg = `<?xml version="1.0" encoding="UTF-8"?>
 
   <g transform="translate(76 62)">
     <image href="${icon}" x="0" y="0" width="58" height="58"/>
-    <text x="76" y="38" font-family="Inter, Arial, sans-serif" font-size="26" font-weight="700" fill="#0a2540">metro-mcp</text>
+    <text x="76" y="38" font-family="Inter, Arial, sans-serif" font-size="26" font-weight="700" fill="#0a2540">Transit MCP</text>
   </g>
 
   <g transform="translate(76 150)">
@@ -77,8 +77,8 @@ const svg = `<?xml version="1.0" encoding="UTF-8"?>
     <rect x="0" y="0" width="420" height="72" rx="26" fill="#fbfcfd"/>
     <rect x="0" y="54" width="420" height="18" fill="#fbfcfd"/>
     <circle cx="34" cy="36" r="8" fill="#35c77b"/>
-    <text x="54" y="44" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="750" fill="#0a2540">metro-mcp</text>
-    <text x="150" y="44" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="500" fill="#8a93a0">connected</text>
+    <text x="54" y="44" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="750" fill="#0a2540">Transit MCP</text>
+    <text x="172" y="44" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="500" fill="#8a93a0">connected</text>
 
     <text x="36" y="122" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700" fill="#8a93a0">YOU</text>
     <text x="36" y="154" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="550" fill="#0a2540">Next 1 train at Times Sq?</text>
@@ -92,7 +92,7 @@ const svg = `<?xml version="1.0" encoding="UTF-8"?>
     <text x="205" y="325" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800" fill="#ffffff">1</text>
   </g>
 
-  <text x="76" y="574" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="600" fill="#596a7d">metro-mcp.anuragd.me</text>
+  <text x="76" y="574" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="600" fill="#596a7d">transitmcp.com</text>
 </svg>`;
 
 const svgPath = path.join(publicDir, 'og-image.svg');

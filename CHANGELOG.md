@@ -5,6 +5,24 @@ All notable changes to Metro MCP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Rebranded to Transit MCP with `https://transitmcp.com` as the canonical origin. Pages, `/info` links, and the reported MCP server name (`transit-mcp`) now use the new brand.
+- MCP trust checks accept requests on the canonical origin or on any HTTPS, default-port hostname in `MCP_ALLOWED_HOSTNAMES`. Production allowlists `transitmcp.com` and `metro-mcp.anuragd.me`, so `https://metro-mcp.anuragd.me/mcp` keeps working.
+- Clearer model-facing descriptions for `get_station_predictions`, `get_all_stations`, and `get_incidents`. Tool names, input schemas, and output schemas are unchanged.
+
+### Added
+
+- Workers Analytics Engine usage counts (`ANALYTICS` binding, `mcp_usage` dataset): one data point per `initialize` and `tools/call` built only from allowlisted telemetry. Telemetry gains `clientName` and `sessionId`, and the privacy page discloses both and the three-month store.
+- Server identity metadata (`title`, `description`, `websiteUrl`, `icons`) and model-facing `instructions` in `initialize` and `server/discover`.
+- `server.json` for the official MCP Registry (`com.transitmcp/transit-mcp`, streamable HTTP at `https://transitmcp.com/mcp`).
+
+### Security
+
+- Upgraded `@modelcontextprotocol/server` and `@modelcontextprotocol/client` to 2.3.1 and `agents` to 0.28.1, picking up fixes for GHSA-46jr-4wx8-v453 (memory exhaustion during validation), GHSA-f897-62hf-6gxq, and GHSA-jm63-cq47-j5jp. `@modelcontextprotocol/sdk` stays at 1.30.0 so the Transit Board app bundle is byte-identical.
+
 ## [6.0.0] - 2026-08-21
 
 ### Breaking
