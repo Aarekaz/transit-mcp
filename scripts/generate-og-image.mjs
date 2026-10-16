@@ -87,9 +87,10 @@ const svg = `<?xml version="1.0" encoding="UTF-8"?>
     <rect x="36" y="232" width="348" height="58" rx="12" fill="#07111f"/>
     <text x="60" y="269" font-family="'JetBrains Mono', Menlo, monospace" font-size="20" font-weight="700" fill="#e8eef7">get_station_predictions</text>
 
-    <text x="36" y="326" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700" fill="#0a2540">1 train in 2 min</text>
-    <circle cx="210" cy="318" r="17" fill="#ee352e"/>
-    <text x="205" y="325" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800" fill="#ffffff">1</text>
+    <!-- Line bullet leads, as on the landing page, so text width never collides with it. -->
+    <circle cx="53" cy="318" r="17" fill="#ee352e"/>
+    <text x="53" y="325" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800" fill="#ffffff">1</text>
+    <text x="82" y="326" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700" fill="#0a2540">train in 2 min</text>
   </g>
 
   <text x="76" y="574" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="600" fill="#596a7d">transitmcp.com</text>
