@@ -15,6 +15,8 @@ The previous endpoint, `https://metro-mcp.anuragd.me/mcp`, remains available and
 
 ### Directories
 
+- [OpenAI (ChatGPT/Codex)](https://chatgpt.com/plugins/plugin_asdk_app_6a9078f4d6dc8191be735cc1c2ff45b5)
+- [Claude Directory](https://claude.ai/directory/metro-mcp)
 - [Official MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers?search=com.transitmcp%2Ftransit-mcp) (`com.transitmcp/transit-mcp`)
 - [Smithery](https://smithery.ai/servers/transitmcp/transit-mcp)
 
