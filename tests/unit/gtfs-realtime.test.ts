@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { classifyFreshness, sanitizeTransitText } from '../../src/transit/gtfs/realtime/freshness';
 import { allocatePollIntervals } from '../../src/transit/gtfs/upstream/budget';
 import { buildUpstreamRequest, redactUpstreamUrl } from '../../src/transit/gtfs/upstream/request';
+import { transit_realtime } from 'gtfs-realtime-bindings';
+import { decodeRealtimeFeed } from '../../src/transit/gtfs/realtime/decode';
+import { RegionalFeedHubCore } from '../../src/transit/gtfs/realtime/hub-core';
 
 describe('GTFS realtime policy', () => {
   it('classifies producer timestamps without refreshing restored snapshots', () => {
@@ -45,5 +48,63 @@ describe('GTFS realtime policy', () => {
     expect(redactUpstreamUrl(request.url)).toBe(
       'https://api.511.org/transit/tripupdates?agency=RG&api_key=%5BREDACTED%5D',
     );
+  });
+
+  it('decodes trip updates, vehicles, and sanitized alerts into bounded records', () => {
+    const bytes = transit_realtime.FeedMessage.encode({
+      header: { gtfsRealtimeVersion: '2.0', timestamp: 1_000 },
+      entity: [
+        {
+          id: 'trip-entity',
+          tripUpdate: {
+            trip: { tripId: 'trip-1', routeId: 'route-1' },
+            stopTimeUpdate: [{
+              stopId: 'stop-1',
+              arrival: { time: 1_060 },
+            }],
+          },
+        },
+        {
+          id: 'vehicle-entity',
+          vehicle: {
+            trip: { tripId: 'trip-1', routeId: 'route-1' },
+            vehicle: { id: 'vehicle-1', label: 'Train 1' },
+            position: { latitude: 37.77, longitude: -122.42 },
+            timestamp: 1_005,
+          },
+        },
+        {
+          id: 'alert-entity',
+          alert: {
+            informedEntity: [{ routeId: 'route-1' }],
+            headerText: { translation: [{ text: '<b>Delay</b>' }] },
+            descriptionText: { translation: [{ text: 'Use alternate service' }] },
+          },
+        },
+      ],
+    }).finish();
+
+    const feed = decodeRealtimeFeed(bytes);
+    expect(feed.producerTimestampSeconds).toBe(1_000);
+    expect(feed.tripUpdates[0]).toMatchObject({ tripId: 'trip-1', stopId: 'stop-1', arrivalTimeSeconds: 1_060 });
+    expect(feed.vehicles[0]?.vehicleId).toBe('vehicle-1');
+    expect(feed.vehicles[0]?.latitude).toBeCloseTo(37.77, 4);
+    expect(feed.vehicles[0]?.longitude).toBeCloseTo(-122.42, 4);
+    expect(feed.alerts[0]).toMatchObject({ id: 'alert-entity', header: 'Delay', routeIds: ['route-1'] });
+    expect(() => decodeRealtimeFeed(new Uint8Array([255]))).toThrow('Malformed GTFS-Realtime feed');
+  });
+
+  it('serves snapshots without extending producer freshness or fetching upstream', () => {
+    const hub = new RegionalFeedHubCore({ trip_updates: 120, vehicle_positions: 300, service_alerts: 900 });
+    hub.replace('trip_updates', {
+      producerTimestampSeconds: 1_000,
+      receivedAtSeconds: 1_010,
+      payload: { arrivals: 3 },
+    });
+
+    expect(hub.read('trip_updates', 1_270)).toMatchObject({ freshness: 'fresh', payload: { arrivals: 3 } });
+    expect(hub.read('trip_updates', 1_271)).toMatchObject({ freshness: 'stale', warnings: ['stale_feed'] });
+    expect(hub.read('trip_updates', 1_481)).toMatchObject({ freshness: 'expired', payload: null, warnings: ['expired_feed'] });
+    expect(hub.read('vehicle_positions', 1_000)).toMatchObject({ freshness: 'unavailable', payload: null });
   });
 });
