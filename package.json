@@ -1,8 +1,8 @@
 {
   "name": "transit-mcp",
-  "version": "6.0.0",
+  "version": "6.1.0",
   "type": "module",
-  "description": "MCP server for US transit systems (DC Metro, NYC Subway) on Cloudflare Workers",
+  "description": "MCP server for DC Metro, NYC Subway, and San Francisco Bay Area transit on Cloudflare Workers",
   "main": "src/index.ts",
   "scripts": {
     "dev": "bun run build:apps && wrangler dev",

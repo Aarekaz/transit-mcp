@@ -55,7 +55,7 @@ describe('anonymous deployment configuration', () => {
       },
       apis: { wmata: 'replace-with-your-local-wmata-api-key' },
       regions: { sfbay: { apiKey: undefined, mode: 'off' } },
-      app: { environment: 'development', version: '6.0.0' },
+      app: { environment: 'development', version: '6.1.0' },
     });
     expect(new TextEncoder().encode(localVars.MCP_REQUEST_STATE_KEY).byteLength)
       .toBeGreaterThanOrEqual(32);
@@ -91,12 +91,12 @@ describe('anonymous deployment configuration', () => {
   it('accepts an explicit Bay Area key and rollout mode without changing legacy APIs', () => {
     const config = loadConfig(createMockEnv({
       SF511_API_KEY: 'test-511-key',
-      SFBAY_MODE: 'dark',
+      SFBAY_MODE: 'on',
     }));
 
     expect(config.regions.sfbay).toEqual({
       apiKey: 'test-511-key',
-      mode: 'dark',
+      mode: 'on',
     });
     expect(config.apis.wmata).toBe('test-wmata-key');
   });
@@ -221,14 +221,14 @@ describe('anonymous deployment configuration', () => {
       MCP_PUBLIC_ORIGIN: 'https://transitmcp.com',
       MCP_ALLOWED_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
       MCP_ALLOWED_ORIGIN_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
-      SFBAY_MODE: 'dark',
+      SFBAY_MODE: 'on',
       ENVIRONMENT: 'production',
     });
     expect(wrangler.env.preview.vars).toEqual({
       MCP_PUBLIC_ORIGIN: 'https://metro-mcp-preview.anuragd.me',
       MCP_ALLOWED_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
       MCP_ALLOWED_ORIGIN_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
-      SFBAY_MODE: 'dark',
+      SFBAY_MODE: 'on',
       ENVIRONMENT: 'preview',
     });
     expect(wrangler.kv_namespaces).toBeUndefined();

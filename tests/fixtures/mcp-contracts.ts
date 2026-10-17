@@ -17,7 +17,7 @@ export const EXPECTED_TOOL_NAMES = [
 export const EXPECTED_SERVER_INFO = {
   name: 'transit-mcp',
   title: 'Transit MCP',
-  version: '6.0.0',
+  version: '6.1.0',
   description:
     'Real-time DC Metro and NYC Subway arrivals, service alerts, stations, and DC buses.',
   websiteUrl: 'https://transitmcp.com',
