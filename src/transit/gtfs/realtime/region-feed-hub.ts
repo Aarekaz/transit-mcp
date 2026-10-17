@@ -48,6 +48,7 @@ export class RegionFeedHub implements DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname === '/health') return new Response(null, { status: 204 });
     const kind = url.pathname.slice(1) as RealtimeFeedKind;
     if (!SFBAY_REGION.realtime.feeds.some(feed => feed.kind === kind)) {
       return Response.json({ error: 'not_found' }, { status: 404 });

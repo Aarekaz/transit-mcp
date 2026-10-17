@@ -281,6 +281,14 @@ describe('anonymous deployment configuration', () => {
     expect(wrangler.env.preview.durable_objects.bindings).toEqual([{
       name: 'REGION_FEED_HUB', class_name: 'RegionFeedHub',
     }]);
+    expect(wrangler.r2_buckets).toEqual([{
+      binding: 'TRANSIT_ARTIFACTS', bucket_name: 'transit-mcp-artifacts',
+    }]);
+    expect(wrangler.env.preview.r2_buckets).toEqual([{
+      binding: 'TRANSIT_ARTIFACTS', bucket_name: 'transit-mcp-artifacts-preview',
+    }]);
+    expect(wrangler.triggers).toEqual({ crons: ['*/5 * * * *'] });
+    expect(wrangler.env.preview.triggers).toEqual({ crons: ['*/5 * * * *'] });
     expect(wrangler.migrations).toEqual([
       { tag: 'v1', new_sqlite_classes: ['MetroMcpAgent'] },
       { tag: 'v2', new_sqlite_classes: ['RegionFeedHub'] },
