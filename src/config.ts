@@ -1,4 +1,6 @@
 import type { Env } from './types';
+import { normalizeRegionMode } from './regions/manifest';
+import type { RegionMode } from './regions/types';
 
 /** Single source of truth for the public Metro MCP release version. */
 export const SERVER_VERSION = '6.0.0';
@@ -15,6 +17,7 @@ export interface Config {
     requestStateKey: string;
   };
   apis: { wmata: string };
+  regions: { sfbay: { apiKey: string | undefined; mode: RegionMode } };
   app: { environment: 'development' | 'preview' | 'production'; version: string };
 }
 
@@ -64,6 +67,12 @@ export function loadConfig(env: Env): Config {
       requestStateKey: env.MCP_REQUEST_STATE_KEY,
     },
     apis: { wmata: env.WMATA_API_KEY },
+    regions: {
+      sfbay: {
+        apiKey: nonEmpty(env.SF511_API_KEY),
+        mode: normalizeRegionMode(env.SFBAY_MODE),
+      },
+    },
     app: {
       environment: env.ENVIRONMENT,
       version: SERVER_VERSION,
@@ -72,6 +81,10 @@ export function loadConfig(env: Env): Config {
 
   validateConfig(config);
   return config;
+}
+
+function nonEmpty(value: string | undefined): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 /** Validate a Config passed across a runtime trust boundary. */
