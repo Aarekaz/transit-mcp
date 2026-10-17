@@ -81,4 +81,29 @@ describe('GTFS static primitives', () => {
     expect(artifact.stopTimes).toEqual([expect.objectContaining({ tripId: 'T1', serviceId: 'WK', arrivalSeconds: 90000 })]);
     expect(artifact.calendars!.WK).toMatchObject({ monday: true, startDate: '20261001' });
   });
+
+  it('ignores unnamed GTFS pathway nodes that are not transit stops', () => {
+    const artifact = compileGtfsStatic({
+      'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station\nS1,Market,37.7,-122.4,1,\nP1,Market Platform,37.7,-122.4,0,S1\nN1,,37.7,-122.4,3,S1\n',
+      'routes.txt': 'route_id,route_short_name,route_long_name,route_type\nR1,N,Judah,0\n',
+      'trips.txt': 'route_id,service_id,trip_id\nR1,WK,T1\n',
+      'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT1,12:00:00,12:00:30,P1,1\n',
+    }, { sourceVersion: 'sha256:pathways', generatedAt: '2026-10-17T00:00:00.000Z' });
+
+    expect(artifact.stops.map(stop => stop.id)).toEqual(['P1', 'S1']);
+  });
+
+  it('keeps route associations but omits untimed stop-time rows from scheduled arrivals', () => {
+    const artifact = compileGtfsStatic({
+      'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station\nS1,Market,37.7,-122.4,1,\nP1,Market Platform,37.7,-122.4,0,S1\nP2,Church Platform,37.8,-122.4,0,\n',
+      'routes.txt': 'route_id,route_short_name,route_long_name,route_type\nR1,N,Judah,0\n',
+      'trips.txt': 'route_id,service_id,trip_id\nR1,WK,T1\n',
+      'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT1,,,P1,1\nT1,12:05:00,12:05:30,P2,2\n',
+    }, { sourceVersion: 'sha256:untimed', generatedAt: '2026-10-17T00:00:00.000Z' });
+
+    expect(artifact.stopRoutes).toEqual({ P1: ['R1'], P2: ['R1'], S1: ['R1'] });
+    expect(artifact.stopTimes).toEqual([
+      expect.objectContaining({ stopId: 'P2', arrivalSeconds: 43500, departureSeconds: 43530 }),
+    ]);
+  });
 });

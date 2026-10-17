@@ -6,7 +6,7 @@ import type { NormalizedAlert, NormalizedStopUpdate } from './decode';
 import { searchStops, type StaticTransitArtifact } from '../static/artifact';
 import { SFBAY_REGION } from '../../../regions/sfbay';
 
-const ARTIFACT_KEY = 'artifacts/sfbay/current.json';
+const ARTIFACT_KEY = 'artifacts/sfbay/current.json.gz';
 
 function isStaticArtifact(value: unknown): value is StaticTransitArtifact {
   if (typeof value !== 'object' || value === null) return false;
@@ -24,7 +24,8 @@ export function createRegionalTransitService(env: Env): RegionalTransitService {
     if (!env.TRANSIT_ARTIFACTS) throw new Error('Bay Area static artifact is not configured');
     const object = await env.TRANSIT_ARTIFACTS.get(ARTIFACT_KEY);
     if (!object) throw new Error('Bay Area static artifact is unavailable');
-    const artifact: unknown = await object.json();
+    const decompressed = object.body.pipeThrough(new DecompressionStream('gzip'));
+    const artifact: unknown = await new Response(decompressed).json();
     if (!isStaticArtifact(artifact)) throw new Error('Bay Area static artifact is invalid');
     const ageMs = Date.now() - Date.parse(artifact.generatedAt);
     if (!Number.isFinite(ageMs) || ageMs > SFBAY_REGION.static.maxStaticAgeDays * 86_400_000) {

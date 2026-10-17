@@ -1,7 +1,7 @@
 import { compileGtfsStatic, type GtfsStaticFiles } from '../src/transit/gtfs/static/compiler';
 
 const REQUIRED_FILES = ['stops.txt', 'routes.txt', 'trips.txt', 'stop_times.txt', 'calendar.txt', 'calendar_dates.txt'] as const;
-const outputPath = process.argv[2] ?? '.artifacts/sfbay-current.json';
+const outputPath = process.argv[2] ?? '.artifacts/sfbay-current.json.gz';
 const inputDirectory = process.env.SFBAY_GTFS_DIRECTORY;
 
 async function readFilesFromDirectory(directory: string): Promise<GtfsStaticFiles> {
@@ -44,5 +44,5 @@ const artifact = compileGtfsStatic(source.files, {
   sourceVersion: source.sourceVersion,
   generatedAt: new Date().toISOString(),
 });
-await Bun.write(outputPath, `${JSON.stringify(artifact)}\n`);
+await Bun.write(outputPath, Bun.gzipSync(`${JSON.stringify(artifact)}\n`));
 console.info(JSON.stringify({ outputPath, stops: artifact.stops.length, routes: artifact.routes.length, sourceVersion: artifact.sourceVersion }));
