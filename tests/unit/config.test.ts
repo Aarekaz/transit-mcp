@@ -54,6 +54,7 @@ describe('anonymous deployment configuration', () => {
         requestStateKey: 'replace-with-a-local-request-state-key-at-least-32-bytes',
       },
       apis: { wmata: 'replace-with-your-local-wmata-api-key' },
+      regions: { sfbay: { apiKey: undefined, mode: 'off' } },
       app: { environment: 'development', version: '6.0.0' },
     });
     expect(new TextEncoder().encode(localVars.MCP_REQUEST_STATE_KEY).byteLength)
@@ -63,7 +64,7 @@ describe('anonymous deployment configuration', () => {
   it('derives one canonical MCP resource without an authentication policy', () => {
     const config = loadConfig(createMockEnv());
 
-    expect(Object.keys(config).sort()).toEqual(['apis', 'app', 'mcp']);
+    expect(Object.keys(config).sort()).toEqual(['apis', 'app', 'mcp', 'regions']);
     expect(config.mcp).toEqual({
       publicOrigin: 'https://metro-mcp.anuragd.me',
       resourceUri: 'https://metro-mcp.anuragd.me/mcp',
@@ -73,6 +74,31 @@ describe('anonymous deployment configuration', () => {
     });
     expect(config.apis.wmata).toBe('test-wmata-key');
     expect(config.app.environment).toBe('production');
+  });
+
+  it('keeps Bay Area configuration optional and dark by default', () => {
+    const config = loadConfig(createMockEnv({
+      SF511_API_KEY: undefined,
+      SFBAY_MODE: undefined,
+    }));
+
+    expect(config.regions.sfbay).toEqual({
+      apiKey: undefined,
+      mode: 'off',
+    });
+  });
+
+  it('accepts an explicit Bay Area key and rollout mode without changing legacy APIs', () => {
+    const config = loadConfig(createMockEnv({
+      SF511_API_KEY: 'test-511-key',
+      SFBAY_MODE: 'dark',
+    }));
+
+    expect(config.regions.sfbay).toEqual({
+      apiKey: 'test-511-key',
+      mode: 'dark',
+    });
+    expect(config.apis.wmata).toBe('test-wmata-key');
   });
 
   it.each([
