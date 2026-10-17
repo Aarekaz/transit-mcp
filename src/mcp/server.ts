@@ -20,6 +20,8 @@ import { registerIncidentTools } from './tools/incidents';
 import { registerRouteTools } from './tools/routes';
 import { registerStationTools } from './tools/stations';
 import { registerTrainTools } from './tools/trains';
+import { registerRegionalTools } from './tools/regional';
+import { normalizeRegionMode } from '../regions/manifest';
 
 /** Public identity reported in initialize/discover results and registry listings. */
 export const SERVER_IDENTITY = Object.freeze({
@@ -109,6 +111,9 @@ function buildMetroMcpServer(context: MetroMcpContext): {
   );
 
   registerMetroFeatures(server, context, stateCodec);
+  if (normalizeRegionMode(context.env.SFBAY_MODE) === 'on') {
+    registerRegionalTools(server, context);
+  }
   registerTransitBoardApp(server, context);
   registerResources(server, context);
   registerPrompts(server);

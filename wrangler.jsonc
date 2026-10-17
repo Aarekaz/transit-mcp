@@ -26,13 +26,27 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["MetroMcpAgent"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["RegionFeedHub"]
     }
   ],
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "REGION_FEED_HUB",
+        "class_name": "RegionFeedHub"
+      }
+    ]
+  },
 
   "vars": {
     "MCP_PUBLIC_ORIGIN": "https://transitmcp.com",
     "MCP_ALLOWED_HOSTNAMES": "transitmcp.com,metro-mcp.anuragd.me",
     "MCP_ALLOWED_ORIGIN_HOSTNAMES": "transitmcp.com,metro-mcp.anuragd.me",
+    "SFBAY_MODE": "dark",
     "ENVIRONMENT": "production"
   },
 
@@ -65,6 +79,7 @@
         "MCP_PUBLIC_ORIGIN": "https://metro-mcp-preview.anuragd.me",
         "MCP_ALLOWED_HOSTNAMES": "metro-mcp-preview.anuragd.me",
         "MCP_ALLOWED_ORIGIN_HOSTNAMES": "metro-mcp-preview.anuragd.me",
+        "SFBAY_MODE": "dark",
         "ENVIRONMENT": "preview"
       },
       "ratelimits": [
@@ -74,6 +89,14 @@
           "simple": { "limit": 300, "period": 60 }
         }
       ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "REGION_FEED_HUB",
+            "class_name": "RegionFeedHub"
+          }
+        ]
+      },
       "analytics_engine_datasets": [
         {
           "binding": "ANALYTICS",

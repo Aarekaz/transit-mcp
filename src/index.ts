@@ -16,6 +16,7 @@ import type { Env } from './types';
 // Export MetroMcpAgent so the wrangler.jsonc DO binding can resolve the class.
 // Cloudflare's bundler discovers DO classes by name at deploy time.
 export { MetroMcpAgent } from './mcp-agent';
+export { RegionFeedHub } from './transit/gtfs/realtime/region-feed-hub';
 
 function mcpTrustRejection(
   request: Request,
