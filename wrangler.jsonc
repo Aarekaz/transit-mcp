@@ -42,6 +42,17 @@
     ]
   },
 
+  "r2_buckets": [
+    {
+      "binding": "TRANSIT_ARTIFACTS",
+      "bucket_name": "transit-mcp-artifacts"
+    }
+  ],
+
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+
   "vars": {
     "MCP_PUBLIC_ORIGIN": "https://transitmcp.com",
     "MCP_ALLOWED_HOSTNAMES": "transitmcp.com,metro-mcp.anuragd.me",
@@ -96,6 +107,15 @@
             "class_name": "RegionFeedHub"
           }
         ]
+      },
+      "r2_buckets": [
+        {
+          "binding": "TRANSIT_ARTIFACTS",
+          "bucket_name": "transit-mcp-artifacts-preview"
+        }
+      ],
+      "triggers": {
+        "crons": ["*/5 * * * *"]
       },
       "analytics_engine_datasets": [
         {
