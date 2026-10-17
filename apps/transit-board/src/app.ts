@@ -143,7 +143,7 @@ function stateView(
       ...(state === 'error' ? { role: 'alert' } : {}),
     },
   }, [
-    element('p', { className: 'board-kicker', text: 'Metro MCP · Transit Board' }),
+    element('p', { className: 'board-kicker', text: 'Transit MCP · Transit Board' }),
     element('h1', { text: title }),
     element('p', { text: message }),
   ]);
@@ -629,7 +629,7 @@ export async function createTransitBoardApp(
 
 export function createTransitBoardSdkApp(): App {
   return new App(
-    { name: 'Metro MCP Transit Board', version: '6.0.0' },
+    { name: 'Transit MCP Transit Board', version: '6.1.0' },
     { availableDisplayModes: ['inline', 'fullscreen'] },
     { autoResize: false, strict: true },
   );

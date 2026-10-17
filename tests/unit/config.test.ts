@@ -54,7 +54,8 @@ describe('anonymous deployment configuration', () => {
         requestStateKey: 'replace-with-a-local-request-state-key-at-least-32-bytes',
       },
       apis: { wmata: 'replace-with-your-local-wmata-api-key' },
-      app: { environment: 'development', version: '6.0.0' },
+      regions: { sfbay: { apiKey: undefined, mode: 'off' } },
+      app: { environment: 'development', version: '6.1.0' },
     });
     expect(new TextEncoder().encode(localVars.MCP_REQUEST_STATE_KEY).byteLength)
       .toBeGreaterThanOrEqual(32);
@@ -63,7 +64,7 @@ describe('anonymous deployment configuration', () => {
   it('derives one canonical MCP resource without an authentication policy', () => {
     const config = loadConfig(createMockEnv());
 
-    expect(Object.keys(config).sort()).toEqual(['apis', 'app', 'mcp']);
+    expect(Object.keys(config).sort()).toEqual(['apis', 'app', 'mcp', 'regions']);
     expect(config.mcp).toEqual({
       publicOrigin: 'https://metro-mcp.anuragd.me',
       resourceUri: 'https://metro-mcp.anuragd.me/mcp',
@@ -73,6 +74,31 @@ describe('anonymous deployment configuration', () => {
     });
     expect(config.apis.wmata).toBe('test-wmata-key');
     expect(config.app.environment).toBe('production');
+  });
+
+  it('keeps Bay Area configuration optional and dark by default', () => {
+    const config = loadConfig(createMockEnv({
+      SF511_API_KEY: undefined,
+      SFBAY_MODE: undefined,
+    }));
+
+    expect(config.regions.sfbay).toEqual({
+      apiKey: undefined,
+      mode: 'off',
+    });
+  });
+
+  it('accepts an explicit Bay Area key and rollout mode without changing legacy APIs', () => {
+    const config = loadConfig(createMockEnv({
+      SF511_API_KEY: 'test-511-key',
+      SFBAY_MODE: 'on',
+    }));
+
+    expect(config.regions.sfbay).toEqual({
+      apiKey: 'test-511-key',
+      mode: 'on',
+    });
+    expect(config.apis.wmata).toBe('test-wmata-key');
   });
 
   it.each([
@@ -195,12 +221,14 @@ describe('anonymous deployment configuration', () => {
       MCP_PUBLIC_ORIGIN: 'https://transitmcp.com',
       MCP_ALLOWED_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
       MCP_ALLOWED_ORIGIN_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
+      SFBAY_MODE: 'on',
       ENVIRONMENT: 'production',
     });
     expect(wrangler.env.preview.vars).toEqual({
       MCP_PUBLIC_ORIGIN: 'https://metro-mcp-preview.anuragd.me',
       MCP_ALLOWED_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
       MCP_ALLOWED_ORIGIN_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
+      SFBAY_MODE: 'on',
       ENVIRONMENT: 'preview',
     });
     expect(wrangler.kv_namespaces).toBeUndefined();
@@ -246,11 +274,25 @@ describe('anonymous deployment configuration', () => {
     }
   });
 
-  it('retains the original rollback migration without scheduling deletion', () => {
-    expect(wrangler.migrations).toEqual([{
-      tag: 'v1',
-      new_sqlite_classes: ['MetroMcpAgent'],
+  it('retains rollback history and adds the isolated regional feed hub', () => {
+    expect(wrangler.durable_objects.bindings).toEqual([{
+      name: 'REGION_FEED_HUB', class_name: 'RegionFeedHub',
     }]);
+    expect(wrangler.env.preview.durable_objects.bindings).toEqual([{
+      name: 'REGION_FEED_HUB', class_name: 'RegionFeedHub',
+    }]);
+    expect(wrangler.r2_buckets).toEqual([{
+      binding: 'TRANSIT_ARTIFACTS', bucket_name: 'transit-mcp-artifacts',
+    }]);
+    expect(wrangler.env.preview.r2_buckets).toEqual([{
+      binding: 'TRANSIT_ARTIFACTS', bucket_name: 'transit-mcp-artifacts-preview',
+    }]);
+    expect(wrangler.triggers).toEqual({ crons: ['*/5 * * * *'] });
+    expect(wrangler.env.preview.triggers).toEqual({ crons: ['*/5 * * * *'] });
+    expect(wrangler.migrations).toEqual([
+      { tag: 'v1', new_sqlite_classes: ['MetroMcpAgent'] },
+      { tag: 'v2', new_sqlite_classes: ['RegionFeedHub'] },
+    ]);
     expect(JSON.stringify(wrangler.migrations)).not.toContain('deleted_classes');
   });
 

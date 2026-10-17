@@ -29,6 +29,18 @@ const RATE_LIMIT_EPOCH_SAFETY_MS = 1_000;
 const RATE_LIMIT_HEARTBEAT_MS = 250;
 const MCP_REQUEST_BODY_LIMIT_BYTES = 1024 * 1024;
 let nextTestClient = 1;
+const LIVE_TOOL_NAMES = [
+  ...EXPECTED_TOOL_NAMES,
+  'search_sfbay_stations',
+  'get_sfbay_station_predictions',
+  'get_sfbay_routes',
+  'get_sfbay_incidents',
+  'get_vehicle_positions',
+] as const;
+const LIVE_SERVER_INFO = {
+  ...EXPECTED_SERVER_INFO,
+  description: 'Real-time DC, NYC, and San Francisco Bay Area transit arrivals, service alerts, stations, routes, and vehicles.',
+};
 
 function workerFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const request = new Request(input, init);
@@ -119,6 +131,48 @@ afterEach(() => {
 });
 
 describe('assembled MCP Worker', () => {
+  it('simulates Bay Area tool discovery and a station search through the MCP wire', async () => {
+    const artifact = {
+      schemaVersion: 1,
+      region: 'sfbay',
+      sourceVersion: 'wire-fixture',
+      generatedAt: new Date().toISOString(),
+      stops: [{ id: 'S1', name: 'Montgomery Street', latitude: 37.789, longitude: -122.401, locationType: 1 }],
+      routes: [{ id: 'BART', shortName: 'Yellow', longName: 'Antioch–SFO', mode: 'rail' }],
+      stopRoutes: { S1: ['BART'] },
+    };
+    const compressed = new Blob([JSON.stringify(artifact)])
+      .stream()
+      .pipeThrough(new CompressionStream('gzip'));
+    await env.TRANSIT_ARTIFACTS!.put(
+      'artifacts/sfbay/current.json.gz',
+      await new Response(compressed).arrayBuffer(),
+    );
+    const sfEnv = { ...env, SFBAY_MODE: 'on' as const };
+    const context = createExecutionContext();
+
+    const listResponse = await worker.fetch(await modernMcpRequest('tools/list', {}, {
+      headers: { 'CF-Connecting-IP': '198.51.100.240' },
+    }), sfEnv, context);
+    const listed = onlyResult(await readMcpResponse(listResponse));
+    expect((listed.tools as Array<{ name: string }>).map(tool => tool.name)).toEqual(
+      expect.arrayContaining(['search_sfbay_stations', 'get_sfbay_station_predictions', 'get_sfbay_routes', 'get_sfbay_incidents', 'get_vehicle_positions']),
+    );
+
+    const callResponse = await worker.fetch(await modernMcpRequest('tools/call', {
+      name: 'search_sfbay_stations',
+      arguments: { query: 'montgomery', limit: 5 },
+    }, {
+      headers: { 'CF-Connecting-IP': '198.51.100.240' },
+    }), sfEnv, context);
+    const called = onlyResult(await readMcpResponse(callResponse));
+    expect(called.structuredContent).toMatchObject({
+      city: 'sfbay',
+      results: [{ id: 'S1', name: 'Montgomery Street', routes: ['BART'] }],
+      attribution: { text: expect.stringContaining('511 SF Bay') },
+    });
+  });
+
   it('serves anonymous modern server/discover without an authentication challenge', async () => {
     const response = await workerFetch(await modernMcpRequest('server/discover'));
 
@@ -184,7 +238,7 @@ describe('assembled MCP Worker', () => {
     });
   });
 
-  it('exposes exactly 13 tools, 3 resource templates, and 3 prompts with modern cache hints', async () => {
+  it('exposes exactly 18 tools, 3 resource templates, and 3 prompts with modern cache hints', async () => {
     const [toolsResponse, resourcesResponse, promptsResponse] = await Promise.all([
       workerFetch(await modernMcpRequest('tools/list')),
       workerFetch(await modernMcpRequest('resources/templates/list')),
@@ -196,8 +250,8 @@ describe('assembled MCP Worker', () => {
     const prompts = onlyResult(await readMcpResponse(promptsResponse));
 
     expect((tools.tools as Array<{ name: string }>).map(tool => tool.name))
-      .toEqual(EXPECTED_TOOL_NAMES);
-    for (const tool of tools.tools as Array<{ _meta?: unknown }>) {
+      .toEqual(LIVE_TOOL_NAMES);
+    for (const tool of (tools.tools as Array<{ _meta?: unknown }>).slice(0, EXPECTED_TOOL_NAMES.length)) {
       expect(tool._meta).toEqual(TRANSIT_BOARD_TOOL_META);
     }
     expect((resources.resourceTemplates as Array<{ name: string }>).map(item => item.name))
@@ -239,7 +293,7 @@ describe('assembled MCP Worker', () => {
       ttlMs: 86_400_000,
       cacheScope: 'public',
       _meta: {
-        'io.modelcontextprotocol/serverInfo': EXPECTED_SERVER_INFO,
+        'io.modelcontextprotocol/serverInfo': LIVE_SERVER_INFO,
       },
       contents: [{
         uri: TRANSIT_BOARD_URI,
@@ -367,7 +421,7 @@ describe('assembled MCP Worker', () => {
       structuredContent,
       content: [{ type: 'text', text: JSON.stringify(structuredContent) }],
       _meta: {
-        'io.modelcontextprotocol/serverInfo': EXPECTED_SERVER_INFO,
+        'io.modelcontextprotocol/serverInfo': LIVE_SERVER_INFO,
       },
     });
   });
@@ -389,8 +443,8 @@ describe('assembled MCP Worker', () => {
     const call = onlyResult(await readMcpResponse(callResponse));
     const ambiguous = onlyResult(await readMcpResponse(ambiguousResponse));
     expect((list.tools as Array<{ name: string }>).map(tool => tool.name))
-      .toEqual(EXPECTED_TOOL_NAMES);
-    for (const tool of list.tools as Array<{ _meta?: unknown }>) {
+      .toEqual(LIVE_TOOL_NAMES);
+    for (const tool of (list.tools as Array<{ _meta?: unknown }>).slice(0, EXPECTED_TOOL_NAMES.length)) {
       expect(tool._meta).toEqual(TRANSIT_BOARD_TOOL_META);
     }
     expect(call).toMatchObject({ structuredContent: { city: 'nyc', query: 'Times Sq' } });
@@ -506,7 +560,7 @@ describe('assembled MCP Worker', () => {
     expect(response.status).toBe(200);
     const result = onlyResult(await readMcpResponse(response));
     expect((result.tools as Array<{ name: string }>).map(tool => tool.name))
-      .toEqual(EXPECTED_TOOL_NAMES);
+      .toEqual(LIVE_TOOL_NAMES);
   });
 
   it('enforces Host and browser Origin while allowing Origin-less desktop requests', async () => {

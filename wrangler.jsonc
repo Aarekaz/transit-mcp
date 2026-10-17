@@ -26,13 +26,38 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["MetroMcpAgent"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["RegionFeedHub"]
     }
   ],
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "REGION_FEED_HUB",
+        "class_name": "RegionFeedHub"
+      }
+    ]
+  },
+
+  "r2_buckets": [
+    {
+      "binding": "TRANSIT_ARTIFACTS",
+      "bucket_name": "transit-mcp-artifacts"
+    }
+  ],
+
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
 
   "vars": {
     "MCP_PUBLIC_ORIGIN": "https://transitmcp.com",
     "MCP_ALLOWED_HOSTNAMES": "transitmcp.com,metro-mcp.anuragd.me",
     "MCP_ALLOWED_ORIGIN_HOSTNAMES": "transitmcp.com,metro-mcp.anuragd.me",
+    "SFBAY_MODE": "on",
     "ENVIRONMENT": "production"
   },
 
@@ -65,6 +90,7 @@
         "MCP_PUBLIC_ORIGIN": "https://metro-mcp-preview.anuragd.me",
         "MCP_ALLOWED_HOSTNAMES": "metro-mcp-preview.anuragd.me",
         "MCP_ALLOWED_ORIGIN_HOSTNAMES": "metro-mcp-preview.anuragd.me",
+        "SFBAY_MODE": "on",
         "ENVIRONMENT": "preview"
       },
       "ratelimits": [
@@ -74,6 +100,23 @@
           "simple": { "limit": 300, "period": 60 }
         }
       ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "REGION_FEED_HUB",
+            "class_name": "RegionFeedHub"
+          }
+        ]
+      },
+      "r2_buckets": [
+        {
+          "binding": "TRANSIT_ARTIFACTS",
+          "bucket_name": "transit-mcp-artifacts-preview"
+        }
+      ],
+      "triggers": {
+        "crons": ["*/5 * * * *"]
+      },
       "analytics_engine_datasets": [
         {
           "binding": "ANALYTICS",

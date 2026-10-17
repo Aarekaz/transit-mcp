@@ -85,7 +85,7 @@ export function viewHeader(
     element('div', { className: 'view-identity' }, [
       element('p', {
         className: 'board-kicker',
-        text: `Metro MCP · ${city.toUpperCase()}`,
+        text: `Transit MCP · ${city.toUpperCase()}`,
       }),
       element('h1', { text: title }),
     ]),

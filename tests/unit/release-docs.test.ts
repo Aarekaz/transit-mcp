@@ -15,6 +15,13 @@ const protocolVerification = readProjectFile('docs/mcp-2026-verification.md');
 const appsVerification = readProjectFile('docs/mcp-apps-verification.md');
 const landingPage = readProjectFile('public/index.html');
 const publicDocs = readProjectFile('public/docs/index.html');
+const llmsText = readProjectFile('public/llms.txt');
+const privacy = readProjectFile('public/privacy/index.html');
+const terms = readProjectFile('public/terms/index.html');
+const support = readProjectFile('public/support/index.html');
+const transitBoardSource = readProjectFile('apps/transit-board/transit-board.html');
+const registry = readProjectFile('server.json');
+const wrangler = readProjectFile('wrangler.jsonc');
 const appsHostHtml = readOptionalProjectFile('tests/apps/host.html');
 const appsHostSource = readOptionalProjectFile('tests/apps/host.ts');
 const packageJson = JSON.parse(readProjectFile('package.json')) as {
@@ -24,6 +31,33 @@ const packageJson = JSON.parse(readProjectFile('package.json')) as {
 const workflow = readOptionalProjectFile('.github/workflows/type-check.yml');
 
 describe('release operator documentation', () => {
+  it('publishes live Bay Area coverage consistently across public discovery surfaces', () => {
+    for (const [name, document] of [
+      ['README', readme],
+      ['landing page', landingPage],
+      ['public docs', publicDocs],
+      ['LLM index', llmsText],
+      ['privacy', privacy],
+      ['terms', terms],
+      ['support', support],
+      ['registry', registry],
+    ] as const) {
+      expect(document, name).toMatch(/(?:San Francisco )?Bay Area/i);
+    }
+
+    expect(readme).toMatch(/18 MCP tools/i);
+    expect(publicDocs).toMatch(/18 Model Context Protocol tools/i);
+    expect(llmsText).toContain('search_sfbay_stations');
+    expect(llmsText).toContain('get_vehicle_positions');
+    expect(landingPage).toContain('511 SF Bay');
+    expect(publicDocs).toContain('511 SF Bay');
+    expect(privacy).toContain('511 SF Bay');
+    expect(terms).toContain('511 SF Bay');
+    expect(transitBoardSource).toContain('<title>Transit MCP Transit Board</title>');
+    expect(wrangler).toMatch(/"SFBAY_MODE": "on"/);
+    expect(wrangler).not.toMatch(/"SFBAY_MODE": "dark"/);
+  });
+
   it('documents Transit MCP 6.0 as anonymous with no credential setup', () => {
     for (const [name, document, endpoint] of [
       ['README', readme, 'https://transitmcp.com/mcp'],

@@ -15,10 +15,10 @@ const registryServer = JSON.parse(
 );
 
 describe('getServerInfo', () => {
-  it('publishes the Metro MCP 6.0 anonymous stateless MCP 2026 contract', () => {
+  it('publishes the Transit MCP 6.1 anonymous stateless MCP 2026 contract', () => {
     const body = getServerInfo('https://metro-mcp.anuragd.me', '2026-08-13T12:00:00.000Z');
 
-    expect(body.version).toBe('6.0.0');
+    expect(body.version).toBe('6.1.0');
     expect(body.protocolVersion).toBe('2026-07-28');
     expect(body.links.mcpServer).toBe('https://metro-mcp.anuragd.me/mcp');
     expect(body.endpoints.mcpRecommended).toBe('/mcp');
@@ -26,12 +26,13 @@ describe('getServerInfo', () => {
     expect(body.endpoints).not.toHaveProperty('oauth');
     expect(body.endpoints).not.toHaveProperty('discovery');
     expect(body.stats).toMatchObject({
-      toolsAvailable: 13,
+      citiesSupported: 3,
+      toolsAvailable: 18,
       resourcesAvailable: 3,
       promptsAvailable: 3,
     });
-    expect(body.tools).toHaveLength(13);
-    expect(new Set(body.tools)).toHaveLength(13);
+    expect(body.tools).toHaveLength(18);
+    expect(new Set(body.tools)).toHaveLength(18);
     expect(body.transport).toMatchObject({
       type: 'streamable-http',
       stateless: true,
@@ -45,7 +46,7 @@ describe('getServerInfo', () => {
   });
 
   it('keeps release and client configuration metadata aligned', () => {
-    expect(packageJson.version).toBe('6.0.0');
+    expect(packageJson.version).toBe('6.1.0');
     expect(exampleClientConfig.mcpServers['transit-mcp']).toEqual({
       type: 'http',
       url: 'https://transitmcp.com/mcp',
@@ -88,7 +89,8 @@ describe('getServerInfo', () => {
 
     expect(body.cities.find(city => city.code === 'dc')?.stations).toBe(102);
     expect(body.cities.find(city => city.code === 'nyc')?.stations).toBe(496);
-    expect(body.stats.totalStations).toBe(598);
+    expect(body.cities.find(city => city.code === 'sfbay')?.stations).toBe(20_627);
+    expect(body.stats.totalStations).toBe(21_225);
   });
 
   it('describes the stateless MCP transport without claiming resumability', () => {

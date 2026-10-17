@@ -12,10 +12,12 @@ import { anonymousMcpRateLimitResponse } from './rate-limit';
 import { normalizeMcpRoute } from './route-normalizer';
 import { serializeTelemetry, type TelemetryInput } from './telemetry';
 import type { Env } from './types';
+import { bootstrapRegionalFeedHub } from './transit/gtfs/realtime/bootstrap';
 
 // Export MetroMcpAgent so the wrangler.jsonc DO binding can resolve the class.
 // Cloudflare's bundler discovers DO classes by name at deploy time.
 export { MetroMcpAgent } from './mcp-agent';
+export { RegionFeedHub } from './transit/gtfs/realtime/region-feed-hub';
 
 function mcpTrustRejection(
   request: Request,
@@ -106,5 +108,8 @@ export default {
     const secured = addSecurityHeadersAuto(withCorrelationId(response, correlationId));
     console.info(serializeTelemetry(telemetry));
     return secured;
-  }
+  },
+  scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
+    ctx.waitUntil(bootstrapRegionalFeedHub(env));
+  },
 };

@@ -34,6 +34,10 @@ export interface Env {
 
   // API Keys
   WMATA_API_KEY: string;           // DC Metro (WMATA) API key (secret)
+  SF511_API_KEY?: string;          // Optional Bay Area 511 API key (secret)
+  SFBAY_MODE?: 'off' | 'dark' | 'on' | 'suspended';
+  REGION_FEED_HUB?: DurableObjectNamespace;
+  TRANSIT_ARTIFACTS?: R2Bucket;
 
   /**
    * Inactive legacy session KV retained only as a rollback data shape.
