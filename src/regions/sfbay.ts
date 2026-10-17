@@ -1,6 +1,6 @@
 import type { RegionManifest } from './types';
 
-const realtimeBase = 'https://api.511.org/transit/gtfsrealtime';
+const transitBase = 'https://api.511.org/transit';
 
 export const SFBAY_REGION = {
   id: 'sfbay',
@@ -17,9 +17,9 @@ export const SFBAY_REGION = {
       reserveForStatic: 1,
     },
     feeds: [
-      { kind: 'trip_updates', url: new URL(`${realtimeBase}?agency=RG`), weight: 5, minIntervalSeconds: 120, maxBytes: 32_000_000, timeoutMs: 10_000 },
-      { kind: 'vehicle_positions', url: new URL(`${realtimeBase}?agency=RG`), weight: 2, minIntervalSeconds: 300, maxBytes: 32_000_000, timeoutMs: 10_000 },
-      { kind: 'service_alerts', url: new URL(`${realtimeBase}?agency=RG`), weight: 1, minIntervalSeconds: 900, maxBytes: 16_000_000, timeoutMs: 10_000 },
+      { kind: 'trip_updates', url: new URL(`${transitBase}/tripupdates?agency=RG`), weight: 5, minIntervalSeconds: 120, maxBytes: 32_000_000, timeoutMs: 10_000 },
+      { kind: 'vehicle_positions', url: new URL(`${transitBase}/vehiclepositions?agency=RG`), weight: 2, minIntervalSeconds: 300, maxBytes: 32_000_000, timeoutMs: 10_000 },
+      { kind: 'service_alerts', url: new URL(`${transitBase}/servicealerts?agency=RG`), weight: 1, minIntervalSeconds: 900, maxBytes: 16_000_000, timeoutMs: 10_000 },
     ],
   },
   static: {
@@ -27,7 +27,7 @@ export const SFBAY_REGION = {
     maxStaticAgeDays: 14,
   },
   attribution: {
-    text: 'Transit data provided by the Metropolitan Transportation Commission and participating Bay Area operators.',
+    text: 'Transit data provided by 511 SF Bay and participating Bay Area operators.',
     url: 'https://511.org/open-data/transit',
   },
 } as const satisfies RegionManifest;
