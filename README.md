@@ -2,8 +2,6 @@
 
 Transit MCP is an anonymous, read-only Model Context Protocol server for live DC Metro and NYC Subway information.
 
-> **Metro MCP is now Transit MCP.** The new home is [transitmcp.com](https://transitmcp.com/) and the docs now live at [transitmcp.com/docs](https://transitmcp.com/docs/). It is the same server with the same docs. The old endpoint `https://metro-mcp.anuragd.me/mcp` and the old site will continue to be supported and keep working.
-
 [![MCP](https://img.shields.io/badge/MCP-2026--07--28-blue)](https://modelcontextprotocol.io)
 [![Transit MCP](https://img.shields.io/badge/Transit_MCP-6.0.0-0f766e)](CHANGELOG.md)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange)](https://workers.cloudflare.com)
@@ -14,6 +12,11 @@ Transit MCP is an anonymous, read-only Model Context Protocol server for live DC
 The production endpoint is `https://transitmcp.com/mcp`. No login is required. No client credentials, bearer token, or OAuth flow is required; Transit MCP does not collect client credentials. Stale `Authorization` headers are ignored.
 
 The previous endpoint, `https://metro-mcp.anuragd.me/mcp`, remains available and serves the same Worker.
+
+### Directories
+
+- [Official MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers?search=com.transitmcp%2Ftransit-mcp) (`com.transitmcp/transit-mcp`)
+- [Smithery](https://smithery.ai/servers/transitmcp/transit-mcp)
 
 ### Claude
 
@@ -74,8 +77,8 @@ Use the checked-in loopback origin, hostname allowlists, and `ENVIRONMENT=develo
 Before an approved deployment, run only dry-runs:
 
 ```bash
-bunx wrangler deploy --dry-run --outdir /tmp/metro-mcp-production
-bunx wrangler deploy --env preview --dry-run --outdir /tmp/metro-mcp-preview
+bunx wrangler deploy --dry-run --outdir /tmp/transit-mcp-production
+bunx wrangler deploy --env preview --dry-run --outdir /tmp/transit-mcp-preview
 ```
 
 ## Verification
@@ -95,7 +98,7 @@ See [MCP 2026 verification](docs/mcp-2026-verification.md) for protocol coverage
 - [Privacy](https://transitmcp.com/privacy/)
 - [Terms](https://transitmcp.com/terms/)
 - [Support](https://transitmcp.com/support/)
-- [Issues](https://github.com/Aarekaz/metro-mcp/issues)
+- [Issues](https://github.com/Aarekaz/transit-mcp/issues)
 
 ## License
 
