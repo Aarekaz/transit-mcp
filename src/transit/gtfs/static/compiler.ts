@@ -21,6 +21,7 @@ function finiteNumber(row: GtfsCsvRow, name: string): number {
 export function compileGtfsStatic(
   files: GtfsStaticFiles,
   metadata: { sourceVersion: string; generatedAt: string },
+  options: { includeSchedule?: boolean } = {},
 ): StaticTransitArtifact {
   const stopRows = parseGtfsCsv(files['stops.txt']);
   const routeRows = parseGtfsCsv(files['routes.txt']);
@@ -86,7 +87,6 @@ export function compileGtfsStatic(
     stops,
     routes,
     stopRoutes,
-    stopTimes,
-    calendars,
+    ...(options.includeSchedule === false ? {} : { stopTimes, calendars }),
   });
 }
