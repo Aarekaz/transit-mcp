@@ -27,14 +27,16 @@ export function compileGtfsStatic(
   const tripRows = parseGtfsCsv(files['trips.txt']);
   const stopTimeRows = parseGtfsCsv(files['stop_times.txt']);
 
-  const stops: ArtifactStop[] = stopRows.map(row => ({
+  const stops: ArtifactStop[] = stopRows
+    .filter(row => row.location_type !== '3')
+    .map(row => ({
     id: required(row, 'stop_id'),
     name: required(row, 'stop_name'),
     latitude: finiteNumber(row, 'stop_lat'),
     longitude: finiteNumber(row, 'stop_lon'),
     locationType: row.location_type ? finiteNumber(row, 'location_type') : 0,
     ...(row.parent_station ? { parentStationId: row.parent_station } : {}),
-  }));
+    }));
   const routes: ArtifactRoute[] = routeRows.map(row => ({
     id: required(row, 'route_id'),
     shortName: row.route_short_name ?? '',
@@ -69,11 +71,13 @@ export function compileGtfsStatic(
     const calendar = calendars[serviceId] ??= { monday: false, tuesday: false, wednesday: false, thursday: false, friday: false, saturday: false, sunday: false, startDate: '00000000', endDate: '99999999', exceptions: {} };
     calendar.exceptions[required(row, 'date')] = finiteNumber(row, 'exception_type') as 1 | 2;
   }
-  const stopTimes = stopTimeRows.map(row => {
+  const stopTimes = stopTimeRows
+    .filter(row => row.arrival_time && row.departure_time)
+    .map(row => {
     const tripId = required(row, 'trip_id');
     const trip = trips.get(tripId)!;
     return { tripId, routeId: trip.routeId, serviceId: trip.serviceId, stopId: required(row, 'stop_id'), arrivalSeconds: parseGtfsTime(required(row, 'arrival_time')).totalSeconds, departureSeconds: parseGtfsTime(required(row, 'departure_time')).totalSeconds };
-  });
+    });
 
   return createStaticArtifact({
     region: 'sfbay',

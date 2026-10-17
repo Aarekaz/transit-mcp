@@ -2,7 +2,7 @@
 
 Transit MCP is an anonymous, read-only Model Context Protocol server for live DC Metro and NYC Subway information.
 
-Previously known as **Metro MCP**.
+**Metro MCP is now Transit MCP.**
 
 Nearly 100,000 requests served in the last 7 days.
 
@@ -15,7 +15,7 @@ Nearly 100,000 requests served in the last 7 days.
 
 The production endpoint is `https://transitmcp.com/mcp`. No login is required. No client credentials, bearer token, or OAuth flow is required; Transit MCP does not collect client credentials. Stale `Authorization` headers are ignored.
 
-The previous endpoint, `https://metro-mcp.anuragd.me/mcp`, remains available and serves the same Worker.
+The previous endpoint, `https://metro-mcp.anuragd.me/mcp`, will continue to be supported and serves the same Worker.
 
 ### Directories
 

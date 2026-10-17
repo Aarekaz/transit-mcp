@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { gzipSync } from 'node:zlib';
 import type { Env } from '../../src/types';
 import { createRegionalTransitService } from '../../src/transit/gtfs/realtime/service';
 
@@ -26,7 +27,12 @@ function envWithArtifact(generatedAt = new Date().toISOString()): Env {
     },
   };
   return {
-    TRANSIT_ARTIFACTS: { get: async () => ({ json: async () => artifact }) } as unknown as R2Bucket,
+    TRANSIT_ARTIFACTS: {
+      get: async (key: string) => {
+        expect(key).toBe('artifacts/sfbay/current.json.gz');
+        return { body: new Response(gzipSync(JSON.stringify(artifact))).body };
+      },
+    } as unknown as R2Bucket,
     REGION_FEED_HUB: { idFromName: () => ({}), get: () => stub } as unknown as DurableObjectNamespace,
   } as Env;
 }

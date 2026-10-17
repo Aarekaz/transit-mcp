@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { getPublicCities, normalizeRegionMode } from '../../src/regions/manifest';
 import { SFBAY_REGION } from '../../src/regions/sfbay';
 
@@ -33,5 +34,14 @@ describe('regional transit manifests', () => {
       'service_alerts',
     ]);
     expect(SFBAY_REGION.realtime.feeds.every(feed => feed.url.protocol === 'https:')).toBe(true);
+  });
+
+  it('uploads regional artifacts to remote R2 instead of local Wrangler storage', () => {
+    const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+
+    expect(packageJson.scripts['upload:sfbay-artifact']).toContain('--remote');
+    expect(packageJson.scripts['upload:sfbay-artifact:preview']).toContain('--remote');
   });
 });

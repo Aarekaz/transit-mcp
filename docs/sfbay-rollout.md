@@ -14,7 +14,7 @@ bun run upload:sfbay-artifact:preview
 bun run upload:sfbay-artifact
 ```
 
-The production and preview R2 buckets must exist before deployment. The artifact is stored at `artifacts/sfbay/current.json` in each bucket.
+The production and preview R2 buckets must exist before deployment. The gzip-compressed artifact is stored at `artifacts/sfbay/current.json.gz` in each bucket.
 
 The default 511 limit is 60 requests per hour. The scheduler reserves capacity and applies a safety factor. API keys are appended only at the upstream request boundary and are redacted from URLs used outside that boundary.
 
