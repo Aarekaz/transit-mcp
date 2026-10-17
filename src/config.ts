@@ -3,7 +3,7 @@ import { normalizeRegionMode } from './regions/manifest';
 import type { RegionMode } from './regions/types';
 
 /** Single source of truth for the public Metro MCP release version. */
-export const SERVER_VERSION = '6.0.0';
+export const SERVER_VERSION = '6.1.0';
 
 /** Protocol revision advertised by the public server metadata. */
 export const MCP_PROTOCOL_VERSION = '2026-07-28';

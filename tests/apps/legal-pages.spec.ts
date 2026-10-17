@@ -38,8 +38,8 @@ const workerOrigin = 'http://127.0.0.1:4179';
 mkdirSync(screenshotDir, { recursive: true });
 
 const internalRouteExpectations = {
-  '/': { contentType: 'text/html', body: /Plug your LLM into the/i },
-  '/docs/': { contentType: 'text/html', body: /Connect anonymously/i },
+  '/': { contentType: 'text/html', body: /Plug your LLM into transit/i },
+  '/docs/': { contentType: 'text/html', body: /Connect any MCP client/i },
   '/privacy/': { contentType: 'text/html', body: /Privacy, in plain language/i },
   '/terms/': { contentType: 'text/html', body: /Terms of Use/i },
   '/support/': { contentType: 'text/html', body: /<h1>Support<\/h1>/i },

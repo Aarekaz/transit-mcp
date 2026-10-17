@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "com.transitmcp/transit-mcp",
   "title": "Transit MCP",
-  "description": "Real-time DC Metro and NYC Subway arrivals, alerts, stations, and DC buses. Read-only, no login.",
-  "version": "6.0.0",
+  "description": "Real-time DC, NYC, and SF Bay Area transit arrivals, alerts, stations, routes, and vehicles.",
+  "version": "6.1.0",
   "websiteUrl": "https://transitmcp.com",
   "repository": {
     "url": "https://github.com/Aarekaz/metro-mcp",

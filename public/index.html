@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Transit MCP · Real-time DC Metro and NYC Subway MCP server for Claude and ChatGPT</title>
-  <meta name="description" content="Free, anonymous Model Context Protocol (MCP) server for real-time transit arrivals on DC Metro and NYC Subway. Use it in Claude, Cursor, or as a ChatGPT plugin.">
+  <title>Transit MCP · Live US transit data for AI</title>
+  <meta name="description" content="Free MCP server for live DC Metro, NYC Subway, and San Francisco Bay Area transit arrivals, alerts, routes, and vehicles. No login required.">
   <link rel="canonical" href="https://transitmcp.com/">
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
 
@@ -12,15 +12,15 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Transit MCP">
   <meta property="og:url" content="https://transitmcp.com/">
-  <meta property="og:title" content="Transit MCP · Plug your LLM into the subway">
-  <meta property="og:description" content="Free, anonymous Model Context Protocol (MCP) server for real-time transit arrivals on DC Metro and NYC Subway. Use it in Claude, Cursor, or as a ChatGPT plugin.">
+  <meta property="og:title" content="Transit MCP · Plug your LLM into transit">
+  <meta property="og:description" content="Live DC Metro, NYC Subway, and San Francisco Bay Area transit data through one free, anonymous MCP server.">
   <meta property="og:image" content="https://transitmcp.com/og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Transit MCP: live DC Metro and NYC Subway data through MCP">
+  <meta property="og:image:alt" content="Transit MCP: live DC, NYC, and San Francisco Bay Area transit data">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Transit MCP · Plug your LLM into the subway">
-  <meta name="twitter:description" content="Free, anonymous Model Context Protocol (MCP) server for real-time transit arrivals on DC Metro and NYC Subway. Use it in Claude, Cursor, or as a ChatGPT plugin.">
+  <meta name="twitter:title" content="Transit MCP · Plug your LLM into transit">
+  <meta name="twitter:description" content="Live DC Metro, NYC Subway, and San Francisco Bay Area transit data through one free, anonymous MCP server.">
   <meta name="twitter:image" content="https://transitmcp.com/og-image.png">
   <script type="application/ld+json">
   {
@@ -30,8 +30,9 @@
     "name": "Transit MCP",
     "alternateName": "Metro MCP",
     "url": "https://transitmcp.com/",
-    "description": "Anonymous, read-only Model Context Protocol (MCP) server for real-time DC Metro and NYC Subway arrivals, incidents, stations, and routes. Works with Claude, Cursor, Codex, and other MCP clients, and is available as a ChatGPT plugin.",
+    "description": "Anonymous, read-only MCP server for real-time DC Metro, NYC Subway, and San Francisco Bay Area arrivals, incidents, stations, routes, and vehicles.",
     "applicationCategory": "DeveloperApplication",
+    "areaServed": ["Washington, DC", "New York City", "San Francisco Bay Area"],
     "operatingSystem": "Any",
     "image": "https://transitmcp.com/og-image.png",
     "installUrl": "https://chatgpt.com/plugins/plugin_asdk_app_6a9078f4d6dc8191be735cc1c2ff45b5",
@@ -42,7 +43,8 @@
       "priceCurrency": "USD"
     },
     "featureList": [
-      "Real-time DC Metro and NYC Subway arrivals",
+      "Real-time DC Metro, NYC Subway, and San Francisco Bay Area arrivals",
+      "Bay Area service alerts, routes, and vehicle positions from 511 SF Bay",
       "Service incidents and elevator outages",
       "Station search and route detail",
       "Anonymous access with no login, token, or OAuth flow",
@@ -68,7 +70,7 @@
     "name": "Transit MCP",
     "alternateName": "Metro MCP",
     "url": "https://transitmcp.com/",
-    "description": "Docs and connection details for Transit MCP, a free MCP server for real-time DC Metro and NYC Subway data.",
+    "description": "Docs and connection details for Transit MCP, a free MCP server for live DC, NYC, and San Francisco Bay Area transit data.",
     "inLanguage": "en",
     "publisher": {
       "@type": "Person",
@@ -1722,8 +1724,8 @@
           <span class="status-sep" aria-hidden="true"></span>
           <span class="stat">~<strong>77K</strong> requests served weekly</span>
         </p>
-        <h1 class="rise" style="--i:1">Plug your LLM into the <span class="accent">subway</span>.</h1>
-        <p class="subtitle rise" style="--i:2">Live arrivals, service alerts, and station details across 598 DC Metro and NYC Subway stations, right inside your AI.</p>
+        <h1 class="rise" style="--i:1">Plug your LLM into <span class="accent">transit</span>.</h1>
+        <p class="subtitle rise" style="--i:2">Live arrivals, service alerts, routes, and vehicle positions across DC, NYC, and the San Francisco Bay Area, right inside your AI.</p>
         <div class="cta-stack rise" style="--i:3">
           <div class="cta-row">
             <button type="button" class="url-pill" data-copy-url="https://transitmcp.com/mcp" aria-label="Copy MCP server URL">
@@ -1765,6 +1767,7 @@
             <span class="infra-mark mta-mark" aria-hidden="true">MTA</span>
             MTA feeds
           </a>
+          <a class="infra-chip" href="https://511.org/open-data" target="_blank" rel="noreferrer" aria-label="Open 511 SF Bay data resources">511 SF Bay</a>
         </div>
       </div>
     </section>

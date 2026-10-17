@@ -29,7 +29,7 @@ export const SERVER_IDENTITY = Object.freeze({
   title: 'Transit MCP',
   version: SERVER_VERSION,
   description:
-    'Real-time DC Metro and NYC Subway arrivals, service alerts, stations, and DC buses.',
+    'Real-time DC, NYC, and San Francisco Bay Area transit arrivals, service alerts, stations, routes, and vehicles.',
   websiteUrl: 'https://transitmcp.com',
   icons: Object.freeze([
     Object.freeze({
@@ -42,7 +42,7 @@ export const SERVER_IDENTITY = Object.freeze({
 
 /** Model-facing orientation; keep every claim true of the registered tools. */
 export const SERVER_INSTRUCTIONS = [
-  'Read-only, real-time transit data for the Washington DC Metro (city "dc", WMATA) and the New York City Subway (city "nyc", MTA).',
+  'Read-only, real-time transit data for the Washington DC Metro (city "dc", WMATA), the New York City Subway (city "nyc", MTA), and San Francisco Bay Area transit (city "sfbay", 511 SF Bay).',
   'For train arrivals call get_station_predictions with a station name or ID. When a name matches several stations, choose from the candidates offered or call search_stations and retry with the exact station ID.',
   'DC only: get_elevator_incidents, get_train_positions, and the bus tools (get_bus_predictions, get_bus_routes, get_bus_stops, get_bus_positions). NYC only: get_station_transfers and get_route_info.',
   'Prefer search_stations or get_stations_by_line over get_all_stations, which returns every station in a system.',
@@ -88,8 +88,8 @@ function buildMetroMcpServer(context: MetroMcpContext): {
     {
       ...SERVER_IDENTITY,
       description: bayAreaEnabled
-        ? 'Real-time DC, NYC, and San Francisco Bay Area transit arrivals, service alerts, stations, routes, and vehicles.'
-        : SERVER_IDENTITY.description,
+        ? SERVER_IDENTITY.description
+        : 'Real-time DC Metro and NYC Subway arrivals, service alerts, stations, and DC buses.',
       icons: SERVER_IDENTITY.icons.map(icon => ({ ...icon, sizes: [...icon.sizes] })),
     },
     {

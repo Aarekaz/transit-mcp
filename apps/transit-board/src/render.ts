@@ -47,7 +47,7 @@ function unsupportedTool(): HTMLElement {
     className: 'transit-view state-view',
     attributes: { 'data-view': 'unsupported-tool' },
   }, [
-    element('p', { className: 'board-kicker', text: 'Metro MCP · Transit Board' }),
+    element('p', { className: 'board-kicker', text: 'Transit MCP · Transit Board' }),
     element('h1', { text: 'This transit view is not available yet' }),
     element('p', { text: 'The text result remains available in the conversation.' }),
   ]);
@@ -58,7 +58,7 @@ function unsupportedResult(viewLabel: string): HTMLElement {
     className: 'transit-view state-view state-view--error',
     attributes: { 'data-view': 'unsupported-result', role: 'alert' },
   }, [
-    element('p', { className: 'board-kicker', text: 'Metro MCP · Result unavailable' }),
+    element('p', { className: 'board-kicker', text: 'Transit MCP · Result unavailable' }),
     element('h1', { text: `This ${viewLabel} result can’t be displayed` }),
     element('p', { text: 'Required transit fields are missing or invalid.' }),
   ]);

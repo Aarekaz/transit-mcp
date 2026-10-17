@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Transit MCP docs · Connect Claude, Cursor, and Codex to DC Metro and NYC Subway data</title>
-  <meta name="description" content="Connect anonymously to the Transit MCP server from Claude, Cursor, Codex, or any MCP client. Covers the 13 Model Context Protocol tools, HTTP endpoints, and the DC Metro and NYC Subway feeds behind real-time arrivals.">
+  <title>Transit MCP docs · Live DC, NYC, and Bay Area data</title>
+  <meta name="description" content="Connect any MCP client to 18 live transit tools for DC Metro, NYC Subway, and San Francisco Bay Area arrivals, alerts, routes, and vehicles.">
   <link rel="canonical" href="https://transitmcp.com/docs/">
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
 
@@ -12,15 +12,15 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="Transit MCP">
   <meta property="og:url" content="https://transitmcp.com/docs/">
-  <meta property="og:title" content="Transit MCP docs · Connect Claude, Cursor, and Codex to DC Metro and NYC Subway data">
-  <meta property="og:description" content="Connect anonymously to the Transit MCP server from Claude, Cursor, Codex, or any MCP client. Covers the 13 Model Context Protocol tools, HTTP endpoints, and the DC Metro and NYC Subway feeds behind real-time arrivals.">
+  <meta property="og:title" content="Transit MCP docs · Live DC, NYC, and Bay Area data">
+  <meta property="og:description" content="Connect any MCP client to 18 live transit tools for DC Metro, NYC Subway, and San Francisco Bay Area transit.">
   <meta property="og:image" content="https://transitmcp.com/og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Transit MCP: live DC Metro and NYC Subway data through MCP">
+  <meta property="og:image:alt" content="Transit MCP: live DC, NYC, and San Francisco Bay Area transit data">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Transit MCP docs · Connect Claude, Cursor, and Codex to DC Metro and NYC Subway data">
-  <meta name="twitter:description" content="Connect anonymously to the Transit MCP server from Claude, Cursor, Codex, or any MCP client. Covers the 13 Model Context Protocol tools, HTTP endpoints, and the DC Metro and NYC Subway feeds behind real-time arrivals.">
+  <meta name="twitter:title" content="Transit MCP docs · Live DC, NYC, and Bay Area data">
+  <meta name="twitter:description" content="Connect any MCP client to 18 live transit tools for DC Metro, NYC Subway, and San Francisco Bay Area transit.">
   <meta name="twitter:image" content="https://transitmcp.com/og-image.png">
   <script type="application/ld+json">
   {
@@ -30,7 +30,7 @@
     "headline": "Transit MCP docs",
     "url": "https://transitmcp.com/docs/",
     "mainEntityOfPage": "https://transitmcp.com/docs/",
-    "description": "Client setup, HTTP endpoints, MCP tools, and data sources for Transit MCP, an anonymous Model Context Protocol server for real-time DC Metro and NYC Subway data.",
+    "description": "Client setup, endpoints, 18 MCP tools, and data sources for real-time DC Metro, NYC Subway, and San Francisco Bay Area transit data.",
     "image": "https://transitmcp.com/og-image.png",
     "inLanguage": "en",
     "author": {
@@ -608,7 +608,7 @@
     <header class="hero">
       <div>
         <h1>Docs for the <span class="accent">live transit MCP</span>.</h1>
-        <p class="lede">Transit MCP exposes DC Metro and NYC Subway data through MCP tools, resources, and prompts. This page covers client setup, public endpoints, what each tool can answer, and which official transit feeds power the results.</p>
+        <p class="lede">Transit MCP exposes DC Metro, NYC Subway, and San Francisco Bay Area transit data through MCP tools, resources, and prompts. This page covers setup, endpoints, tool capabilities, and official data sources.</p>
         <aside class="rename-notice" aria-label="Project rename">
           <p><strong>Metro MCP is now Transit MCP.</strong> The new home is <a href="https://transitmcp.com/">transitmcp.com</a> and the docs now live at <a href="https://transitmcp.com/docs/">transitmcp.com/docs</a>. It is the same server with the same docs. The old endpoint <code>https://metro-mcp.anuragd.me/mcp</code> and the old site will continue to be supported and keep working.</p>
         </aside>
@@ -621,8 +621,8 @@
         <div class="status-row"><span><span class="live-dot"></span>Production</span><strong>transitmcp.com</strong></div>
         <div class="status-row"><span>Also available at</span><strong>metro-mcp.anuragd.me</strong></div>
         <div class="status-row"><span>Transport</span><strong>Streamable HTTP</strong></div>
-        <div class="status-row"><span>Stations</span><strong>598 total</strong></div>
-        <div class="status-row"><span>Tools</span><strong>13 MCP tools</strong></div>
+        <div class="status-row"><span>Coverage</span><strong>3 US regions</strong></div>
+        <div class="status-row"><span>Tools</span><strong>18 Model Context Protocol tools</strong></div>
       </aside>
     </header>
 
@@ -704,6 +704,10 @@
               <p><code>get_route_info</code> returns route names and service descriptions. <code>get_station_transfers</code> returns platform and nearby transfers with walk times in seconds and minutes.</p>
             </div>
             <div class="tool-card">
+              <h3>San Francisco Bay Area</h3>
+              <p><code>search_sfbay_stations</code>, <code>get_sfbay_station_predictions</code>, <code>get_sfbay_routes</code>, <code>get_sfbay_incidents</code>, and <code>get_vehicle_positions</code> cover regional stops, arrivals, routes, alerts, and vehicles with freshness and 511 SF Bay attribution.</p>
+            </div>
+            <div class="tool-card">
               <h3>Progress and safety hints</h3>
               <p><code>get_all_stations</code> emits progress notifications when clients pass a progress token. Tool annotations mark calls as read-only, idempotent, and open-world because they query live transit systems.</p>
             </div>
@@ -712,7 +716,7 @@
 
         <section id="data">
           <h2>Data sources and cache windows</h2>
-          <p class="section-copy">Transit MCP normalizes official agency data into MCP-friendly JSON. DC data is fetched from WMATA REST APIs with Cloudflare edge caching; NYC uses MTA GTFS-realtime feeds plus bundled station and route metadata.</p>
+          <p class="section-copy">Transit MCP normalizes official agency data into MCP-friendly JSON. DC uses WMATA APIs, NYC uses MTA feeds, and Bay Area coverage uses 511 SF Bay regional GTFS static and real-time data.</p>
           <div class="source-grid">
             <article class="source-card">
               <header>
@@ -735,6 +739,18 @@
                   </tbody>
                 </table>
               </div>
+            </article>
+            <article class="source-card">
+              <header>
+                <h3>511 SF Bay: regional transit</h3>
+                <p class="note">Transit data provided by 511 SF Bay and participating Bay Area operators.</p>
+              </header>
+              <div class="table-wrap"><table><thead><tr><th>Capability</th><th>Source</th><th>Freshness</th></tr></thead><tbody>
+                <tr><td>Stops and routes</td><td>Regional GTFS static artifact</td><td>Versioned artifact</td></tr>
+                <tr><td>Arrivals</td><td>GTFS-realtime trip updates</td><td>Live with freshness status</td></tr>
+                <tr><td>Alerts</td><td>GTFS-realtime service alerts</td><td>Live with freshness status</td></tr>
+                <tr><td>Vehicles</td><td>GTFS-realtime vehicle positions</td><td>Live with freshness status</td></tr>
+              </tbody></table></div>
             </article>
 
             <article class="source-card">
