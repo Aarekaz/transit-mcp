@@ -43,6 +43,6 @@ const source = inputDirectory
 const artifact = compileGtfsStatic(source.files, {
   sourceVersion: source.sourceVersion,
   generatedAt: new Date().toISOString(),
-});
+}, { includeSchedule: false });
 await Bun.write(outputPath, Bun.gzipSync(`${JSON.stringify(artifact)}\n`));
 console.info(JSON.stringify({ outputPath, stops: artifact.stops.length, routes: artifact.routes.length, sourceVersion: artifact.sourceVersion }));

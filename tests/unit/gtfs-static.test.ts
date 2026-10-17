@@ -82,6 +82,23 @@ describe('GTFS static primitives', () => {
     expect(artifact.calendars!.WK).toMatchObject({ monday: true, startDate: '20261001' });
   });
 
+  it('can omit the regional timetable from the runtime query artifact', () => {
+    const artifact = compileGtfsStatic({
+      'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nS1,Montgomery,37.789,-122.401\n',
+      'routes.txt': 'route_id,route_short_name,route_long_name,route_type\nR1,BART,Bay Area Rapid Transit,1\n',
+      'trips.txt': 'route_id,service_id,trip_id\nR1,WK,T1\n',
+      'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id\nT1,08:00:00,08:00:00,S1\n',
+      'calendar.txt': 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWK,1,1,1,1,1,0,0,20261001,20261231\n',
+    }, {
+      sourceVersion: 'test',
+      generatedAt: '2026-10-17T00:00:00.000Z',
+    }, { includeSchedule: false });
+
+    expect(artifact.stopRoutes).toEqual({ S1: ['R1'] });
+    expect(artifact).not.toHaveProperty('stopTimes');
+    expect(artifact).not.toHaveProperty('calendars');
+  });
+
   it('ignores unnamed GTFS pathway nodes that are not transit stops', () => {
     const artifact = compileGtfsStatic({
       'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station\nS1,Market,37.7,-122.4,1,\nP1,Market Platform,37.7,-122.4,0,S1\nN1,,37.7,-122.4,3,S1\n',
