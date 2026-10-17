@@ -4,7 +4,7 @@ Transit MCP is an anonymous, read-only Model Context Protocol server for live DC
 
 Previously known as **Metro MCP**.
 
-Nearly 100,000 requests served in the last 7 days across the MCP server and website.
+Nearly 100,000 requests served in the last 7 days.
 
 [![MCP](https://img.shields.io/badge/MCP-2026--07--28-blue)](https://modelcontextprotocol.io)
 [![Transit MCP](https://img.shields.io/badge/Transit_MCP-6.0.0-0f766e)](CHANGELOG.md)
