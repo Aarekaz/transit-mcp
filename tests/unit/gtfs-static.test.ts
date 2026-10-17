@@ -3,6 +3,8 @@ import { parseGtfsCsv } from '../../src/transit/gtfs/static/csv';
 import { parseGtfsTime } from '../../src/transit/gtfs/static/time';
 import { encodeTransitId, transitResourceUri } from '../../src/regions/ids';
 import { routeTypeToMode } from '../../src/transit/gtfs/static/modes';
+import { createStaticArtifact, searchStops } from '../../src/transit/gtfs/static/artifact';
+import { compileGtfsStatic } from '../../src/transit/gtfs/static/compiler';
 
 describe('GTFS static primitives', () => {
   it('parses RFC 4180 rows with BOM, CRLF, commas, quotes, and newlines', () => {
@@ -39,5 +41,40 @@ describe('GTFS static primitives', () => {
     expect(routeTypeToMode(11)).toBe('trolleybus');
     expect(routeTypeToMode(100)).toBe('rail');
     expect(() => routeTypeToMode(99)).toThrow('Unsupported GTFS route_type');
+  });
+
+  it('builds byte-stable regional indexes and searches parent stations first', () => {
+    const artifact = createStaticArtifact({
+      region: 'sfbay',
+      sourceVersion: 'fixture-v1',
+      generatedAt: '2026-10-17T00:00:00.000Z',
+      stops: [
+        { id: 'platform-b', name: 'Montgomery B', latitude: 37.79, longitude: -122.4, parentStationId: 'station-1', locationType: 0 },
+        { id: 'station-1', name: 'Montgomery Street', latitude: 37.79, longitude: -122.4, locationType: 1 },
+        { id: 'platform-a', name: 'Montgomery A', latitude: 37.79, longitude: -122.4, parentStationId: 'station-1', locationType: 0 },
+      ],
+      routes: [{ id: 'route-z', shortName: 'N', longName: 'Judah', mode: 'tram', color: '0039A6' }],
+      stopRoutes: { 'station-1': ['route-z', 'route-z'] },
+    });
+
+    expect(artifact.stops.map(stop => stop.id)).toEqual(['platform-a', 'platform-b', 'station-1']);
+    expect(artifact.stopRoutes['station-1']).toEqual(['route-z']);
+    expect(searchStops(artifact, 'montgomery', 2).map(stop => stop.id)).toEqual(['station-1', 'platform-a']);
+    expect(JSON.stringify(artifact)).toBe(JSON.stringify(createStaticArtifact({
+      region: 'sfbay', sourceVersion: 'fixture-v1', generatedAt: '2026-10-17T00:00:00.000Z',
+      stops: [...artifact.stops].reverse(), routes: artifact.routes, stopRoutes: artifact.stopRoutes,
+    })));
+  });
+
+  it('compiles the minimum GTFS tables into a deterministic query artifact', () => {
+    const artifact = compileGtfsStatic({
+      'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station\nS1,Market,37.7,-122.4,1,\nP1,Market Platform,37.7,-122.4,0,S1\n',
+      'routes.txt': 'route_id,route_short_name,route_long_name,route_type,route_color\nR1,N,Judah,0,0039A6\n',
+      'trips.txt': 'route_id,service_id,trip_id\nR1,WK,T1\n',
+      'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT1,25:00:00,25:00:30,P1,1\n',
+    }, { sourceVersion: 'sha256:fixture', generatedAt: '2026-10-17T00:00:00.000Z' });
+
+    expect(artifact.routes[0]).toMatchObject({ id: 'R1', mode: 'tram' });
+    expect(artifact.stopRoutes).toEqual({ P1: ['R1'], S1: ['R1'] });
   });
 });

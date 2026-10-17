@@ -221,12 +221,14 @@ describe('anonymous deployment configuration', () => {
       MCP_PUBLIC_ORIGIN: 'https://transitmcp.com',
       MCP_ALLOWED_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
       MCP_ALLOWED_ORIGIN_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
+      SFBAY_MODE: 'dark',
       ENVIRONMENT: 'production',
     });
     expect(wrangler.env.preview.vars).toEqual({
       MCP_PUBLIC_ORIGIN: 'https://metro-mcp-preview.anuragd.me',
       MCP_ALLOWED_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
       MCP_ALLOWED_ORIGIN_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
+      SFBAY_MODE: 'dark',
       ENVIRONMENT: 'preview',
     });
     expect(wrangler.kv_namespaces).toBeUndefined();
@@ -272,11 +274,17 @@ describe('anonymous deployment configuration', () => {
     }
   });
 
-  it('retains the original rollback migration without scheduling deletion', () => {
-    expect(wrangler.migrations).toEqual([{
-      tag: 'v1',
-      new_sqlite_classes: ['MetroMcpAgent'],
+  it('retains rollback history and adds the isolated regional feed hub', () => {
+    expect(wrangler.durable_objects.bindings).toEqual([{
+      name: 'REGION_FEED_HUB', class_name: 'RegionFeedHub',
     }]);
+    expect(wrangler.env.preview.durable_objects.bindings).toEqual([{
+      name: 'REGION_FEED_HUB', class_name: 'RegionFeedHub',
+    }]);
+    expect(wrangler.migrations).toEqual([
+      { tag: 'v1', new_sqlite_classes: ['MetroMcpAgent'] },
+      { tag: 'v2', new_sqlite_classes: ['RegionFeedHub'] },
+    ]);
     expect(JSON.stringify(wrangler.migrations)).not.toContain('deleted_classes');
   });
 
