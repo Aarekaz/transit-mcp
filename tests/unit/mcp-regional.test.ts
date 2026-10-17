@@ -15,10 +15,10 @@ describe('Bay Area MCP rollout', () => {
       era: 'modern',
       deps: {
         regionalTransitService: {
-          searchStations: async () => [{
-            id: 'S1', name: 'Montgomery Street', latitude: 37.789, longitude: -122.401,
+          searchStations: async (_query, limit = 20) => Array.from({ length: limit }, (_, index) => ({
+            id: index === 0 ? 'S1' : `S${index + 1}`, name: 'Montgomery Street', latitude: 37.789, longitude: -122.401,
             locationType: 1, routeIds: ['BART'],
-          }],
+          })),
           getStationPredictions: async () => ({
             freshness: 'fresh', producerTimestampSeconds: 1_000, receivedAtSeconds: 1_001,
             warnings: [], payload: [{ entityId: 'u1', stopId: 'S1', routeId: 'BART', tripId: 'T1', arrivalTimeSeconds: Math.floor(Date.now() / 1_000) + 60 }],
@@ -33,14 +33,17 @@ describe('Bay Area MCP rollout', () => {
             producerTimestampSeconds: 1_000,
             receivedAtSeconds: 1_001,
             warnings: [],
-            payload: [{ entityId: 'entity-1', vehicleId: 'vehicle-1', latitude: 37.77, longitude: -122.42 }],
+            payload: [
+              { entityId: 'entity-1', vehicleId: 'vehicle-1', routeId: 'BART', latitude: 37.77, longitude: -122.42 },
+              { entityId: 'entity-2', vehicleId: 'vehicle-2', routeId: 'MUNI', latitude: 37.78, longitude: -122.41 },
+            ],
           }),
         },
       },
     });
     const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown, context: ServerContext) => Promise<unknown> }> })._registeredTools;
     const result = await tools.get_vehicle_positions!.handler(
-      { city: 'sfbay' },
+      { city: 'sfbay', routeId: 'BART', limit: 1 },
       { mcpReq: { signal: new AbortController().signal } } as ServerContext,
     ) as { structuredContent: Record<string, unknown> };
 
@@ -49,6 +52,7 @@ describe('Bay Area MCP rollout', () => {
       attribution: { text: expect.stringContaining('511 SF Bay') },
       vehicles: [{ id: 'vehicle-1' }],
     });
+    expect((result.structuredContent.vehicles as unknown[])).toHaveLength(1);
 
     expect(Object.keys(tools)).toEqual(expect.arrayContaining([
       'search_sfbay_stations',
@@ -59,13 +63,12 @@ describe('Bay Area MCP rollout', () => {
     ]));
 
     const search = await tools.search_sfbay_stations!.handler(
-      { query: 'montgomery' },
+      { query: 'montgomery', limit: 25 },
       { mcpReq: { signal: new AbortController().signal } } as ServerContext,
     ) as { structuredContent: Record<string, unknown> };
-    expect(search.structuredContent).toMatchObject({
-      city: 'sfbay', results: [{ id: 'S1', routes: ['BART'] }],
-      attribution: { text: expect.stringContaining('511 SF Bay') },
-    });
+    expect(search.structuredContent).toMatchObject({ city: 'sfbay', attribution: { text: expect.stringContaining('511 SF Bay') } });
+    expect((search.structuredContent.results as Array<Record<string, unknown>>)[0]).toMatchObject({ id: 'S1', routes: ['BART'] });
+    expect((search.structuredContent.results as unknown[])).toHaveLength(25);
 
     const predictions = await tools.get_sfbay_station_predictions!.handler(
       { stationId: 'S1' },

@@ -72,9 +72,13 @@ describe('GTFS static primitives', () => {
       'routes.txt': 'route_id,route_short_name,route_long_name,route_type,route_color\nR1,N,Judah,0,0039A6\n',
       'trips.txt': 'route_id,service_id,trip_id\nR1,WK,T1\n',
       'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT1,25:00:00,25:00:30,P1,1\n',
+      'calendar.txt': 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWK,1,1,1,1,1,0,0,20261001,20261031\n',
+      'calendar_dates.txt': 'service_id,date,exception_type\nWK,20261019,1\n',
     }, { sourceVersion: 'sha256:fixture', generatedAt: '2026-10-17T00:00:00.000Z' });
 
     expect(artifact.routes[0]).toMatchObject({ id: 'R1', mode: 'tram' });
     expect(artifact.stopRoutes).toEqual({ P1: ['R1'], S1: ['R1'] });
+    expect(artifact.stopTimes).toEqual([expect.objectContaining({ tripId: 'T1', serviceId: 'WK', arrivalSeconds: 90000 })]);
+    expect(artifact.calendars!.WK).toMatchObject({ monday: true, startDate: '20261001' });
   });
 });

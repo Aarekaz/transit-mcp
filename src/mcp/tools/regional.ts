@@ -20,7 +20,7 @@ export function registerRegionalTools(server: McpServer, context: MetroMcpContex
     }),
   }, async ({ query, limit }, handlerContext) => withTransitErrors(async () => complete({
     city: 'sfbay' as const, query, attribution,
-    results: (await service().searchStations(query)).slice(0, limit).map(station => ({
+    results: (await service().searchStations(query, limit)).map(station => ({
       id: station.id, name: station.name, latitude: station.latitude, longitude: station.longitude, routes: station.routeIds,
     })),
   }), handlerContext.mcpReq.signal));
@@ -75,7 +75,7 @@ export function registerRegionalTools(server: McpServer, context: MetroMcpContex
       title: 'Regional vehicle positions',
       description: 'Get current vehicle positions for the San Francisco Bay Area regional transit network.',
       annotations: readOnlyLive('Regional vehicle positions'),
-      inputSchema: z.object({ city: z.literal('sfbay') }),
+      inputSchema: z.object({ city: z.literal('sfbay'), routeId: z.string().optional(), limit: z.number().int().min(1).max(500).default(200) }),
       outputSchema: z.object({
         city: z.literal('sfbay'),
         freshness: z.enum(['fresh', 'stale', 'expired', 'unavailable']),
@@ -95,7 +95,7 @@ export function registerRegionalTools(server: McpServer, context: MetroMcpContex
         })),
       }),
     },
-    async (_args, handlerContext) => withTransitErrors(async () => {
+    async ({ routeId, limit }, handlerContext) => withTransitErrors(async () => {
       const snapshot = await service().getVehiclePositions(Math.floor(Date.now() / 1_000));
       return complete({
         city: 'sfbay' as const,
@@ -105,7 +105,7 @@ export function registerRegionalTools(server: McpServer, context: MetroMcpContex
           : new Date(snapshot.producerTimestampSeconds * 1_000).toISOString(),
         warnings: snapshot.warnings,
         attribution: SFBAY_REGION.attribution,
-        vehicles: (snapshot.payload ?? []).map(vehicle => ({
+        vehicles: (snapshot.payload ?? []).filter(vehicle => routeId === undefined || vehicle.routeId === routeId).slice(0, limit).map(vehicle => ({
           id: vehicle.vehicleId ?? vehicle.entityId,
           label: vehicle.label ?? null,
           routeId: vehicle.routeId ?? null,

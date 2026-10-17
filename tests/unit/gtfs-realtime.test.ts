@@ -5,6 +5,7 @@ import { buildUpstreamRequest, redactUpstreamUrl } from '../../src/transit/gtfs/
 import { transit_realtime } from 'gtfs-realtime-bindings';
 import { decodeRealtimeFeed } from '../../src/transit/gtfs/realtime/decode';
 import { RegionalFeedHubCore } from '../../src/transit/gtfs/realtime/hub-core';
+import { pollAttemptState, safePollFailureReason } from '../../src/transit/gtfs/realtime/region-feed-hub';
 
 describe('GTFS realtime policy', () => {
   it('classifies producer timestamps without refreshing restored snapshots', () => {
@@ -100,11 +101,20 @@ describe('GTFS realtime policy', () => {
       producerTimestampSeconds: 1_000,
       receivedAtSeconds: 1_010,
       payload: { arrivals: 3 },
+      warnings: ['empty_feed'],
     });
 
-    expect(hub.read('trip_updates', 1_270)).toMatchObject({ freshness: 'fresh', payload: { arrivals: 3 } });
-    expect(hub.read('trip_updates', 1_271)).toMatchObject({ freshness: 'stale', warnings: ['stale_feed'] });
+    expect(hub.read('trip_updates', 1_270)).toMatchObject({ freshness: 'fresh', payload: { arrivals: 3 }, warnings: ['empty_feed'] });
+    expect(hub.read('trip_updates', 1_271)).toMatchObject({ freshness: 'stale' });
+    expect(hub.read('trip_updates', 1_271).warnings).toEqual(expect.arrayContaining(['empty_feed', 'stale_feed']));
     expect(hub.read('trip_updates', 1_481)).toMatchObject({ freshness: 'expired', payload: null, warnings: ['expired_feed'] });
     expect(hub.read('vehicle_positions', 1_000)).toMatchObject({ freshness: 'unavailable', payload: null });
+  });
+
+  it('accounts failed attempts against quota and never logs credential-bearing errors', () => {
+    expect(pollAttemptState('trip_updates', 1234)).toEqual({ 'polled:trip_updates': 1234 });
+    expect(safePollFailureReason(new Error('fetch https://api.511.org/?api_key=secret failed'))).toBe('upstream_request_failed');
+    expect(safePollFailureReason(new Error('upstream_body_too_large'))).toBe('upstream_body_too_large');
+    expect(safePollFailureReason(new Error('Malformed GTFS-Realtime feed'))).toBe('malformed_feed');
   });
 });

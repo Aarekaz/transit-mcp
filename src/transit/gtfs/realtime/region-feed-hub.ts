@@ -17,6 +17,16 @@ function polledKey(kind: RealtimeFeedKind): string {
   return `${POLLED_PREFIX}${kind}`;
 }
 
+export function pollAttemptState(kind: RealtimeFeedKind, nowSeconds: number): Record<string, number> {
+  return { [polledKey(kind)]: nowSeconds };
+}
+
+export function safePollFailureReason(error: unknown): string {
+  if (error instanceof Error && error.message === 'upstream_body_too_large') return error.message;
+  if (error instanceof Error && error.message === 'Malformed GTFS-Realtime feed') return 'malformed_feed';
+  return 'upstream_request_failed';
+}
+
 function payloadFor(kind: RealtimeFeedKind, feed: NormalizedRealtimeFeed): unknown[] {
   if (kind === 'trip_updates') return feed.tripUpdates;
   if (kind === 'vehicle_positions') return feed.vehicles;
@@ -78,6 +88,7 @@ export class RegionFeedHub implements DurableObject {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), spec.timeoutMs);
     try {
+      await this.#state.storage.put(pollAttemptState(spec.kind, nowSeconds));
       const upstream = buildUpstreamRequest(spec.url, this.#env.SF511_API_KEY!);
       const response = await fetch(upstream, { signal: controller.signal });
       if (!response.ok) throw new Error(`upstream_status_${response.status}`);
@@ -93,15 +104,20 @@ export class RegionFeedHub implements DurableObject {
           producerTimestampSeconds: decoded.producerTimestampSeconds,
           receivedAtSeconds: nowSeconds,
           payload: payloadFor(spec.kind, decoded),
+          warnings: decoded.warnings,
         },
-        [polledKey(spec.kind)]: nowSeconds,
       });
     } catch (error) {
+      const reason = safePollFailureReason(error);
+      if (reason === 'malformed_feed') {
+        const existing = await this.#state.storage.get<FeedSnapshot<unknown[]>>(snapshotKey(spec.kind));
+        if (existing) await this.#state.storage.put(snapshotKey(spec.kind), { ...existing, warnings: [...new Set([...(existing.warnings ?? []), reason])] });
+      }
       console.warn(JSON.stringify({
         event: 'regional_feed_poll_failed',
         region: 'sfbay',
         feed: spec.kind,
-        reason: error instanceof Error ? error.message : 'unknown',
+        reason,
       }));
     } finally {
       clearTimeout(timeout);

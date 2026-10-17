@@ -1,6 +1,6 @@
 import { compileGtfsStatic, type GtfsStaticFiles } from '../src/transit/gtfs/static/compiler';
 
-const REQUIRED_FILES = ['stops.txt', 'routes.txt', 'trips.txt', 'stop_times.txt'] as const;
+const REQUIRED_FILES = ['stops.txt', 'routes.txt', 'trips.txt', 'stop_times.txt', 'calendar.txt', 'calendar_dates.txt'] as const;
 const outputPath = process.argv[2] ?? '.artifacts/sfbay-current.json';
 const inputDirectory = process.env.SFBAY_GTFS_DIRECTORY;
 

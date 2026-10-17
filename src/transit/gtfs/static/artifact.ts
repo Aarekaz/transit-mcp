@@ -25,6 +25,19 @@ export interface StaticTransitArtifact {
   stops: ArtifactStop[];
   routes: ArtifactRoute[];
   stopRoutes: Record<string, string[]>;
+  stopTimes?: ScheduledStopTime[];
+  calendars?: Record<string, ServiceCalendar>;
+}
+
+export interface ScheduledStopTime {
+  tripId: string; routeId: string; serviceId: string; stopId: string;
+  arrivalSeconds: number; departureSeconds: number;
+}
+
+export interface ServiceCalendar {
+  monday: boolean; tuesday: boolean; wednesday: boolean; thursday: boolean;
+  friday: boolean; saturday: boolean; sunday: boolean;
+  startDate: string; endDate: string; exceptions: Record<string, 1 | 2>;
 }
 
 type ArtifactInput = Omit<StaticTransitArtifact, 'schemaVersion'>;
@@ -46,6 +59,8 @@ export function createStaticArtifact(input: ArtifactInput): StaticTransitArtifac
     stops: [...input.stops].sort((left, right) => left.id.localeCompare(right.id)),
     routes: [...input.routes].sort((left, right) => left.id.localeCompare(right.id)),
     stopRoutes: sortedRecord(input.stopRoutes),
+    ...(input.stopTimes ? { stopTimes: [...input.stopTimes].sort((a, b) => a.stopId.localeCompare(b.stopId) || a.arrivalSeconds - b.arrivalSeconds || a.tripId.localeCompare(b.tripId)) } : {}),
+    ...(input.calendars ? { calendars: Object.fromEntries(Object.entries(input.calendars).sort(([a], [b]) => a.localeCompare(b))) } : {}),
   };
 }
 

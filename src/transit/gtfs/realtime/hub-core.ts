@@ -5,6 +5,7 @@ export interface FeedSnapshot<T> {
   producerTimestampSeconds?: number;
   receivedAtSeconds: number;
   payload: T;
+  warnings?: string[];
 }
 
 export interface FeedRead<T> {
@@ -55,7 +56,7 @@ export class RegionalFeedHubCore {
       producerTimestampSeconds: snapshot.producerTimestampSeconds,
       receivedAtSeconds: snapshot.receivedAtSeconds,
       payload: snapshot.payload,
-      warnings: freshness === 'stale' ? ['stale_feed'] : [],
+      warnings: [...(snapshot.warnings ?? []), ...(freshness === 'stale' ? ['stale_feed'] : [])],
     };
   }
 }
