@@ -119,6 +119,48 @@ afterEach(() => {
 });
 
 describe('assembled MCP Worker', () => {
+  it('simulates Bay Area tool discovery and a station search through the MCP wire', async () => {
+    const artifact = {
+      schemaVersion: 1,
+      region: 'sfbay',
+      sourceVersion: 'wire-fixture',
+      generatedAt: new Date().toISOString(),
+      stops: [{ id: 'S1', name: 'Montgomery Street', latitude: 37.789, longitude: -122.401, locationType: 1 }],
+      routes: [{ id: 'BART', shortName: 'Yellow', longName: 'Antioch–SFO', mode: 'rail' }],
+      stopRoutes: { S1: ['BART'] },
+    };
+    const compressed = new Blob([JSON.stringify(artifact)])
+      .stream()
+      .pipeThrough(new CompressionStream('gzip'));
+    await env.TRANSIT_ARTIFACTS!.put(
+      'artifacts/sfbay/current.json.gz',
+      await new Response(compressed).arrayBuffer(),
+    );
+    const sfEnv = { ...env, SFBAY_MODE: 'on' as const };
+    const context = createExecutionContext();
+
+    const listResponse = await worker.fetch(await modernMcpRequest('tools/list', {}, {
+      headers: { 'CF-Connecting-IP': '198.51.100.240' },
+    }), sfEnv, context);
+    const listed = onlyResult(await readMcpResponse(listResponse));
+    expect((listed.tools as Array<{ name: string }>).map(tool => tool.name)).toEqual(
+      expect.arrayContaining(['search_sfbay_stations', 'get_sfbay_station_predictions', 'get_sfbay_routes', 'get_sfbay_incidents', 'get_vehicle_positions']),
+    );
+
+    const callResponse = await worker.fetch(await modernMcpRequest('tools/call', {
+      name: 'search_sfbay_stations',
+      arguments: { query: 'montgomery', limit: 5 },
+    }, {
+      headers: { 'CF-Connecting-IP': '198.51.100.240' },
+    }), sfEnv, context);
+    const called = onlyResult(await readMcpResponse(callResponse));
+    expect(called.structuredContent).toMatchObject({
+      city: 'sfbay',
+      results: [{ id: 'S1', name: 'Montgomery Street', routes: ['BART'] }],
+      attribution: { text: expect.stringContaining('511 SF Bay') },
+    });
+  });
+
   it('serves anonymous modern server/discover without an authentication challenge', async () => {
     const response = await workerFetch(await modernMcpRequest('server/discover'));
 
