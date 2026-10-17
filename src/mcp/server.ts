@@ -83,13 +83,19 @@ function buildMetroMcpServer(context: MetroMcpContext): {
     bind: serverContext => serverContext.mcpReq.method,
   });
 
+  const bayAreaEnabled = normalizeRegionMode(context.env.SFBAY_MODE) === 'on';
   const server = new McpServer(
     {
       ...SERVER_IDENTITY,
+      description: bayAreaEnabled
+        ? 'Real-time DC, NYC, and San Francisco Bay Area transit arrivals, service alerts, stations, routes, and vehicles.'
+        : SERVER_IDENTITY.description,
       icons: SERVER_IDENTITY.icons.map(icon => ({ ...icon, sizes: [...icon.sizes] })),
     },
     {
-      instructions: SERVER_INSTRUCTIONS,
+      instructions: bayAreaEnabled
+        ? `${SERVER_INSTRUCTIONS}\nBay Area: use the five sfbay-specific tools for regional stations, arrivals, routes, alerts, and vehicles; every result includes 511 SF Bay attribution and freshness.`
+        : SERVER_INSTRUCTIONS,
       capabilities: {
         extensions: {
           'io.modelcontextprotocol/ui': {
@@ -111,7 +117,7 @@ function buildMetroMcpServer(context: MetroMcpContext): {
   );
 
   registerMetroFeatures(server, context, stateCodec);
-  if (normalizeRegionMode(context.env.SFBAY_MODE) === 'on') {
+  if (bayAreaEnabled) {
     registerRegionalTools(server, context);
   }
   registerTransitBoardApp(server, context);

@@ -8,7 +8,7 @@ import type { ArtifactRoute, ArtifactStop } from '../transit/gtfs/static/artifac
 export type RegionalStation = ArtifactStop & { routeIds: string[] };
 
 export interface RegionalTransitService {
-  searchStations(query: string): Promise<RegionalStation[]>;
+  searchStations(query: string, limit?: number): Promise<RegionalStation[]>;
   getStationPredictions(stationId: string, nowSeconds: number): Promise<FeedRead<NormalizedStopUpdate[]>>;
   getRoutes(): Promise<ArtifactRoute[]>;
   getAlerts(nowSeconds: number): Promise<FeedRead<NormalizedAlert[]>>;
