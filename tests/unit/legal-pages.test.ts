@@ -37,12 +37,12 @@ const legalPages = [
   {
     slug: 'privacy',
     title: /privacy/i,
-    lastUpdated: { datetime: '2026-08-21', text: 'August 21, 2026' },
+    lastUpdated: { datetime: '2026-10-18', text: 'October 18, 2026' },
   },
   {
     slug: 'terms',
     title: /terms/i,
-    lastUpdated: { datetime: '2026-08-21', text: 'August 21, 2026' },
+    lastUpdated: { datetime: '2026-10-18', text: 'October 18, 2026' },
   },
   {
     slug: 'support',

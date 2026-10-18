@@ -42,7 +42,7 @@
       <p class="eyebrow">Service information</p>
       <h1>Privacy, in plain language.</h1>
       <p class="lede">Transit MCP is an anonymous, read-only transit information service. You can use it without creating an account. This page explains what a request carries and where that information can go.</p>
-      <p class="page-meta">Last updated <time datetime="2026-08-21">August 21, 2026</time></p>
+      <p class="page-meta">Last updated <time datetime="2026-10-18">October 18, 2026</time></p>
     </header>
 
     <article class="legal-copy">
@@ -50,7 +50,7 @@
         <h2 id="request-data">What a transit request includes</h2>
         <p>Your MCP client sends Transit MCP a request body with a tool name and the public transit arguments needed to answer it. Depending on the tool, those inputs can include a city, station name or code, route or line identifier, stop identifier, or a location and search radius. The Worker processes request bodies and public transit arguments only to answer the request.</p>
         <p>Transit MCP sends the necessary transit inputs to WMATA for DC requests and MTA for NYC requests through server-to-server requests. It does not forward your IP address or conversation to those transit providers. It returns the resulting public transit information to your client. Do not include secrets or unrelated personal information in transit inputs.</p>
-        <p>SF Bay support is in development and has no public tools. Its dark pipeline reads 511 SF Bay feeds independently of user requests for validation and retains 511 SF Bay and participating-operator attribution.</p>
+        <p>SF Bay support is in development and remains unavailable. The global tools read versioned schedules and snapshots; they do not fetch transit providers during your request. The dark pipeline can read 511 SF Bay feeds independently for validation and retains 511 SF Bay and participating-operator attribution.</p>
       </section>
 
       <section aria-labelledby="accounts-storage">
@@ -67,8 +67,9 @@
       </section>
 
       <section aria-labelledby="request-state">
-        <h2 id="request-state">Short-lived station-selection state</h2>
-        <p>When a station name is ambiguous, a client-held signed request state can persist for up to five minutes. It contains only public station-selection fields: the tool, city, normalized query, and offered station IDs. It creates no server-side account or session.</p>
+        <h2 id="request-state">Short-lived transit-selection state</h2>
+        <p>When a station or journey endpoint is ambiguous, client-held signed request state can persist for up to five minutes. Legacy state contains public station-selection fields: the tool, city, normalized query, and offered station IDs. Global journey selection contains the tool, a request hash, schedule version, and offered endpoint references. It creates no server-side account or session.</p>
+        <p>Coordinates, place queries, transit references, and itineraries are processed only to answer your request and are excluded from application telemetry. Personal aliases such as home and work are resolved by your client and are not stored by Transit MCP.</p>
       </section>
 
       <section aria-labelledby="provider-logs">

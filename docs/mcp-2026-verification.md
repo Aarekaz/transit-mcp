@@ -2,6 +2,8 @@
 
 Release candidate: Metro MCP `6.0.0`
 
+Historical record: the global transit branch now has 18 tools and a managed local conformance runner. Use [global transit verification](global-transit-verification.md) for current commands, results, and blocking launch gates. The external-target commands and 13-tool snapshot below describe the earlier release and are not current acceptance evidence.
+
 Protocol revision: MCP `2026-07-28`
 
 Metro MCP is anonymous: `https://metro-mcp.anuragd.me/mcp` requires no login. No client credentials, bearer token, or OAuth flow is required; stale `Authorization` headers are ignored.

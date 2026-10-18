@@ -52,7 +52,7 @@ describe('MCP Apps build pipeline', () => {
     );
     const typeCheckIndex = workflow.indexOf('bun run type-check');
     const testIndex = workflow.indexOf('bun run test');
-    const dryRunIndex = workflow.indexOf('bunx wrangler deploy --dry-run');
+    const dryRunIndex = workflow.indexOf('node node_modules/wrangler/bin/wrangler.js deploy --dry-run');
 
     expect(buildIndex).toBeGreaterThan(-1);
     expect(artifactCheckIndex).toBeGreaterThan(buildIndex);

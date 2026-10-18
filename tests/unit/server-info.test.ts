@@ -27,12 +27,12 @@ describe('getServerInfo', () => {
     expect(body.endpoints).not.toHaveProperty('discovery');
     expect(body.stats).toMatchObject({
       citiesSupported: 2,
-      toolsAvailable: 13,
-      resourcesAvailable: 3,
+      toolsAvailable: 18,
+      resourcesAvailable: 4,
       promptsAvailable: 3,
     });
-    expect(body.tools).toHaveLength(13);
-    expect(new Set(body.tools)).toHaveLength(13);
+    expect(body.tools).toHaveLength(18);
+    expect(new Set(body.tools)).toHaveLength(18);
     expect(body.transport).toMatchObject({
       type: 'streamable-http',
       stateless: true,
@@ -63,6 +63,11 @@ describe('getServerInfo', () => {
       'get_train_positions',
       'get_station_transfers',
       'get_route_info',
+      'find_transit',
+      'plan_trip',
+      'get_departures',
+      'get_service_status',
+      'get_vehicle_status',
     ]);
   });
 

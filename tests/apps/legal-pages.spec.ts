@@ -12,13 +12,13 @@ const pages = [
     slug: 'privacy',
     heading: 'Privacy',
     content: [/without creating an account/i, /WMATA/i, /MTA/i, /does not sell/i],
-    lastUpdated: { datetime: '2026-08-21', text: 'August 21, 2026' },
+    lastUpdated: { datetime: '2026-10-18', text: 'October 18, 2026' },
   },
   {
     slug: 'terms',
     heading: 'Terms of Use',
     content: [/public, read-only informational service/i, /fair use/i, /emergency/i],
-    lastUpdated: { datetime: '2026-08-21', text: 'August 21, 2026' },
+    lastUpdated: { datetime: '2026-10-18', text: 'October 18, 2026' },
   },
   {
     slug: 'support',
