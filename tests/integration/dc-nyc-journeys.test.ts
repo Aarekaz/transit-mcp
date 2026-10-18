@@ -60,6 +60,11 @@ describe('DC and NYC synthetic acceptance corpus through the five global tools',
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent.status).toBe('scheduled_only');
     expect(result.structuredContent.itineraries.length).toBeGreaterThan(0);
+    for (const raw of result.structuredContent.itineraries) {
+      const candidate = itinerarySchema.parse(raw);
+      expect(candidate.legs.every(leg => leg.validatorOutcome === 'valid')).toBe(true);
+      expect(await validateItinerary(candidate as Parameters<typeof validateItinerary>[0], f.source)).toMatchObject({ valid: true, reasons: [] });
+    }
     const itinerary = itinerarySchema.parse(result.structuredContent.itineraries[0]);
     const legs = itinerary.legs.filter(leg => leg.kind === 'transit');
     expect(legs.map(leg => parseTransitRef(leg.tripRef)!.id)).toEqual(journey.want.trips);

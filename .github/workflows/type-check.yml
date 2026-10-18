@@ -16,6 +16,11 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Setup Node for Wrangler and pinned conformance
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
@@ -37,5 +42,37 @@ jobs:
       - name: MCP Apps browser acceptance
         run: bun run test:apps
 
-      - name: Worker bundle dry-run
-        run: bunx wrangler deploy --dry-run --outdir /tmp/metro-mcp-dry-run
+      - name: Production and preview bundle dry-runs (no deployment)
+        run: |
+          production_out=$(mktemp -d "$RUNNER_TEMP/transit-production.XXXXXX")
+          preview_out=$(mktemp -d "$RUNNER_TEMP/transit-preview.XXXXXX")
+          node node_modules/wrangler/bin/wrangler.js deploy --dry-run --env "" --outdir "$production_out"
+          node node_modules/wrangler/bin/wrangler.js deploy --dry-run --env preview --outdir "$preview_out"
+        env:
+          WRANGLER_SEND_METRICS: 'false'
+
+      - name: Three-city synthetic journey and prompt stress
+        run: |
+          bunx vitest run --config vitest.config.ts tests/integration/sfbay-journeys.test.ts tests/integration/dc-nyc-journeys.test.ts tests/unit/prompt-evals.test.ts tests/unit/itinerary-validator.test.ts
+          bun scripts/run-prompt-evals.ts --dry-run
+          bun tests/planner-benchmark.ts
+
+      - name: Frozen MCP 2026-07-28 product profile (raw official results separate)
+        run: bash scripts/run-conformance.sh
+        env:
+          TMPDIR: ${{ runner.temp }}
+
+      - name: Retain required and optional conformance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-mcp-conformance
+          path: |
+            ${{ runner.temp }}/transit-mcp-conformance-*/requirements.txt
+            ${{ runner.temp }}/transit-mcp-conformance-*/conformance.log
+            ${{ runner.temp }}/transit-mcp-conformance-*/run.json
+            ${{ runner.temp }}/transit-mcp-conformance-*/summary.json
+            ${{ runner.temp }}/transit-mcp-conformance-*/product-profile.json
+            ${{ runner.temp }}/transit-mcp-conformance-*/product-unit.json
+            ${{ runner.temp }}/transit-mcp-conformance-*/product-workers.json
+          if-no-files-found: warn

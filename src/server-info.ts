@@ -45,8 +45,8 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
       totalStations: 598,
       totalLines: 35,
       citiesSupported: 2,
-      toolsAvailable: 13,
-      resourcesAvailable: 3,
+      toolsAvailable: 18,
+      resourcesAvailable: 4,
       promptsAvailable: 3
     },
     endpoints: {
@@ -76,7 +76,12 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
       'get_bus_positions',
       'get_train_positions',
       'get_station_transfers',
-      'get_route_info'
+      'get_route_info',
+      'find_transit',
+      'plan_trip',
+      'get_departures',
+      'get_service_status',
+      'get_vehicle_status'
     ]
   };
 }

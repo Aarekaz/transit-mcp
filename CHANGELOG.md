@@ -9,12 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- SF Bay support is in development. Versioned 511 SF Bay regional GTFS artifacts and the quota-aware realtime feed hub run in dark mode without registering public tools.
+- SF Bay support is in development. Versioned 511 SF Bay regional GTFS artifacts and the quota-aware realtime feed hub support dark validation; current authoritative-feed acceptance is still pending.
 - Dark-mode results retain freshness metadata and attribution to 511 SF Bay and participating operators.
+- Five always-registered global tools, deterministic planning, independent itinerary validation, and synthetic SF/DC/NYC corpora. The frozen local MCP conformance runner reports required failures separately from optional extensions. See `docs/global-transit-verification.md` for the unpassed launch gates.
 
 ### Changed
 
-- Production and preview now keep `SFBAY_MODE=dark`. Transit MCP continues to expose the existing 13 DC and NYC tools while SF Bay development data is ingested and validated off the public MCP surface.
+- Checked-in production and preview configurations keep `SFBAY_MODE=dark`; no deployment is implied. This branch registers 18 tools (13 compatible plus five global) and four transit resource templates. DC/NYC global planning defaults off independently of the legacy tools.
 
 - Rebranded to Transit MCP with `https://transitmcp.com` as the canonical origin. Pages, `/info` links, and the reported MCP server name (`transit-mcp`) now use the new brand.
 - MCP trust checks accept requests on the canonical origin or on any HTTPS, default-port hostname in `MCP_ALLOWED_HOSTNAMES`. Production allowlists `transitmcp.com` and `metro-mcp.anuragd.me`, so `https://metro-mcp.anuragd.me/mcp` keeps working.
@@ -22,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Workers Analytics Engine usage counts (`ANALYTICS` binding, `mcp_usage` dataset): one data point per `initialize` and `tools/call` built only from allowlisted telemetry. Telemetry gains `clientName` and `sessionId`, and the privacy page discloses both and the three-month store.
+- Workers Analytics Engine usage counts (`ANALYTICS` binding, `mcp_usage` dataset): one data point per legacy `initialize` and `tools/call` built only from finite allowlisted categories. Session and correlation identifiers are excluded; the index is empty. Counts describe recorded requests, not unique users or proven successful answers.
 - Server identity metadata (`title`, `description`, `websiteUrl`, `icons`) and model-facing `instructions` in `initialize` and `server/discover`.
 - `server.json` for the official MCP Registry (`com.transitmcp/transit-mcp`, streamable HTTP at `https://transitmcp.com/mcp`).
 

@@ -68,8 +68,10 @@ describe('release operator documentation', () => {
       }
     }
 
-    expect(readme).toMatch(/13 MCP tools/i);
-    expect(publicDocs).toMatch(/13 Model Context Protocol tools/i);
+    expect(readme).toMatch(/18 MCP tools/i);
+    expect(publicDocs).toMatch(/18 Model Context Protocol tools/i);
+    expect(sfBayRollout).not.toMatch(/without registering public tools|on.*registers tools|current\.json\.gz/);
+    expect(readme).toContain('docs/global-transit-verification.md');
     expect(sfBayRollout).toMatch(/SF Bay support is in development/i);
     expect(sfBayRollout).toContain('511 SF Bay');
     expect(privacy).toContain('511 SF Bay');
@@ -200,7 +202,7 @@ describe('release operator documentation', () => {
       .toBeGreaterThan(workflow.indexOf('git diff --exit-code -- public/apps/transit-board.html'));
     expect(workflow.indexOf('bun run test:apps'))
       .toBeGreaterThan(workflow.indexOf('bunx playwright install --with-deps chromium'));
-    expect(workflow.indexOf('bunx wrangler deploy --dry-run'))
+    expect(workflow.indexOf('node node_modules/wrangler/bin/wrangler.js deploy --dry-run'))
       .toBeGreaterThan(workflow.indexOf('bun run test:apps'));
     expect(appsHostHtml).toMatch(
       /<iframe[^>]+id="app-frame"[^>]+sandbox="allow-scripts"[^>]+data-resource="\/apps\/transit-board\.html"/,

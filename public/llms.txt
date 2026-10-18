@@ -16,6 +16,8 @@
 - Stations: station search, listing by line, full station lists, and transfers (`search_stations`, `get_stations_by_line`, `get_all_stations`, `get_station_transfers`).
 - Routes: NYC Subway route detail, DC Metrobus routes and stops (`get_route_info`, `get_bus_routes`, `get_bus_stops`).
 - Live positions: DC Metro train positions and Metrobus vehicles (`get_train_positions`, `get_bus_positions`).
+- Global capabilities: `find_transit`, `plan_trip`, `get_departures`, `get_service_status`, `get_vehicle_status`. These five tools are registered alongside the 13 compatible tools. Registration is independent of data availability: SF is dark and DC/NYC global planning defaults off.
+- Use `plan_trip` for every journey; never assemble a route from departure boards. Preserve `realtime`, `scheduled_only`, or `unavailable` status and source timestamps. Global tools have no Transit Board renderer.
 
 Public results come from official WMATA (DC Metro and Metrobus) and MTA (NYC Subway) feeds. The dark SF Bay development pipeline uses 511 SF Bay feeds and retains attribution to 511 SF Bay and participating operators.
 

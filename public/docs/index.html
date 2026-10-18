@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Transit MCP docs · Live DC and NYC data</title>
-  <meta name="description" content="Connect any MCP client to 13 live transit tools for DC Metro and NYC Subway. SF Bay support is in development.">
+  <meta name="description" content="Connect any MCP client to free DC Metro and NYC Subway tools. Global capabilities report coverage availability; SF Bay support is in development.">
   <link rel="canonical" href="https://transitmcp.com/docs/">
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
 
@@ -13,14 +13,14 @@
   <meta property="og:site_name" content="Transit MCP">
   <meta property="og:url" content="https://transitmcp.com/docs/">
   <meta property="og:title" content="Transit MCP docs · Live DC and NYC data">
-  <meta property="og:description" content="Connect any MCP client to 13 live transit tools for DC Metro and NYC Subway. SF Bay support is in development.">
+  <meta property="og:description" content="Connect any MCP client to free DC Metro and NYC Subway tools. Global capabilities report coverage availability; SF Bay support is in development.">
   <meta property="og:image" content="https://transitmcp.com/og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="Transit MCP: live DC and NYC transit data">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Transit MCP docs · Live DC and NYC data">
-  <meta name="twitter:description" content="Connect any MCP client to 13 live transit tools for DC Metro and NYC Subway. SF Bay support is in development.">
+  <meta name="twitter:description" content="Connect any MCP client to free DC Metro and NYC Subway tools. Global capabilities report coverage availability; SF Bay support is in development.">
   <meta name="twitter:image" content="https://transitmcp.com/og-image.png">
   <script type="application/ld+json">
   {
@@ -30,7 +30,7 @@
     "headline": "Transit MCP docs",
     "url": "https://transitmcp.com/docs/",
     "mainEntityOfPage": "https://transitmcp.com/docs/",
-    "description": "Client setup, endpoints, 13 MCP tools, and data sources for real-time DC Metro and NYC Subway transit data.",
+    "description": "Client setup, endpoints, 13 compatible DC/NYC tools and five global capabilities with explicit coverage availability.",
     "image": "https://transitmcp.com/og-image.png",
     "inLanguage": "en",
     "author": {
@@ -622,7 +622,7 @@
         <div class="status-row"><span>Also available at</span><strong>metro-mcp.anuragd.me</strong></div>
         <div class="status-row"><span>Transport</span><strong>Streamable HTTP</strong></div>
         <div class="status-row"><span>Coverage</span><strong>2 US regions</strong></div>
-        <div class="status-row"><span>Tools</span><strong>13 Model Context Protocol tools</strong></div>
+        <div class="status-row"><span>Tools</span><strong>18 Model Context Protocol tools</strong></div>
       </aside>
     </header>
 
@@ -705,7 +705,8 @@
             </div>
             <div class="tool-card">
               <h3>San Francisco Bay Area</h3>
-              <p>SF Bay support is in development. The dark rollout validates regional stops, arrivals, routes, alerts, and vehicles without registering public tools. Data attribution remains with 511 SF Bay and participating operators.</p>
+              <p>SF Bay support is in development. Five global tools are always registered: <code>find_transit</code>, <code>plan_trip</code>, <code>get_departures</code>, <code>get_service_status</code>, and <code>get_vehicle_status</code>. Availability depends on validated data and rollout gates; SF remains dark and DC/NYC global planning defaults off. The 13 legacy DC/NYC tools remain supported. Data attribution remains with 511 SF Bay and participating operators.</p>
+              <p>Use <code>plan_trip</code> for journeys. Results distinguish realtime, scheduled-only, and unavailable data, with source timestamps and explicit reasons. Never infer a journey from departure boards. Global tools have text and structured results; the Transit Board enhancement covers only the 13 legacy tools.</p>
             </div>
             <div class="tool-card">
               <h3>Progress and safety hints</h3>
