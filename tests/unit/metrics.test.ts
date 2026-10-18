@@ -14,6 +14,49 @@ function envWithDataset(writeDataPoint: (point: unknown) => void): Env {
 }
 
 describe('recordMcpUsage', () => {
+  it.each(['legacy', 'modern'] as const)('does not count a rejected %s initialize before SDK era classification', async protocol => {
+    const points: unknown[] = [];
+    const env = createMockEnv({ ANALYTICS: { writeDataPoint: point => points.push(point) } as AnalyticsEngineDataset });
+    const telemetry: TelemetryInput = {};
+    const headers = new Headers({ Host: 'metro-mcp.anuragd.me', 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', Origin: 'https://untrusted.example' });
+    if (protocol === 'modern') headers.set('MCP-Protocol-Version', '2026-07-28');
+    const response = await handleMcpRequest(new Request('https://metro-mcp.anuragd.me/mcp', {
+      method: 'POST', headers,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+        protocolVersion: protocol === 'modern' ? '2026-07-28' : '2025-06-18', capabilities: {}, clientInfo: { name: 'ChatGPT', version: '1' },
+      } }),
+    }), env, undefined, telemetry);
+    await response.text();
+    expect(response.status).toBe(403);
+    expect(telemetry.mcpMethod).toBe('initialize');
+    expect(telemetry.era).toBeUndefined();
+    recordMcpUsage(env, { ...telemetry, status: response.status });
+    expect(points).toEqual([]);
+  });
+
+  it('records initialize only after the real handler confirms the legacy era', async () => {
+    const points: unknown[] = [];
+    const env = createMockEnv({ ANALYTICS: { writeDataPoint: point => points.push(point) } as AnalyticsEngineDataset });
+    const telemetry: TelemetryInput = {};
+    const response = await handleMcpRequest(new Request('https://metro-mcp.anuragd.me/mcp', {
+      method: 'POST', headers: { Host: 'metro-mcp.anuragd.me', 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+        protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'ChatGPT', version: '1' },
+      } }),
+    }), env, undefined, telemetry);
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(telemetry.era).toBe('legacy');
+    recordMcpUsage(env, { ...telemetry, status: response.status });
+    expect(points).toEqual([{ indexes: [''], blobs: ['initialize', '', 'ChatGPT', 'production', '2xx'], doubles: [0] }]);
+  });
+
+  it.each([undefined, null, 'invalid', 'modern'])('rejects initialize without affirmative legacy era (%s)', era => {
+    const points: unknown[] = [];
+    recordMcpUsage(envWithDataset(point => points.push(point)), { mcpMethod: 'initialize', era, status: 200 });
+    expect(points).toEqual([]);
+  });
+
   it('does not turn mismatched headers or malformed envelopes into recorded tool calls', async () => {
     const points: unknown[] = [];
     const env = createMockEnv({ ANALYTICS: { writeDataPoint: point => points.push(point) } as AnalyticsEngineDataset });
@@ -22,7 +65,7 @@ describe('recordMcpUsage', () => {
     } })]) {
       const telemetry: TelemetryInput = {};
       const response = await handleMcpRequest(new Request('https://metro-mcp.anuragd.me/mcp', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': 'tools/call', 'Mcp-Name': 'plan_trip' }, body,
+        method: 'POST', headers: { Host: 'metro-mcp.anuragd.me', 'Content-Type': 'application/json', Accept: 'application/json', 'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': 'tools/call', 'Mcp-Name': 'plan_trip' }, body,
       }), env, undefined, telemetry);
       await response.text();
       recordMcpUsage(env, telemetry);
@@ -46,10 +89,11 @@ describe('recordMcpUsage', () => {
     });
   });
 
-  it('records initialize with the client name', () => {
+  it('records confirmed legacy initialize with the client name', () => {
     const writeDataPoint = vi.fn();
     recordMcpUsage(envWithDataset(writeDataPoint), {
       mcpMethod: 'initialize',
+      era: 'legacy',
       clientName: 'ChatGPT',
       status: 200,
     });
@@ -137,6 +181,8 @@ describe('anonymous usage reporting', () => {
     expect(usage, 'usage query module must exist').toBeDefined();
     const sql = usage!.buildUsageQuery({ start: '2026-10-01', end: '2026-10-03', environment: 'production', excludeClients: ['transit-prompt-evals'] });
     expect(sql).toMatch(/^SELECT /);
+    expect(sql).toContain("SELECT formatDateTime(timestamp, '%Y-%m-%d', 'UTC') AS day, blob1 AS method");
+    expect(sql).not.toMatch(/\btoDate\s*\(/i);
     expect(sql).toContain('SUM(_sample_interval)');
     expect(sql).toContain("blob1 IN ('tools/call', 'initialize')");
     expect(sql).toContain("blob4 = 'production'");

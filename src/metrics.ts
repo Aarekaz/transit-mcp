@@ -28,7 +28,8 @@ export function recordMcpUsage(env: Env, telemetry: TelemetryInput): void {
 
     const safe = sanitizeTelemetry(telemetry);
     if (safe.mcpMethod !== 'tools/call' && safe.mcpMethod !== 'initialize') return;
-    if (safe.mcpMethod === 'initialize' && safe.era === 'modern') return;
+    // Captured method text can precede SDK classification or a rejection.
+    if (safe.mcpMethod === 'initialize' && safe.era !== 'legacy') return;
 
     dataset.writeDataPoint({
       indexes: [''],

@@ -31,7 +31,7 @@ export function buildUsageQuery(options: UsageQueryOptions): string {
   if (!TELEMETRY_ENVIRONMENTS.includes(options.environment as typeof TELEMETRY_ENVIRONMENTS[number])) throw new Error('Select an explicit supported environment');
   const excluded = options.excludeClients ?? [];
   if (excluded.some(client => !TELEMETRY_CLIENTS.includes(client as typeof TELEMETRY_CLIENTS[number]))) throw new Error('Only documented client categories can be excluded');
-  return `SELECT toDate(timestamp) AS day, blob1 AS method,
+  return `SELECT formatDateTime(timestamp, '%Y-%m-%d', 'UTC') AS day, blob1 AS method,
   ${categorySql('blob2', TELEMETRY_TOOLS)} AS tool,
   ${categorySql('blob3', TELEMETRY_CLIENTS)} AS client,
   ${categorySql('blob4', TELEMETRY_ENVIRONMENTS)} AS environment,
