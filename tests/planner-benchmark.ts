@@ -1,5 +1,5 @@
 import { planJourney } from '../src/transit/planner/plan';
-import { at, plannerFixture, plannerInput, transferInput } from './helpers/planner-fixture';
+import { at, colocatedInput, entranceInput, plannerFixture, plannerInput, transferInput } from './helpers/planner-fixture';
 
 // Small deterministic corpus benchmark; fixture construction is excluded but
 // decoding, routing and independent validation are included in every sample.
@@ -7,7 +7,9 @@ const input = plannerInput();
 input.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\nT,09:00:00,10:00:00,300,1\n';
 const transfer = transferInput();
 transfer.files['trips.txt'] = transfer.files['trips.txt'].replaceAll(',block', ',');
-const corpus = await Promise.all([plannerFixture(), plannerFixture(transfer), plannerFixture(input), plannerFixture(transferInput())]);
+const colocated = await plannerFixture(colocatedInput()); colocated.query.maxWalkMetres = 800;
+const entrances = await plannerFixture(entranceInput()); entrances.query.maxWalkMetres = 100;
+const corpus = [...await Promise.all([plannerFixture(), plannerFixture(transfer), plannerFixture(input), plannerFixture(transferInput())]), colocated, entrances];
 const samples: number[] = [];
 const baseline = process.memoryUsage();
 let peakHeap = baseline.heapUsed, peakExternal = baseline.external, peakEstimate = 0;
