@@ -4,6 +4,9 @@ import { CLIENT_CAPABILITIES_META_KEY } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import worker from '../../src/index';
+import { compileSchedule } from '../../src/transit/gtfs/static/compiler';
+import { StaticArtifactStore } from '../../src/transit/gtfs/realtime/snapshot-store';
+import { SFBAY_COVERAGE } from '../../src/regions/sfbay';
 
 import {
   legacyMcpRequest,
@@ -119,22 +122,19 @@ afterEach(() => {
 
 describe('assembled MCP Worker', () => {
   it('simulates Bay Area tool discovery and a station search through the MCP wire', async () => {
-    const artifact = {
-      schemaVersion: 1,
-      region: 'sfbay',
-      sourceVersion: 'wire-fixture',
-      generatedAt: new Date().toISOString(),
-      stops: [{ id: 'S1', name: 'Montgomery Street', latitude: 37.789, longitude: -122.401, locationType: 1 }],
-      routes: [{ id: 'BART', shortName: 'Yellow', longName: 'Antioch–SFO', mode: 'rail' }],
-      stopRoutes: { S1: ['BART'] },
-    };
-    const compressed = new Blob([JSON.stringify(artifact)])
-      .stream()
-      .pipeThrough(new CompressionStream('gzip'));
-    await env.TRANSIT_ARTIFACTS!.put(
-      'artifacts/sfbay/current.json.gz',
-      await new Response(compressed).arrayBuffer(),
-    );
+    const artifact = await compileSchedule({ coverage: SFBAY_COVERAGE, feedId: 'sf511',
+      window: { startDate: '20260101', endDate: '20261231' }, source: { url: 'https://511.org/open-data/transit', retrievedAt: '2026-10-18T00:00:00Z' },
+      files: {
+        'agency.txt': 'agency_id,agency_name,agency_url,agency_timezone\nA,BART,https://bart.gov,America/Los_Angeles\n',
+        'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nS1,Montgomery Street,37.789,-122.401\n',
+        'routes.txt': 'route_id,agency_id,route_short_name,route_long_name,route_type\nBART,A,Yellow,Antioch-SFO,2\n',
+        'trips.txt': 'route_id,service_id,trip_id\nBART,D,T\n',
+        'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,08:00:00,08:00:00,S1,1\n',
+        'calendar.txt': 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nD,1,1,1,1,1,1,1,20260101,20261231\n',
+      } });
+    await env.TRANSIT_ARTIFACTS!.put(artifact.manifest.discoveries[0]!.key, artifact.discoveryBytes);
+    await env.TRANSIT_ARTIFACTS!.put(artifact.manifest.shards[0]!.key, artifact.shardBytes);
+    await new StaticArtifactStore(env.TRANSIT_ARTIFACTS!).publish(artifact.manifest);
     const sfEnv = { ...env, SFBAY_MODE: 'on' as const };
     const context = createExecutionContext();
 

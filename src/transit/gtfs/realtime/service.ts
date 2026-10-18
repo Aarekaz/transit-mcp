@@ -1,101 +1,107 @@
 import type { Env } from '../../../types';
 import type { RegionalTransitService } from '../../../mcp/context';
 import type { FeedRead } from './hub-core';
-import type { NormalizedVehicle } from './decode';
-import type { NormalizedAlert, NormalizedStopUpdate } from './decode';
-import { searchStops, type StaticTransitArtifact } from '../static/artifact';
-import { SFBAY_REGION } from '../../../regions/sfbay';
+import type { NormalizedVehicle, NormalizedAlert, NormalizedStopUpdate } from './decode';
+import { StaticArtifactStore, readBoundedObject, SF511_QUOTA_NAMESPACE, type StaticVersion } from './snapshot-store';
+import { sha256 } from '../static/shards';
+import type { ArtifactManifestV2, DiscoveryIndex } from '../static/schema';
+import { parseTransitRef, type TransitRef } from '../../core/refs';
+import { getScheduledDepartures } from '../../planner/departures';
+import { sanitizeTransitText } from './freshness';
 
-const ARTIFACT_KEY = 'artifacts/sfbay/current.json.gz';
-
-function isStaticArtifact(value: unknown): value is StaticTransitArtifact {
-  if (typeof value !== 'object' || value === null) return false;
-  const candidate = value as Partial<StaticTransitArtifact>;
-  return candidate.schemaVersion === 1
-    && candidate.region === 'sfbay'
-    && Array.isArray(candidate.stops)
-    && Array.isArray(candidate.routes)
-    && typeof candidate.stopRoutes === 'object'
-    && candidate.stopRoutes !== null;
-}
+// The isolate retains one manifest per bound bucket, and no decoded timetable.
+const artifactStores = new WeakMap<R2Bucket, StaticArtifactStore>();
 
 export function createRegionalTransitService(env: Env): RegionalTransitService {
-  const readArtifact = async (): Promise<StaticTransitArtifact> => {
+  const bucket = () => {
     if (!env.TRANSIT_ARTIFACTS) throw new Error('Bay Area static artifact is not configured');
-    const object = await env.TRANSIT_ARTIFACTS.get(ARTIFACT_KEY);
-    if (!object) throw new Error('Bay Area static artifact is unavailable');
-    const decompressed = object.body.pipeThrough(new DecompressionStream('gzip'));
-    const artifact: unknown = await new Response(decompressed).json();
-    if (!isStaticArtifact(artifact)) throw new Error('Bay Area static artifact is invalid');
-    const ageMs = Date.now() - Date.parse(artifact.generatedAt);
-    if (!Number.isFinite(ageMs) || ageMs > SFBAY_REGION.static.maxStaticAgeDays * 86_400_000) {
-      throw new Error('Bay Area static artifact is expired');
+    return env.TRANSIT_ARTIFACTS;
+  };
+  const current = async () => {
+    const binding = bucket();
+    let store = artifactStores.get(binding);
+    if (!store) { store = new StaticArtifactStore(binding); artifactStores.set(binding, store); }
+    const result = await store.current();
+    if (!result) throw new Error('Bay Area static artifact is unavailable');
+    return result;
+  };
+  const discovery = async (manifest: ArtifactManifestV2): Promise<DiscoveryIndex[]> => {
+    const indexes: DiscoveryIndex[] = []; let total = 0;
+    for (const descriptor of manifest.discoveries) {
+      total += descriptor.byteLength;
+      if (total > 64 * 1024 * 1024) throw new Error('Discovery byte budget exceeded');
+      const bytes = await readBoundedObject(bucket(), descriptor.key, descriptor.byteLength);
+      if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Discovery integrity failure');
+      const index = JSON.parse(new TextDecoder().decode(bytes)) as DiscoveryIndex;
+      const sources = manifest.sources.filter(source => source.feedId === descriptor.feedId);
+      if (index.schemaVersion !== 2 || index.coverageId !== manifest.coverageId || index.feedId !== descriptor.feedId || sources.length !== 1 ||
+        index.sourceSha256 !== sources[0]!.sha256 || !Array.isArray(index.stops) || !Array.isArray(index.routes)) throw new Error('Discovery identity mismatch');
+      for (const record of [...index.stops, ...index.routes]) {
+        const ref = parseTransitRef(record.ref);
+        if (!ref || ref.coverage !== index.coverageId || ref.feed !== index.feedId || ref.id !== record.providerId) throw new Error('Discovery identity mismatch');
+      }
+      indexes.push(index);
     }
-    return artifact;
+    return indexes;
   };
-
-  const scheduledUpdates = (artifact: StaticTransitArtifact, stopIds: Set<string>, nowSeconds: number): NormalizedStopUpdate[] => {
-    const parts = new Intl.DateTimeFormat('en-US', { timeZone: SFBAY_REGION.timezone, weekday: 'long', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(nowSeconds * 1_000));
-    const part = (type: string) => parts.find(item => item.type === type)?.value ?? '';
-    const date = `${part('year')}${part('month')}${part('day')}`;
-    const weekday = part('weekday').toLowerCase() as 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
-    const localSeconds = Number(part('hour')) * 3600 + Number(part('minute')) * 60 + Number(part('second'));
-    return (artifact.stopTimes ?? []).filter(item => {
-      const calendar = artifact.calendars?.[item.serviceId];
-      const exception = calendar?.exceptions[date];
-      const active = exception === 1 || (exception !== 2 && calendar && date >= calendar.startDate && date <= calendar.endDate && calendar[weekday]);
-      return stopIds.has(item.stopId) && active && item.arrivalSeconds >= localSeconds && item.arrivalSeconds <= localSeconds + 6 * 3600;
-    }).map(item => ({
-      entityId: `scheduled:${item.tripId}:${item.stopId}:${item.arrivalSeconds}`,
-      tripId: item.tripId, routeId: item.routeId, stopId: item.stopId,
-      arrivalTimeSeconds: nowSeconds + item.arrivalSeconds - localSeconds,
-      departureTimeSeconds: nowSeconds + item.departureSeconds - localSeconds,
-    })).sort((a, b) => (a.arrivalTimeSeconds ?? 0) - (b.arrivalTimeSeconds ?? 0));
-  };
-
-  const readFeed = async <T>(kind: string, nowSeconds: number): Promise<FeedRead<T>> => {
+  const readFeed = async <T>(kind: string, nowSeconds: number, version: StaticVersion, stops: string[] = []): Promise<FeedRead<T>> => {
     if (!env.REGION_FEED_HUB) throw new Error('Bay Area regional service is not configured');
-    const id = env.REGION_FEED_HUB.idFromName('sfbay');
-    const response = await env.REGION_FEED_HUB.get(id).fetch(
-      `https://region-feed-hub.internal/${kind}?now=${nowSeconds}`,
-    );
+    const url = new URL(`https://region-feed-hub.internal/${kind}`);
+    url.searchParams.set('now', String(nowSeconds)); url.searchParams.set('artifact', version.artifactVersion);
+    for (const stop of stops) url.searchParams.append('stop', stop);
+    const response = await env.REGION_FEED_HUB.get(env.REGION_FEED_HUB.idFromName(SF511_QUOTA_NAMESPACE)).fetch(url.href);
     if (!response.ok) throw new Error('Bay Area regional service is unavailable');
     return response.json<FeedRead<T>>();
   };
-
   return {
     async searchStations(query, limit = 20) {
-      const artifact = await readArtifact();
-      return searchStops(artifact, query, limit).map(stop => ({
-        ...stop,
-        routeIds: artifact.stopRoutes[stop.id] ?? [],
-      }));
-    },
-    async getStationPredictions(stationId, nowSeconds) {
-      const artifact = await readArtifact();
-      const station = artifact.stops.find(stop => stop.id === stationId);
-      if (!station) throw new Error(`Unknown Bay Area station: ${stationId}`);
-      const stopIds = new Set([
-        stationId,
-        ...artifact.stops
-          .filter(stop => stop.parentStationId === stationId)
-          .map(stop => stop.id),
-      ]);
-      const feed = await readFeed<NormalizedStopUpdate[]>('trip_updates', nowSeconds);
-      const realtime = (feed.payload ?? [])
-        .filter(update => stopIds.has(update.stopId) && (update.arrivalTimeSeconds ?? update.departureTimeSeconds ?? 0) >= nowSeconds - 30)
-        .sort((a, b) => (a.arrivalTimeSeconds ?? a.departureTimeSeconds ?? 0) - (b.arrivalTimeSeconds ?? b.departureTimeSeconds ?? 0));
-      if (realtime.length > 0 && (feed.freshness === 'fresh' || feed.freshness === 'stale')) return { ...feed, payload: realtime };
-      return { ...feed, payload: scheduledUpdates(artifact, stopIds, nowSeconds), warnings: [...feed.warnings, 'scheduled_fallback'] };
+      const { manifest } = await current(), normalized = query.trim().toLocaleLowerCase('en-US');
+      if (!normalized || limit <= 0) return [];
+      const results = (await discovery(manifest)).flatMap(index => index.stops.filter(stop => stop.latitude !== null && stop.longitude !== null &&
+        (stop.providerId.toLowerCase().includes(normalized) || stop.name.toLowerCase().includes(normalized))).map(stop => ({
+          id: stop.providerId, name: sanitizeTransitText(stop.name), latitude: stop.latitude!, longitude: stop.longitude!, locationType: stop.locationType,
+          parentStationId: stop.parentStationRef ? parseTransitRef(stop.parentStationRef)?.id : undefined,
+          routeIds: (index.stopRoutes[stop.ref] ?? []).map(ref => parseTransitRef(ref)!.id),
+        })));
+      return results.sort((a, b) => Number(b.locationType === 1) - Number(a.locationType === 1) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)).slice(0, limit);
     },
     async getRoutes() {
-      return (await readArtifact()).routes;
+      const { manifest } = await current();
+      return (await discovery(manifest)).flatMap(index => index.routes.map(route => ({ id: route.providerId, shortName: sanitizeTransitText(route.shortName, 120),
+        longName: sanitizeTransitText(route.longName), mode: route.mode, color: route.color })));
     },
-    async getAlerts(nowSeconds) {
-      return readFeed<NormalizedAlert[]>('service_alerts', nowSeconds);
+    async getStationPredictions(stationId, nowSeconds) {
+      const { manifest, version } = await current(), indexes = await discovery(manifest);
+      const matches = indexes.flatMap(index => index.stops.filter(stop => stop.providerId === stationId).map(stop => ({ index, stop })));
+      if (matches.length !== 1) throw new Error('Unknown or ambiguous Bay Area station');
+      const { index, stop } = matches[0]!;
+      const stopIds = index.stops.filter(s => s.ref === stop.ref || s.parentStationRef === stop.ref).map(s => s.providerId);
+      const feed = await readFeed<NormalizedStopUpdate[]>('trip_updates', nowSeconds, version, stopIds);
+      const schedule = await getScheduledDepartures({ manifest, stopRef: stop.ref as TransitRef,
+        instant: new Date(nowSeconds * 1000).toISOString(), windowSeconds: 6 * 3600, limit: 100,
+        readShard: key => readBoundedObject(bucket(), key, 64 * 1024 * 1024), readDiscovery: key => readBoundedObject(bucket(), key, 64 * 1024 * 1024) });
+      const usable = feed.status === 'realtime' && feed.version?.artifactVersion === version.artifactVersion;
+      const updates = usable ? feed.payload ?? [] : [];
+      const byCall = new Map(updates.filter(update => update.tripInstanceRef).map(update => [`${update.tripInstanceRef}:${update.stopSequence}`, update]));
+      const payload: NormalizedStopUpdate[] = [];
+      for (const departure of schedule.departures) {
+        const update = byCall.get(`${departure.tripInstanceRef}:${departure.stopSequence}`);
+        if (update?.status === 'canceled' || update?.status === 'skipped') continue;
+        if (update?.status === 'realtime') { payload.push(update); continue; }
+        const time = Date.parse(departure.scheduledTime) / 1000;
+        payload.push({ entityId: `scheduled:${departure.tripInstanceRef}:${departure.stopSequence}`, tripId: parseTransitRef(departure.tripRef)!.id,
+          tripInstanceRef: departure.tripInstanceRef, stopId: parseTransitRef(departure.stopRef)!.id, stopSequence: departure.stopSequence,
+          routeId: parseTransitRef(departure.routeRef)!.id, serviceDate: departure.serviceDate, arrivalTimeSeconds: time, departureTimeSeconds: time, status: 'scheduled_only' });
+      }
+      for (const update of updates) {
+        if (update.status === 'realtime' && !payload.includes(update) && stopIds.includes(update.stopId)) payload.push(update);
+      }
+      const result = payload.filter(row => (row.arrivalTimeSeconds ?? row.departureTimeSeconds ?? 0) >= nowSeconds - 30)
+        .sort((a, b) => (a.arrivalTimeSeconds ?? a.departureTimeSeconds ?? 0) - (b.arrivalTimeSeconds ?? b.departureTimeSeconds ?? 0));
+      return { ...feed, version, payload: result, status: usable ? 'realtime' : schedule.status,
+        warnings: [...feed.warnings, ...schedule.reasons, ...(!usable ? ['scheduled_fallback'] : [])] };
     },
-    async getVehiclePositions(nowSeconds: number): Promise<FeedRead<NormalizedVehicle[]>> {
-      return readFeed<NormalizedVehicle[]>('vehicle_positions', nowSeconds);
-    },
+    async getAlerts(nowSeconds) { return readFeed<NormalizedAlert[]>('service_alerts', nowSeconds, (await current()).version); },
+    async getVehiclePositions(nowSeconds) { return readFeed<NormalizedVehicle[]>('vehicle_positions', nowSeconds, (await current()).version); },
   };
 }
