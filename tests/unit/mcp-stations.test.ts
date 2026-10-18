@@ -271,6 +271,7 @@ describe('station tool contracts', () => {
   it.each([
     ['dc', 'a01', 'A01'],
     ['nyc', '127', '127'],
+    ['nyc', 'a01n', 'A01N'],
   ] as const)('uses direct %s station code %s without searching', async (city, input, stationId) => {
     const signal = new AbortController().signal;
     const client = clientWith({
@@ -298,7 +299,7 @@ describe('station tool contracts', () => {
             destination: 'Glenmont',
             minutesAway: 5,
             arrivalTime: '2026-08-13T18:05:00.000Z',
-            arrivalStatus: 'SCHEDULED',
+            arrivalStatus: 'ARRIVING',
             cars: '8',
             direction: 'NORTH',
             track: '2',
@@ -313,7 +314,7 @@ describe('station tool contracts', () => {
           destination: 'Glenmont',
           minutesAway: 5,
           arrivalTime: '2026-08-13T18:05:00.000Z',
-          arrivalStatus: 'SCHEDULED',
+          arrivalStatus: 'ARRIVING',
           cars: '8',
           direction: 'NORTH',
           track: '2',

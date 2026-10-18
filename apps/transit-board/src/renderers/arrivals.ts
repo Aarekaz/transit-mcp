@@ -25,7 +25,7 @@ function arrivalColumns(): HTMLElement {
 
 function railDue(prediction: RailArrivalsModel['predictions'][number]): string {
   if (prediction.arrivalStatus === 'ARRIVING') {
-    return 'Arriving';
+    return prediction.minutesAway === null ? 'Arriving' : `${prediction.minutesAway} min`;
   }
   if (prediction.arrivalStatus === 'BOARDING') {
     return 'Boarding';
@@ -39,7 +39,7 @@ function railDue(prediction: RailArrivalsModel['predictions'][number]): string {
 function railRow(prediction: RailArrivalsModel['predictions'][number]): HTMLLIElement {
   const metadata = [
     prediction.direction,
-    prediction.track ? `Track ${prediction.track}` : null,
+    prediction.track ? (prediction.track.startsWith('Group ') ? prediction.track : `Track ${prediction.track}`) : null,
     prediction.cars ? `${prediction.cars} cars` : null,
   ].filter((item): item is string => item !== null);
 

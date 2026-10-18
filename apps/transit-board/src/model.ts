@@ -517,7 +517,7 @@ function parseServiceIncident(value: unknown): ServiceIncident | undefined {
   const linesAffected = displayStringArray(value.linesAffected);
   const severity = displayString(value.severity);
   const type = displayString(value.type);
-  const lastUpdated = timestamp(value.lastUpdated);
+  const lastUpdated = value.lastUpdated === 'Unknown' ? 'Unknown' : timestamp(value.lastUpdated);
   if (
     id === undefined
     || description === undefined

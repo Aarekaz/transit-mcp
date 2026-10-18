@@ -14,7 +14,8 @@ import type {
   ServiceIncidentsModel,
 } from '../model';
 
-function timestamp(label: string, value: string): HTMLTimeElement {
+function timestamp(label: string, value: string): HTMLElement {
+  if (value === 'Unknown') return element('span', { text: `${label} Unknown` });
   return element('time', {
     text: `${label} ${value}`,
     attributes: { datetime: value },
