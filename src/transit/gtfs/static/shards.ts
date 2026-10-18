@@ -175,7 +175,7 @@ export function decodeScheduleShard(bytes: Uint8Array): ScheduleShard {
     for (const frequency of shard.frequencies) {
       const trip = trips.get(frequency.tripRef)!;
       const first = trip.stopTimes[0]!.departureSeconds, last = trip.stopTimes.at(-1)!.departureSeconds;
-      if (first !== null && last !== null && frequency.endSeconds - 1 + last - first > shard.maxStopTimeSeconds) throw new Error();
+      if (first !== null && last !== null && frequency.endSeconds - (frequency.exactTimes === 1 ? 1 : 0) + last - first > shard.maxStopTimeSeconds) throw new Error();
     }
     return shard;
   } catch {
