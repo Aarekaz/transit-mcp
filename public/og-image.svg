@@ -36,7 +36,7 @@
       <tspan x="0" y="154">into</tspan><tspan dx="14" fill="#ff6b1a">transit.</tspan>
     </text>
     <text x="2" y="216" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="500" fill="#34465b">
-      Live DC + NYC + Bay Area transit through MCP
+      Live DC + NYC transit through MCP · SF Bay in development
     </text>
   </g>
 
@@ -44,7 +44,7 @@
     <g>
       <rect width="122" height="48" rx="24" fill="#ffffff" stroke="#dfe5ec"/>
       <circle cx="30" cy="24" r="8" fill="#35c77b"/>
-      <text x="50" y="31">18 tools</text>
+      <text x="50" y="31">13 tools</text>
     </g>
     <g transform="translate(142 0)">
       <rect width="166" height="48" rx="24" fill="#ffffff" stroke="#dfe5ec"/>

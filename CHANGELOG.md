@@ -9,12 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Live San Francisco Bay Area transit coverage through 511 SF Bay: regional station search, arrivals, routes, service alerts, and vehicle positions across five new read-only MCP tools.
-- Versioned regional GTFS artifacts in R2 plus a quota-aware feed hub for trip updates, service alerts, and vehicle positions. Every Bay Area result reports freshness and 511 SF Bay attribution.
+- SF Bay support is in development. Versioned 511 SF Bay regional GTFS artifacts and the quota-aware realtime feed hub run in dark mode without registering public tools.
+- Dark-mode results retain freshness metadata and attribution to 511 SF Bay and participating operators.
 
 ### Changed
 
-- Transit MCP 6.1 now exposes 18 tools across DC, NYC, and the San Francisco Bay Area. Production and preview enable the regional surface with `SFBAY_MODE=on`; operators can roll back with `suspended`, `dark`, or `off`.
+- Production and preview now keep `SFBAY_MODE=dark`. Transit MCP continues to expose the existing 13 DC and NYC tools while SF Bay development data is ingested and validated off the public MCP surface.
 
 - Rebranded to Transit MCP with `https://transitmcp.com` as the canonical origin. Pages, `/info` links, and the reported MCP server name (`transit-mcp`) now use the new brand.
 - MCP trust checks accept requests on the canonical origin or on any HTTPS, default-port hostname in `MCP_ALLOWED_HOSTNAMES`. Production allowlists `transitmcp.com` and `metro-mcp.anuragd.me`, so `https://metro-mcp.anuragd.me/mcp` keeps working.

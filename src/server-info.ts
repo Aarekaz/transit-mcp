@@ -4,7 +4,7 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
   return {
     name: 'Transit MCP',
     version: SERVER_VERSION,
-    description: 'MCP server for DC Metro, NYC Subway, and San Francisco Bay Area transit',
+    description: 'MCP server for US transit systems (DC Metro, NYC Subway)',
     protocolVersion: MCP_PROTOCOL_VERSION,
     status: 'operational',
     timestamp,
@@ -39,21 +39,13 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
         stations: 496,
         lines: 29,
         features: ['real-time', 'alerts', 'search', 'line-info', 'transfers', 'route-info']
-      },
-      {
-        code: 'sfbay',
-        name: 'San Francisco Bay Area transit',
-        system: '511 SF Bay',
-        stations: 20627,
-        lines: 671,
-        features: ['real-time', 'alerts', 'search', 'routes', 'vehicle-positions', 'regional-coverage']
       }
     ],
     stats: {
-      totalStations: 21225,
-      totalLines: 706,
-      citiesSupported: 3,
-      toolsAvailable: 18,
+      totalStations: 598,
+      totalLines: 35,
+      citiesSupported: 2,
+      toolsAvailable: 13,
       resourcesAvailable: 3,
       promptsAvailable: 3
     },
@@ -84,12 +76,7 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
       'get_bus_positions',
       'get_train_positions',
       'get_station_transfers',
-      'get_route_info',
-      'search_sfbay_stations',
-      'get_sfbay_station_predictions',
-      'get_sfbay_routes',
-      'get_sfbay_incidents',
-      'get_vehicle_positions'
+      'get_route_info'
     ]
   };
 }

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Privacy policy · Transit MCP anonymous transit server</title>
-  <meta name="description" content="How Transit MCP handles requests for DC, NYC, and San Francisco Bay Area transit data, operational telemetry, and provider logs.">
+  <meta name="description" content="How Transit MCP handles requests for DC and NYC transit data, SF Bay development feeds, operational telemetry, and provider logs.">
   <link rel="canonical" href="https://transitmcp.com/privacy/">
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
 
@@ -13,14 +13,14 @@
   <meta property="og:site_name" content="Transit MCP">
   <meta property="og:url" content="https://transitmcp.com/privacy/">
   <meta property="og:title" content="Privacy policy · Transit MCP anonymous transit server">
-  <meta property="og:description" content="How Transit MCP handles requests for DC, NYC, and San Francisco Bay Area transit data, operational telemetry, and provider logs.">
+  <meta property="og:description" content="How Transit MCP handles requests for DC and NYC transit data, SF Bay development feeds, operational telemetry, and provider logs.">
   <meta property="og:image" content="https://transitmcp.com/og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Transit MCP: live DC, NYC, and San Francisco Bay Area transit data">
+  <meta property="og:image:alt" content="Transit MCP: live DC and NYC transit data">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Privacy policy · Transit MCP anonymous transit server">
-  <meta name="twitter:description" content="How Transit MCP handles requests for DC, NYC, and San Francisco Bay Area transit data, operational telemetry, and provider logs.">
+  <meta name="twitter:description" content="How Transit MCP handles requests for DC and NYC transit data, SF Bay development feeds, operational telemetry, and provider logs.">
   <meta name="twitter:image" content="https://transitmcp.com/og-image.png">
   <link rel="stylesheet" href="/legal.css">
 </head>
@@ -49,7 +49,8 @@
       <section aria-labelledby="request-data">
         <h2 id="request-data">What a transit request includes</h2>
         <p>Your MCP client sends Transit MCP a request body with a tool name and the public transit arguments needed to answer it. Depending on the tool, those inputs can include a city, station name or code, route or line identifier, stop identifier, or a location and search radius. The Worker processes request bodies and public transit arguments only to answer the request.</p>
-        <p>Transit MCP sends the necessary transit inputs to WMATA for DC requests, MTA for NYC requests, and 511 SF Bay for San Francisco Bay Area requests through server-to-server requests. It does not forward your IP address or conversation to those transit providers. It returns the resulting public transit information to your client. Do not include secrets or unrelated personal information in transit inputs.</p>
+        <p>Transit MCP sends the necessary transit inputs to WMATA for DC requests and MTA for NYC requests through server-to-server requests. It does not forward your IP address or conversation to those transit providers. It returns the resulting public transit information to your client. Do not include secrets or unrelated personal information in transit inputs.</p>
+        <p>SF Bay support is in development and has no public tools. Its dark pipeline reads 511 SF Bay feeds independently of user requests for validation and retains 511 SF Bay and participating-operator attribution.</p>
       </section>
 
       <section aria-labelledby="accounts-storage">
