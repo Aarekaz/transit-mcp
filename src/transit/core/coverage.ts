@@ -31,6 +31,8 @@ export interface CoverageManifest {
   kind: 'region' | 'operator' | 'national' | 'cross_border';
   displayName: string;
   aliases: readonly string[];
+  /** Reviewed public place names only. Never client-specific home/work meanings. */
+  placeAliases?: readonly { aliases: readonly string[]; stopNames: readonly string[] }[];
   feeds: readonly { id: string; realtime: readonly RealtimeFeedSpec[] }[];
   agencyTimezones: Readonly<Record<string, string>>;
   supportedModes: readonly TransitMode[];

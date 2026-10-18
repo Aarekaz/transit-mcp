@@ -105,7 +105,8 @@ export function entities(data: TransitData): Candidate[] {
 }
 export function candidates(data: TransitData, query: string, kind?: string): Candidate[] {
   const normalized = normalizeEntityName(query);
-  return entities(data).filter(entity => (!kind || kind === entity.kind) && entityNames(data, entity).some(name => name.includes(normalized)))
+  return entities(data).filter(entity => (!kind || kind === entity.kind) &&
+    (entityNames(data, entity).some(name => name.includes(normalized)) || placeAliasMatch(data, entity, normalized)))
     .sort((a, b) => Number(exactCandidate(data, b, query)) - Number(exactCandidate(data, a, query)) || a.providerId.localeCompare(b.providerId) || a.ref.localeCompare(b.ref));
 }
 const normalizeEntityName = (value: string) => value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
@@ -113,7 +114,13 @@ function entityNames(data: TransitData, entity: Candidate): string[] {
   const route = entity.kind === 'route' ? data.indexes.find(index => index.feedId === entity.feed)?.routes.find(route => route.ref === entity.ref) : undefined;
   return [entity.providerId, entity.name, route?.shortName ?? '', route?.longName ?? ''].filter(Boolean).map(normalizeEntityName);
 }
-export const exactCandidate = (data: TransitData, entity: Candidate, query: string) => entityNames(data, entity).includes(normalizeEntityName(query));
+function placeAliasMatch(data: TransitData, entity: Candidate, normalized: string): boolean {
+  return entity.kind === 'stop' && (data.coverage.placeAliases ?? []).some(place =>
+    place.aliases.some(alias => normalizeEntityName(alias) === normalized) &&
+    place.stopNames.some(name => normalizeEntityName(name) === normalizeEntityName(entity.name)));
+}
+export const exactCandidate = (data: TransitData, entity: Candidate, query: string) =>
+  entityNames(data, entity).includes(normalizeEntityName(query)) || placeAliasMatch(data, entity, normalizeEntityName(query));
 export function knownEntity(data: TransitData, ref: string): Candidate {
   const parsed = validRef(ref, ['agency', 'route', 'stop', 'trip']);
   const base = formatEntityRef(parsed);

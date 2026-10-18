@@ -1,5 +1,6 @@
 import type { RegionManifest } from './types';
 import type { CoverageManifest } from '../transit/core/coverage';
+import reviewedAliases from '../../data/coverage/sfbay/aliases.json';
 
 const transitBase = 'https://api.511.org/transit';
 
@@ -37,7 +38,8 @@ export const SFBAY_COVERAGE = {
   id: SFBAY_REGION.id,
   kind: 'region',
   displayName: SFBAY_REGION.displayName,
-  aliases: ['SF', 'San Francisco', 'Bay Area'],
+  aliases: reviewedAliases.coverageAliases.map(alias => alias.name),
+  placeAliases: reviewedAliases.places,
   feeds: [{ id: 'sf511', realtime: SFBAY_REGION.realtime.feeds }],
   // Populated from actual agency IDs by the schedule compiler, not feed IDs.
   agencyTimezones: {},
