@@ -89,6 +89,9 @@ export interface TransitPrediction {
   /** Minutes until arrival - number or special strings like "ARR", "BRD" */
   minutesAway: number | string;
 
+  /** Explicit observation status when a numeric countdown alone is ambiguous. */
+  arrivalStatus?: 'ARRIVING' | 'BOARDING' | 'DELAYED';
+
   /** Optional: Number of cars */
   cars?: string;
 

@@ -42,12 +42,17 @@ export const redLineStations: WMATAStation[] = redLineStops.map(([Code, Name]) =
     StationTogether1: '', StationTogether2: '', Address: { Street: '', City: '', State: '', Zip: '' },
   });
 
-// All remaining stops of three 1-line trains near South Ferry. The first has
-// departed Chambers St; the other two retain the terminal as their final update.
+// Remaining calls near South Ferry. Actual departure removes Chambers St from
+// the first trip. The past-due trip still lists it and must remain uncertain.
 export const nycFeed = {
   header: { gtfsRealtimeVersion: '1.0', timestamp: 1792339200 },
   entity: [
     { id: 'departed', tripUpdate: { trip: { tripId: '070000_1..S03R', routeId: '1', startDate: '20261018' }, stopTimeUpdate: [
+      { stopId: '138S', arrival: { time: 1792339300 } },
+      { stopId: '139S', arrival: { time: 1792339420 } },
+      { stopId: '142S', arrival: { time: 1792339540 } },
+    ] } },
+    { id: 'past-due', tripUpdate: { trip: { tripId: '070100_1..S03R', routeId: '1', startDate: '20261018' }, stopTimeUpdate: [
       { stopId: '137S', arrival: { time: 1792339170 }, departure: { time: 1792339180 } },
       { stopId: '138S', arrival: { time: 1792339300 } },
       { stopId: '139S', arrival: { time: 1792339420 } },
@@ -66,6 +71,20 @@ export const nycFeed = {
       { stopId: '142S', arrival: { time: 1792339600 } },
     ] } },
   ],
+};
+
+// Reduced replay of an F train rerouted via the A/C/E 8 Avenue platform.
+// A27's static line membership is A/C/E; the realtime stop call is authoritative.
+export const nycRerouteFeed = {
+  header: { gtfsRealtimeVersion: '1.0', timestamp: 1792339200 },
+  entity: [{ id: 'F-rerouted-via-8-av', tripUpdate: {
+    trip: { tripId: '070500_F..S69R', routeId: 'F', startDate: '20261018' },
+    stopTimeUpdate: [
+      { stopId: 'A27S', arrival: { time: 1792339500 } },
+      { stopId: 'A28S', arrival: { time: 1792339620 } },
+      { stopId: 'D43S', arrival: { time: 1792343100 } },
+    ],
+  } }],
 };
 
 export const nycAlertFeed = { entity: [{

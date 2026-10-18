@@ -6,7 +6,7 @@ import { registerIncidentTools } from '../../src/mcp/tools/incidents';
 import type { MetroRequestState } from '../../src/mcp/context';
 import { WMATAClient } from '../../src/transit/wmata-client';
 import { createMockEnv } from '../setup';
-import { nycAlertFeed, nycFeed, redLinePath, redLineStations, REPLAY_NOW, wmataPath, wmataPredictions, wmataStations } from '../fixtures/legacy-transit';
+import { nycAlertFeed, nycFeed, nycRerouteFeed, redLinePath, redLineStations, REPLAY_NOW, wmataPath, wmataPredictions, wmataStations } from '../fixtures/legacy-transit';
 
 function tools() {
   const registrations = new Map<string, { config: any; callback: (args: any, context: ServerContext) => Promise<any> }>();
@@ -22,7 +22,7 @@ function tools() {
   };
 }
 
-function protobuf(body = nycFeed) {
+function protobuf(body: GtfsRealtimeBindings.transit_realtime.IFeedMessage = nycFeed) {
   return new Response(GtfsRealtimeBindings.transit_realtime.FeedMessage.encode(body).finish());
 }
 
@@ -79,10 +79,11 @@ describe('legacy provider correctness through real tool normalization', () => {
     await expect(tools()('get_stations_by_line', { city: 'dc', lineCode: 'RD' })).rejects.toThrow('WMATA ordered line path unavailable');
   });
 
-  it('resolves NYC trip destination from the final future stop and drops a departed train', async () => {
+  it('retains a present past-due NYC call as delayed and excludes the actually departed trip', async () => {
     vi.stubGlobal('fetch', async (input: string) => input.endsWith('nyct%2Fgtfs') ? protobuf() : protobuf({ ...nycFeed, entity: [] }));
     const result = await tools()('get_station_predictions', { city: 'nyc', stationName: '137S' });
     expect(result.structuredContent.predictions).toEqual([
+      { line: '1', destination: 'South Ferry', minutesAway: 0, arrivalTime: '2026-10-18T15:59:30.000Z', arrivalStatus: 'DELAYED', cars: null, direction: 'SOUTH', track: null },
       { line: '1', destination: 'South Ferry', minutesAway: null, arrivalTime: '2026-10-18T15:59:50.000Z', arrivalStatus: 'BOARDING', cars: null, direction: 'SOUTH', track: null },
       { line: '1', destination: 'South Ferry', minutesAway: 5, arrivalTime: '2026-10-18T16:05:00.000Z', arrivalStatus: 'ARRIVING', cars: null, direction: 'SOUTH', track: null },
     ]);
@@ -95,11 +96,48 @@ describe('legacy provider correctness through real tool normalization', () => {
     await expect(tools()('get_station_predictions', { city: 'nyc', stationName: 'D43' })).rejects.toThrow('MTA predictions unavailable: a required feed could not be loaded');
   });
 
-  it('does not make an unrelated feed outage a required station dependency', async () => {
+  it('fails closed when a failed feed could contain rerouted station service', async () => {
     vi.stubGlobal('fetch', async (input: string) => input.endsWith('nyct%2Fgtfs')
-      ? protobuf() : new Response('unrelated unavailable', { status: 503 }));
+      ? protobuf() : new Response('not proven unrelated', { status: 503 }));
+    await expect(tools()('get_station_predictions', { city: 'nyc', stationName: '137S' })).rejects.toThrow('MTA predictions unavailable: a required feed could not be loaded');
+  });
+
+  it('includes an F train rerouted to A27 even though the station snapshot lists only A/C/E', async () => {
+    vi.stubGlobal('fetch', async (input: string) => input.endsWith('nyct%2Fgtfs-bdfm')
+      ? protobuf(nycRerouteFeed) : protobuf({ ...nycFeed, entity: [] }));
+    const result = await tools()('get_station_predictions', { city: 'nyc', stationName: 'A27S' });
+    expect(result.structuredContent.predictions).toEqual([
+      { line: 'F', destination: 'Coney Island-Stillwell Av', minutesAway: 5, arrivalTime: '2026-10-18T16:05:00.000Z', arrivalStatus: 'ARRIVING', cars: null, direction: 'SOUTH', track: null },
+    ]);
+  });
+
+  it('does not call A27 quiet when the feed carrying its rerouted F train fails', async () => {
+    vi.stubGlobal('fetch', async (input: string) => input.endsWith('nyct%2Fgtfs-bdfm')
+      ? new Response('secret response body', { status: 503, statusText: 'secret status' })
+      : protobuf({ ...nycFeed, entity: [] }));
+    await expect(tools()('get_station_predictions', { city: 'nyc', stationName: 'A27S' })).rejects.toThrow('Error: MTA predictions unavailable: a required feed could not be loaded');
+  });
+
+  it.each([
+    ['arrival only', { arrival: { time: 1792339500 } }, '2026-10-18T16:05:00.000Z'],
+    ['departure only', { departure: { time: 1792339500 } }, '2026-10-18T16:05:00.000Z'],
+    ['empty arrival with valid departure', { arrival: {}, departure: { time: 1792339500 } }, '2026-10-18T16:05:00.000Z'],
+    ['valid arrival with empty departure', { arrival: { time: 1792339500 }, departure: {} }, '2026-10-18T16:05:00.000Z'],
+    ['both missing', {}, null],
+    ['both empty', { arrival: {}, departure: {} }, null],
+  ] as const)('uses timestamp presence rather than protobuf defaults: %s', async (_label, events, expectedTime) => {
+    vi.stubGlobal('fetch', async (input: string) => input.endsWith('nyct%2Fgtfs')
+      ? protobuf({
+        header: { gtfsRealtimeVersion: '1.0', timestamp: 1792339200 },
+        entity: [{ id: 'timestamp-presence', tripUpdate: {
+          trip: { tripId: '070500_1..S03R', routeId: '1', startDate: '20261018' },
+          stopTimeUpdate: [{ stopId: '137S', ...events }, { stopId: '142S', arrival: { time: 1792340500 } }],
+        } }],
+      }) : protobuf({ ...nycFeed, entity: [] }));
     const result = await tools()('get_station_predictions', { city: 'nyc', stationName: '137S' });
-    expect(result.structuredContent.predictions).toHaveLength(2);
+    expect(result.structuredContent.predictions).toEqual(expectedTime === null ? [] : [
+      { line: '1', destination: 'South Ferry', minutesAway: 5, arrivalTime: expectedTime, arrivalStatus: 'ARRIVING', cars: null, direction: 'SOUTH', track: null },
+    ]);
   });
 
   it.each([
