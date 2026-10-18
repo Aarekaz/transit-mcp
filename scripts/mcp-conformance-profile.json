@@ -1,5 +1,850 @@
 {
-  "profile": "transit-mcp-2026-07-28-v1",
+  "profile": "transit-mcp-2026-07-28-v2",
+  "refereeSha256": "a10085d0cfc9dd9192cc227f0f4dd6f1af9a94f6a0d3e30af08d4a0bcf268aae",
+  "inventoryPolicy": "Complete 112-record inventory for the fixed product capability/absent-diagnostic branches. Conditional branches changing the emitted check set require explicit profile review; no inferred omissions. The repeated meta-invalid ID is unique by details.fieldIssue. WARNING/INFO are allowed only at explicitly enumerated checks.",
+  "requiredChecks": {
+    "server-stateless": [
+      {
+        "id": "sep-2575-request-meta-invalid-missing-meta",
+        "fieldIssue": "missing-meta",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-http-server-meta-invalid-400",
+        "fieldIssue": "missing-meta",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-request-meta-invalid-missing-protocol-version",
+        "fieldIssue": "missing-protocol-version",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-http-server-meta-invalid-400",
+        "fieldIssue": "missing-protocol-version",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-request-meta-invalid-missing-client-capabilities",
+        "fieldIssue": "missing-client-capabilities",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-http-server-meta-invalid-400",
+        "fieldIssue": "missing-client-capabilities",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-request-meta-client-info-optional",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-server-implements-discover",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-server-identifies-in-result-meta",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-server-declares-prompts-in-discover",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-discover-capabilities-match-handlers",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-server-unsupported-version-error",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-http-server-unsupported-version-400",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-http-server-header-mismatch-400",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-server-rejects-undeclared-capability",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-missing-capability-http-400",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-http-server-method-not-found-404-initialize",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-http-server-method-not-found-404-ping",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-http-server-method-not-found-404-logging-setlevel",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-http-server-method-not-found-404-resources-subscribe",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-http-server-method-not-found-404-resources-unsubscribe",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-http-server-method-not-found-404",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-http-server-no-independent-requests-on-stream",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-server-no-log-without-loglevel",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-server-sends-subscription-ack",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-server-tags-subscription-id",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-server-honors-notification-filter",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-server-sends-prompts-list-changed-on-subscription",
+        "statuses": [
+          "SUCCESS",
+          "WARNING",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-server-sends-tools-list-changed-on-subscription",
+        "statuses": [
+          "SUCCESS",
+          "WARNING",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2575-http-server-error-jsonrpc-id",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "completion-complete": [
+      {
+        "id": "completion-complete",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "tools-list": [
+      {
+        "id": "tools-list",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "tools-name-format",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "tools-call-simple-text": [
+      {
+        "id": "tools-call-simple-text",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "tools-call-image": [
+      {
+        "id": "tools-call-image",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "tools-call-audio": [
+      {
+        "id": "tools-call-audio",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "tools-call-embedded-resource": [
+      {
+        "id": "tools-call-embedded-resource",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "tools-call-mixed-content": [
+      {
+        "id": "tools-call-mixed-content",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "tools-call-error": [
+      {
+        "id": "tools-call-error",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "tools-call-with-progress": [
+      {
+        "id": "tools-call-with-progress",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "server-sse-multiple-streams": [
+      {
+        "id": "server-accepts-multiple-post-streams",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "server-sse-streams-functional",
+        "statuses": [
+          "INFO"
+        ],
+        "detailsEquals": {
+          "numSseStreams": 0
+        }
+      }
+    ],
+    "resources-list": [
+      {
+        "id": "resources-list",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "resources-read-text": [
+      {
+        "id": "resources-read-text",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "resources-read-binary": [
+      {
+        "id": "resources-read-binary",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "resources-templates-read": [
+      {
+        "id": "resources-templates-read",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "sep-2164-resource-not-found": [
+      {
+        "id": "sep-2164-no-empty-contents",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2164-error-code",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2164-data-uri",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "prompts-list": [
+      {
+        "id": "prompts-list",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "prompts-get-simple": [
+      {
+        "id": "prompts-get-simple",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "prompts-get-with-args": [
+      {
+        "id": "prompts-get-with-args",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "prompts-get-embedded-resource": [
+      {
+        "id": "prompts-get-embedded-resource",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "prompts-get-with-image": [
+      {
+        "id": "prompts-get-with-image",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "dns-rebinding-protection": [
+      {
+        "id": "localhost-host-rebinding-rejected",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "localhost-host-valid-accepted",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "caching": [
+      {
+        "id": "sep-2549-tools-list-caching-hints",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2549-prompts-list-caching-hints",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2549-resources-list-caching-hints",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2549-resources-templates-list-caching-hints",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2549-resources-read-caching-hints",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2549-ttl-non-negative",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2549-cache-scope-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "input-required-result-basic-elicitation": [
+      {
+        "id": "sep-2322-elicitation-incomplete",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "input-required-result-basic-sampling": [
+      {
+        "id": "sep-2322-sampling-incomplete",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "input-required-result-basic-list-roots": [
+      {
+        "id": "sep-2322-list-roots-incomplete",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "input-required-result-request-state": [
+      {
+        "id": "sep-2322-request-state-incomplete",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "input-required-result-multiple-input-requests": [
+      {
+        "id": "sep-2322-multiple-inputs-incomplete",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "input-required-result-multi-round": [
+      {
+        "id": "sep-2322-multi-round-r1",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "input-required-result-missing-input-response": [
+      {
+        "id": "sep-2322-missing-response-rerequests",
+        "statuses": [
+          "SUCCESS",
+          "WARNING",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "input-required-result-non-tool-request": [
+      {
+        "id": "sep-2322-non-tool-incomplete",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "input-required-result-result-type": [
+      {
+        "id": "sep-2322-result-type-included",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "input-required-result-unsupported-methods": [
+      {
+        "id": "sep-2322-not-on-unsupported-requests",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "input-required-result-tampered-state": [
+      {
+        "id": "sep-2322-reject-tampered-state",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "input-required-result-capability-check": [
+      {
+        "id": "sep-2322-respect-client-capabilities",
+        "statuses": [
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "input-required-result-ignore-extra-params": [
+      {
+        "id": "sep-2322-ignore-unexpected-params",
+        "statuses": [
+          "SUCCESS",
+          "WARNING",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ],
+    "input-required-result-validate-input": [
+      {
+        "id": "sep-2322-validate-input-responses",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "sep-2322-error-on-protocol-error",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      },
+      {
+        "id": "wire-schema-valid",
+        "statuses": [
+          "SUCCESS",
+          "FAILURE"
+        ]
+      }
+    ]
+  },
   "revision": "2026-07-28",
   "refereeVersion": "0.2.0-alpha.11",
   "requirementsSha256": "ae2f4f6210fd729e2e318edd5bbfa31a43cee0bc608e48052fa26dbf1d939b57",

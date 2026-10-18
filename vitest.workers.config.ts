@@ -4,7 +4,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   plugins: [cloudflareTest({
     main: './src/index.ts',
-    wrangler: { configPath: './wrangler.jsonc' },
+    // Conformance supplies its fresh local-only config. In particular, do not
+    // resolve the checkout config (and adjacent .dev.vars) for mapped evidence.
+    wrangler: { configPath: process.env.MCP_CONFORMANCE_WRANGLER_CONFIG ?? './wrangler.jsonc' },
     miniflare: {
       compatibilityFlags: ['nodejs_compat', 'global_fetch_strictly_public'],
       ratelimits: {

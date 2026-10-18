@@ -9,7 +9,41 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const revision = '2026-07-28', refereeVersion = '0.2.0-alpha.11';
 
+function inventoryErrors(profile, checks) {
+  const errors = [];
+  const identity = (scenario, id, fieldIssue) => JSON.stringify([scenario, id, fieldIssue ?? null]);
+  const expected = new Map();
+  for (const [scenario, entries] of Object.entries(profile.requiredChecks ?? {})) {
+    for (const entry of entries) {
+      const key = identity(scenario, entry.id, entry.fieldIssue);
+      if (expected.has(key)) errors.push('Duplicate inventory identity');
+      expected.set(key, entry);
+    }
+  }
+  if (!expected.size || !Array.isArray(checks)) return ['Missing required inventory or records'];
+  const seen = new Set();
+  for (const check of checks) {
+    if (!check || typeof check !== 'object' || Array.isArray(check)
+      || !['scenario', 'id', 'name', 'description', 'timestamp'].every(key => typeof check[key] === 'string' && check[key].length > 0)
+      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(check.timestamp) || !Number.isFinite(Date.parse(check.timestamp))
+      || !Array.isArray(check.specReferences) || !check.specReferences.every(ref => ref && typeof ref.id === 'string' && typeof ref.url === 'string')
+      || (['FAILURE', 'WARNING'].includes(check.status) && (typeof check.errorMessage !== 'string' || !check.errorMessage))
+      || (check.errorMessage !== undefined && typeof check.errorMessage !== 'string')) {
+      errors.push('Malformed required check record'); continue;
+    }
+    const key = identity(check.scenario, check.id, check.details?.fieldIssue), entry = expected.get(key);
+    if (!entry || seen.has(key)) errors.push(`Unknown or duplicate required check: ${check.scenario}/${check.id}`);
+    else if (!entry.statuses.includes(check.status)
+      || !Object.entries(entry.detailsEquals ?? {}).every(([key, value]) => check.details?.[key] === value)) errors.push(`Unexpected required branch: ${check.scenario}/${check.id}`);
+    seen.add(key);
+  }
+  for (const key of expected.keys()) if (!seen.has(key)) errors.push(`Missing required check: ${key}`);
+  return errors;
+}
+
 export function scoreProductConformance(profile, checks, evidence) {
+  const requiredInventoryErrors = inventoryErrors(profile, checks);
+  checks = Array.isArray(checks) ? checks.filter(check => check && typeof check === 'object') : [];
   const missingEvidence = Object.entries(profile.evidence).filter(([, expected]) =>
     !evidence.some(actual => actual.file === expected.file && actual.title === expected.title && actual.status === 'passed')).map(([name]) => name);
   const failures = checks.filter(check => check.status === 'FAILURE');
@@ -18,8 +52,8 @@ export function scoreProductConformance(profile, checks, evidence) {
   const unclassifiedFailures = failures.filter(check => !profile.diagnosticChecks.some(known =>
     known.scenario === check.scenario && known.id === check.id && known.error === check.errorMessage
     && known.evidence.length > 0 && known.evidence.every(key => profile.evidence[key]))).map(({ scenario, id }) => ({ scenario, id }));
-  return { passed: missingEvidence.length === 0 && unclassifiedFailures.length === 0 && incompleteChecks.length === 0,
-    diagnosticFailures: failures.length - unclassifiedFailures.length, unclassifiedFailures, missingEvidence, incompleteChecks };
+  return { passed: missingEvidence.length === 0 && unclassifiedFailures.length === 0 && incompleteChecks.length === 0 && requiredInventoryErrors.length === 0,
+    diagnosticFailures: failures.length - unclassifiedFailures.length, unclassifiedFailures, missingEvidence, incompleteChecks, requiredInventoryErrors };
 }
 
 async function requiredChecks(directory, requirements) {
@@ -76,9 +110,10 @@ async function unusedPort() {
   return port;
 }
 
-function start(args, directory, log, environment) {
+export function start(args, directory, log, environment) {
+  if (process.platform === 'win32') throw new Error('Local conformance requires POSIX process-group isolation');
   const child = spawn(process.execPath, args, {
-    cwd: directory, env: environment, stdio: ['ignore', log.fd, log.fd], detached: process.platform !== 'win32',
+    cwd: directory, env: environment, stdio: ['ignore', log.fd, log.fd], detached: true,
   });
   const done = new Promise(resolveDone => {
     child.once('error', () => resolveDone(1));
@@ -87,16 +122,30 @@ function start(args, directory, log, environment) {
   return { child, done };
 }
 
-async function stop(processHandle) {
+export async function stop(processHandle) {
   if (!processHandle) return;
-  const { child, done } = processHandle;
-  if (child.exitCode !== null || child.signalCode !== null || !child.pid) return;
-  const kill = signal => {
-    try { process.kill(process.platform === 'win32' ? child.pid : -child.pid, signal); } catch (error) { if (error.code !== 'ESRCH') throw error; }
-  };
-  kill('SIGTERM');
-  const timer = setTimeout(() => kill('SIGKILL'), 5000);
-  try { await done; } finally { clearTimeout(timer); }
+  // Share one cleanup promise across signals/finally, and never signal a group
+  // again after it disappeared (its numeric ID could eventually be reused).
+  return processHandle.stopping ??= (async () => {
+    const { child, done } = processHandle;
+    if (!child.pid) { await done; return; }
+    const signalGroup = signal => {
+      try { process.kill(-child.pid, signal); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; }
+    };
+    const waitForGroup = async () => {
+      const deadline = Date.now() + 5000;
+      while (signalGroup(0)) {
+        if (Date.now() >= deadline) return false;
+        await delay(25);
+      }
+      return true;
+    };
+    if (signalGroup('SIGTERM') && !await waitForGroup()) {
+      signalGroup('SIGKILL');
+      if (!await waitForGroup()) throw new Error('Owned conformance process group did not terminate');
+    }
+    await done;
+  })();
 }
 
 /** Local-only protocol verification. No inherited provider or Cloudflare credentials. */
@@ -108,8 +157,10 @@ export async function runConformance(root = resolve(fileURLToPath(new URL('..', 
   const requirements = await readFile(join(referee, `requirements/${revision}.yaml`), 'utf8');
   const profile = JSON.parse(await readFile(join(root, 'scripts/mcp-conformance-profile.json'), 'utf8'));
   if (profile.revision !== revision || profile.refereeVersion !== refereeVersion
-    || profile.profile !== 'transit-mcp-2026-07-28-v1'
-    || profile.requirementsSha256 !== createHash('sha256').update(requirements).digest('hex')) throw new Error('Frozen profile or requirements mismatch');
+    || profile.profile !== 'transit-mcp-2026-07-28-v2'
+    || profile.requirementsSha256 !== createHash('sha256').update(requirements).digest('hex')
+    || profile.refereeSha256 !== createHash('sha256').update(await readFile(join(referee, 'dist/index.js'))).digest('hex')
+    || JSON.stringify(Object.keys(profile.requiredChecks).sort()) !== JSON.stringify([...(requirements.match(/^server:\n([\s\S]*?)^client:/m)?.[1] ?? '').matchAll(/^  - ([\w-]+)$/gm)].map(match => match[1]).sort())) throw new Error('Frozen profile, inventory or referee mismatch');
   const directory = await mkdtemp(join(tmpdir(), 'transit-mcp-conformance-'));
   const port = await unusedPort(), origin = `http://127.0.0.1:${port}`;
   // A fresh configuration directory prevents Wrangler from discovering the
@@ -131,16 +182,25 @@ export async function runConformance(root = resolve(fileURLToPath(new URL('..', 
   await writeFile(join(directory, '.dev.vars'), 'MCP_REQUEST_STATE_KEY=local-conformance-only-never-use-in-production\nWMATA_API_KEY=local-placeholder-not-a-provider-credential\n', { mode: 0o600 });
   const environment = { PATH: process.env.PATH ?? '', HOME: directory, TMPDIR: directory,
     WRANGLER_SEND_METRICS: 'false', WRANGLER_LOG_PATH: join(directory, 'wrangler.log'),
+    MCP_CONFORMANCE_WRANGLER_CONFIG: join(directory, 'wrangler.json'),
     WRANGLER_LOAD_DEV_VARS_FROM_DOT_ENV: 'false', NO_COLOR: '1' };
   const workerLog = await open(join(directory, 'worker.log'), 'w', 0o600);
   const suiteLog = await open(join(directory, 'conformance.log'), 'w', 0o600);
   const requirementsLog = await open(join(directory, 'requirements.txt'), 'w', 0o600);
   const localLog = await open(join(directory, 'product-tests.log'), 'w', 0o600);
   let worker, suite, interrupted = false;
-  const interrupt = () => { interrupted = true; void stop(suite); void stop(worker); };
+  const owned = [];
+  const launch = (...args) => {
+    const handle = start(...args); owned.push(handle);
+    // Reap descendants immediately when any leader exits, before its numeric
+    // group ID can be reused. Finally still awaits each cached cleanup result.
+    void handle.done.then(() => stop(handle)).catch(() => {});
+    return handle;
+  };
+  const interrupt = () => { interrupted = true; for (const handle of owned) void stop(handle).catch(() => {}); };
   process.on('SIGINT', interrupt); process.on('SIGTERM', interrupt);
   try {
-    worker = start([join(root, 'node_modules/wrangler/bin/wrangler.js'), 'dev', '--local', '--config', join(directory, 'wrangler.json'),
+    worker = launch([join(root, 'node_modules/wrangler/bin/wrangler.js'), 'dev', '--local', '--config', join(directory, 'wrangler.json'),
       '--ip', '127.0.0.1', '--port', String(port), '--inspector-port', '0', '--persist-to', join(directory, 'state')], directory, workerLog, environment);
     let ready = false;
     for (let attempt = 0; attempt < 120 && !interrupted; attempt++) {
@@ -154,12 +214,12 @@ export async function runConformance(root = resolve(fileURLToPath(new URL('..', 
     }
     if (!ready || interrupted) throw new Error('Local Worker did not become ready');
     const cli = join(referee, 'dist/index.js');
-    suite = start([cli, 'list', '--requirements', revision], directory, requirementsLog, environment);
+    suite = launch([cli, 'list', '--requirements', revision], directory, requirementsLog, environment);
     if (await suite.done !== 0 || interrupted) throw new Error('Frozen requirement listing failed');
-    suite = start([cli, 'server', '--url', `${origin}/mcp`, '--requirements', revision, '--output-dir', join(directory, 'results')], directory, suiteLog, environment);
+    suite = launch([cli, 'server', '--url', `${origin}/mcp`, '--requirements', revision, '--output-dir', join(directory, 'results')], directory, suiteLog, environment);
     // The pinned referee scores the 37 frozen required server scenarios and
     // reports its not_scored extensions/pending scenarios separately. No waiver.
-    const timer = setTimeout(() => { interrupted = true; void stop(suite); }, 10 * 60 * 1000);
+    const timer = setTimeout(interrupt, 10 * 60 * 1000);
     let officialExitCode;
     try { officialExitCode = await suite.done; } finally { clearTimeout(timer); }
     const summary = await summarizeConformance(join(directory, 'results'), requirements);
@@ -172,9 +232,9 @@ export async function runConformance(root = resolve(fileURLToPath(new URL('..', 
       const selected = files.filter(file => file.startsWith('tests/workers/') === (kind === 'workers'));
       if (!selected.length) continue;
       const reportPath = join(directory, `product-${kind}.json`);
-      suite = start([join(root, 'node_modules/vitest/vitest.mjs'), 'run', '--config', join(root, config), ...selected,
+      suite = launch([join(root, 'node_modules/vitest/vitest.mjs'), 'run', '--config', join(root, config), ...selected,
         '--reporter=json', '--outputFile', reportPath], root, localLog, environment);
-      const localTimer = setTimeout(() => { interrupted = true; void stop(suite); }, 180000);
+      const localTimer = setTimeout(interrupt, 180000);
       try { if (await suite.done !== 0) localPassed = false; } finally { clearTimeout(localTimer); }
       const report = JSON.parse(await readFile(reportPath, 'utf8'));
       if (report.success !== true || !report.numTotalTests) localPassed = false;
@@ -193,9 +253,11 @@ export async function runConformance(root = resolve(fileURLToPath(new URL('..', 
   } catch {
     throw new Error(`Local conformance failed; inspect private artifacts in ${directory}`);
   } finally {
-    await stop(suite); await stop(worker);
-    process.off('SIGINT', interrupt); process.off('SIGTERM', interrupt);
-    await Promise.all([workerLog.close(), suiteLog.close(), requirementsLog.close(), localLog.close()]);
+    try { await Promise.all(owned.map(stop)); }
+    finally {
+      process.off('SIGINT', interrupt); process.off('SIGTERM', interrupt);
+      await Promise.all([workerLog.close(), suiteLog.close(), requirementsLog.close(), localLog.close()]);
+    }
   }
 }
 
