@@ -16,10 +16,20 @@ function fixture(exitCode = 0) {
   const write = (path: string, source: string) => { const file = join(root, path); mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, source); };
   write('node_modules/@modelcontextprotocol/conformance/package.json', JSON.stringify({ version: '0.2.0-alpha.11' }));
   write('node_modules/@modelcontextprotocol/conformance/requirements/2026-07-28.yaml', 'server:\n  - tools-list\nclient:\nnot_scored:\n  - scenario: tasks-lifecycle\n    leg: server\n    reason: extension\n');
-  write('scripts/mcp-conformance-profile.json', JSON.stringify({ profile: 'transit-mcp-2026-07-28-v1', revision: '2026-07-28', refereeVersion: '0.2.0-alpha.11',
+  write('scripts/mcp-conformance-profile.json', JSON.stringify({ profile: 'transit-mcp-2026-07-28-v2', revision: '2026-07-28', refereeVersion: '0.2.0-alpha.11',
     requirementsSha256: createHash('sha256').update(readFileSync(join(root, 'node_modules/@modelcontextprotocol/conformance/requirements/2026-07-28.yaml'))).digest('hex'),
-    evidence: { real: { file: 'tests/real.test.ts', title: 'real contract' } }, diagnosticChecks: [] }));
-  write('node_modules/vitest/vitest.mjs', `import fs from 'node:fs'; fs.writeFileSync(process.argv[process.argv.indexOf('--outputFile')+1], JSON.stringify({ success: true, numTotalTests: 1, testResults: [{ name: ${JSON.stringify(join(root, 'tests/real.test.ts'))}, assertionResults: [{ title: 'real contract', status: 'passed' }] }] }));`);
+    requiredChecks: { 'tools-list': [{ id: 'check', statuses: ['SUCCESS', 'FAILURE'] }] },
+    evidence: { real: { file: 'tests/real.test.ts', title: 'real contract' }, worker: { file: 'tests/workers/real.test.ts', title: 'real Worker contract' } }, diagnosticChecks: [] }));
+  write('node_modules/vitest/vitest.mjs', `
+    import fs from 'node:fs';
+    const worker = process.argv.includes(${JSON.stringify(join(root, 'vitest.workers.config.ts'))});
+    if (worker) {
+      const config = process.env.MCP_CONFORMANCE_WRANGLER_CONFIG;
+      if (!config || config.startsWith(${JSON.stringify(root + '/')})) process.exit(37);
+      if (JSON.parse(fs.readFileSync(config)).vars.SFBAY_MODE !== 'off') process.exit(38);
+    }
+    fs.writeFileSync(process.argv[process.argv.indexOf('--outputFile')+1], JSON.stringify({ success: true, numTotalTests: 1, testResults: [{ name: worker ? ${JSON.stringify(join(root, 'tests/workers/real.test.ts'))} : ${JSON.stringify(join(root, 'tests/real.test.ts'))}, assertionResults: [{ title: worker ? 'real Worker contract' : 'real contract', status: 'passed' }] }] }));
+  `);
   write('.dev.vars', 'SF511_API_KEY=private-canary\n');
   write('node_modules/wrangler/bin/wrangler.js', `
     const fs = require('node:fs'), http = require('node:http');
@@ -40,13 +50,16 @@ function fixture(exitCode = 0) {
         for (const [name, status] of [['tools-list', ${JSON.stringify(exitCode ? 'FAILURE' : 'SUCCESS')}], ['tasks-lifecycle', 'FAILURE']]) {
           const p = path.join(output, 'server-' + name + '-2026-10-18T00-00-00-000Z');
           fs.mkdirSync(p, { recursive: true });
-          fs.writeFileSync(path.join(p, 'checks.json'), JSON.stringify([{ id: 'check', status, errorMessage: 'private-canary' }]));
+          fs.writeFileSync(path.join(p, 'checks.json'), JSON.stringify([{ id: 'check', name: 'Fixture check', description: 'Controlled lifecycle check', timestamp: '2026-10-18T00:00:00.000Z', specReferences: [], status, errorMessage: 'private-canary' }]));
         }
         console.log('Required conformance: fixture result; optional extensions reported separately');
         process.exit(${exitCode});
       });
     }
   `);
+  const profile = JSON.parse(readFileSync(join(root, 'scripts/mcp-conformance-profile.json'), 'utf8'));
+  profile.refereeSha256 = createHash('sha256').update(readFileSync(join(root, 'node_modules/@modelcontextprotocol/conformance/dist/index.js'))).digest('hex');
+  write('scripts/mcp-conformance-profile.json', JSON.stringify(profile));
   return root;
 }
 
@@ -87,6 +100,14 @@ describe('managed local conformance runner', () => {
     const root = fixture();
     writeFileSync(join(root, 'node_modules/@modelcontextprotocol/conformance/package.json'), '{"version":"latest"}');
     await expect(runner!.runConformance(root)).rejects.toThrow(/pinned/);
+    expect(existsSync(join(root, 'worker-pid'))).toBe(false);
+  });
+
+  it.each(['requirements/2026-07-28.yaml', 'dist/index.js'])('refuses modified pinned referee %s before starting any process', async path => {
+    const { runConformance } = await import('../../scripts/run-conformance.mjs');
+    const root = fixture();
+    writeFileSync(join(root, 'node_modules/@modelcontextprotocol/conformance', path), 'changed');
+    await expect(runConformance(root)).rejects.toThrow(/Frozen/);
     expect(existsSync(join(root, 'worker-pid'))).toBe(false);
   });
 

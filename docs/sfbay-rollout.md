@@ -6,7 +6,7 @@ SF Bay support is in development. The checked-in production and preview configur
 
 Exactly five global tools are always registered alongside the 13 legacy tools: `find_transit`, `plan_trip`, `get_departures`, `get_service_status`, and `get_vehicle_status`. `/info` reports 18 tools and four transit resource templates. Modes change data availability, never the catalog. The existing Transit Board enhancement is limited to the legacy tools.
 
-`off` disables ingestion and service; `dark` permits ingestion/validation but returns coverage unavailable; `on` permits serving validated data; `suspended` stops polling and permits only the documented stale-data behavior. `TRANSIT_COVERAGE_MODES` can override by coverage, with `SFBAY_MODE` retained as SF's fallback. DC/NYC global planning defaults off; their legacy tools remain operationally independent.
+`off` disables ingestion and service; `dark` permits ingestion/validation but returns coverage unavailable; `on` permits serving validated data; `suspended` stops polling and permits only the documented stale-data behavior. `SFBAY_MODE` is authoritative for SF: `TRANSIT_COVERAGE_MODES` cannot override it. The centralized setting controls other coverage units; DC/NYC global planning defaults off and their legacy tools remain operationally independent.
 
 ## Prepare authoritative data
 
