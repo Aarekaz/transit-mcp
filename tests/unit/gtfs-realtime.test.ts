@@ -18,6 +18,25 @@ function decodedTrip(trip: transit_realtime.ITripDescriptor = {}, stops: transit
 }
 
 describe('version-pinned normalization', () => {
+  it('matches decoded vehicle dates against the pinned schedule and refuses incomplete frequency identities', async () => {
+    const f = await realtimeFixture(), version = await snapshots.staticVersion(f.manifest);
+    const feed = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: START }, entity: [
+      { id: 'dated', vehicle: { trip: { tripId: 'T', startDate: '20261019' }, position: { latitude: 37, longitude: -122 }, timestamp: START } },
+      { id: 'bare', vehicle: { trip: { tripId: 'T' }, position: { latitude: 37, longitude: -122 }, timestamp: START } },
+      { id: 'invalid', vehicle: { trip: { tripId: 'T', startDate: '20260230' }, position: { latitude: 37, longitude: -122 }, timestamp: START } },
+    ] }).finish());
+    expect(feed.vehicles[0]).toMatchObject({ startDate: '20261019' });
+    const normalize = (matching as unknown as { applyVehiclePositions: (vehicles: typeof feed.vehicles, context: matching.TripMatchContext) => Promise<typeof feed.vehicles & { tripInstanceRef?: string }[]> }).applyVehiclePositions;
+    expect(normalize).toBeTypeOf('function');
+    const vehicles = await normalize(feed.vehicles, { manifest: f.manifest, shards: [f.shard], version, feedId: 'sf511' });
+    expect(vehicles[0]).toMatchObject({ tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDg6MDA6MDA', routeId: 'R' });
+    expect(vehicles[1]?.tripInstanceRef).toBeUndefined(); expect(vehicles[2]?.tripInstanceRef).toBeUndefined();
+    const frequency = await realtimeFixture('trip_id,start_time,end_time,headway_secs,exact_times\nT,08:00:00,09:00:00,600,1\n');
+    const context = { manifest: frequency.manifest, shards: [frequency.shard], version: await snapshots.staticVersion(frequency.manifest), feedId: 'sf511' };
+    expect((await normalize(feed.vehicles, context))[0]?.tripInstanceRef).toBeUndefined();
+    const timed = { ...feed.vehicles[0]!, startTime: '08:10:00' };
+    expect((await normalize([timed], context))[0]).toMatchObject({ tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDg6MTA6MDA' });
+  });
   it('fails closed for duplicates without a pinned feed-wide static identity index', async () => {
     const f = await realtimeFixture();
     const result = await matching.applyTripUpdates(decodedTrip({ scheduleRelationship: 6 }, [], { tripProperties: { tripId: 'copy', startDate: '20261019', startTime: '09:00:00' } }),

@@ -308,6 +308,13 @@ export async function handleMcpRequest(
     await captureRequestTelemetry(bounded, telemetry);
   }
 
+  let toolRequest: { name: string; arguments: unknown; inputResponses?: unknown } | undefined;
+  if (bounded.method === 'POST') {
+    try {
+      const body = await bounded.clone().json() as { method?: unknown; params?: { name?: unknown; arguments?: unknown; inputResponses?: unknown } };
+      if (body.method === 'tools/call' && typeof body.params?.name === 'string') toolRequest = { name: body.params.name, arguments: body.params.arguments, inputResponses: body.params.inputResponses };
+    } catch { /* The SDK owns malformed envelope errors. */ }
+  }
   const handler = createMcpHandler(
     sdkContext => {
       if (telemetry) {
@@ -321,6 +328,7 @@ export async function handleMcpRequest(
       return createMetroMcpServer({
         env,
         era: sdkContext.era,
+        toolRequest,
       });
     },
     {

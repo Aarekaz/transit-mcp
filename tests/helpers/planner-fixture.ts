@@ -76,7 +76,7 @@ export function entranceInput() {
   return input;
 }
 /** Hand-authored oracle: no planner logic or derived planner output is used. */
-export function golden(fixture: Awaited<ReturnType<typeof plannerFixture>>): Itinerary {
+export function golden(fixture: Pick<Awaited<ReturnType<typeof plannerFixture>>, 'compiled' | 'version'>): Itinerary {
   const leg: TransitLeg = {
     kind: 'transit', tripRef: ref('trip', 'T'),
     tripInstanceRef: formatTripInstanceRef({ coverage: 'sfbay', feed: 'sf511', id: 'T', serviceDate: '20261019', startTime: '09:00:00' }),
@@ -90,4 +90,17 @@ export function golden(fixture: Awaited<ReturnType<typeof plannerFixture>>): Iti
     origin: ref('stop', 'A'), destination: ref('stop', 'C'), departAt: at('08:59:00'), windowSeconds: 7200,
     maxWalkMetres: 0, maxTransfers: 3, departureTime: at('09:00:00'), arrivalTime: at('09:20:00'),
     walkingMetres: 0, transfers: 0, status: 'scheduled_only', legs: [leg] };
+}
+
+/** Two ordinary rides, with two minutes to transfer at B. */
+export function goldenTransfer(fixture: Pick<Awaited<ReturnType<typeof plannerFixture>>, 'compiled' | 'version'>): Itinerary {
+  const itinerary = golden(fixture), first = itinerary.legs[0] as TransitLeg;
+  Object.assign(first, { headsign: 'Interchange', to: ref('stop', 'B'), alightSequence: 2,
+    scheduledArrivalTime: at('09:10:00'), arrivalTime: at('09:10:00') });
+  itinerary.legs.push({ ...first, tripRef: ref('trip', 'U'), tripInstanceRef: 'tr:sfbay:sf511:trip:VQ:20261019:MDk6MTI6MDA',
+    routeRef: ref('route', 'S'), directionId: 1, headsign: 'Destination', from: ref('stop', 'B'), to: ref('stop', 'C'),
+    boardSequence: 1, alightSequence: 2, instanceStartSeconds: 33120,
+    scheduledDepartureTime: at('09:12:00'), departureTime: at('09:12:00'), scheduledArrivalTime: at('09:25:00'), arrivalTime: at('09:25:00') });
+  itinerary.arrivalTime = at('09:25:00'); itinerary.transfers = 1;
+  return itinerary;
 }

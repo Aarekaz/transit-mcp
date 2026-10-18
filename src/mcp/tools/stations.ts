@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { formatStationPredictionsForMcp } from '../prediction-format';
 import { getTransitClient } from '../../transit/registry';
 import type { SupportedCity, TransitStation } from '../../transit/base';
-import type { MetroMcpContext, MetroRequestState } from '../context';
+import type { LegacyStationRequestState, MetroMcpContext, MetroRequestState } from '../context';
 import { TRANSIT_BOARD_TOOL_META } from '../apps';
 import {
   citySchema,
@@ -42,7 +42,7 @@ function hasUniqueCandidateIds(matches: TransitStation[]): boolean {
   return new Set(matches.map(match => match.id)).size === matches.length;
 }
 
-function hasValidCandidateIds(state: MetroRequestState): boolean {
+function hasValidCandidateIds(state: LegacyStationRequestState): boolean {
   return Array.isArray(state.candidateIds)
     && state.candidateIds.length > 0
     && state.candidateIds.every(candidateId => (

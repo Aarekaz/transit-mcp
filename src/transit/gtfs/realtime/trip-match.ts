@@ -4,7 +4,7 @@ import { isServiceActive, serviceDayOrigin } from '../../planner/service-day';
 import type { ArtifactManifestV2, DiscoveryIndex, ScheduleShard, ScheduleTrip } from '../static/schema';
 import { canonicalJson, decodeDiscoveryIndex, encodeScheduleShard, sha256 } from '../static/shards';
 import { parseGtfsTime, parseServiceDate } from '../static/time';
-import type { DecodedStopUpdate, NormalizedRealtimeFeed, NormalizedStopUpdate, NormalizedTripUpdate } from './decode';
+import type { DecodedStopUpdate, NormalizedRealtimeFeed, NormalizedStopUpdate, NormalizedTripUpdate, NormalizedVehicle } from './decode';
 import { sameStaticVersion, staticVersion, type StaticVersion } from './snapshot-store';
 
 export interface TripMatchContext { manifest: ArtifactManifestV2; shards: ScheduleShard[]; discoveries?: DiscoveryIndex[]; version: StaticVersion; feedId?: string }
@@ -35,6 +35,23 @@ function assertIdentity(context: TripMatchContext): void {
 export function matchTripInstance(update: NormalizedTripUpdate, context: TripMatchContext): MatchedTripInstance | null {
   assertIdentity(context);
   return matchIndexedTrip(update, context, tripIndex(context));
+}
+
+/** Vehicles need the same date/frequency proof as departures; never infer a service date. */
+export async function applyVehiclePositions(vehicles: NormalizedVehicle[], context: TripMatchContext): Promise<NormalizedVehicle[]> {
+  assertIdentity(context);
+  if (!sameStaticVersion(await staticVersion(context.manifest), context.version)) throw new Error('Realtime static artifact version mismatch');
+  for (const shard of context.shards) {
+    const bytes = encodeScheduleShard(shard), hash = await sha256(bytes);
+    if (!context.manifest.shards.some(descriptor => descriptor.feedId === shard.feedId && descriptor.sha256 === hash && descriptor.byteLength === bytes.length)) throw new Error('Realtime schedule integrity failure');
+  }
+  const index = tripIndex(context);
+  return vehicles.map(vehicle => {
+    const match = matchIndexedTrip({ entityId: vehicle.entityId, tripId: vehicle.tripId, routeId: vehicle.routeId,
+      startDate: vehicle.startDate, startTime: vehicle.startTime, scheduleRelationship: vehicle.scheduleRelationship ?? 'UNKNOWN', rawScheduleRelationship: 0, stops: [] }, context, index);
+    const { tripInstanceRef: _unverified, ...base } = vehicle;
+    return match ? { ...base, tripInstanceRef: match.tripInstanceRef, routeId: match.shard.routes.find(route => route.ref === match.trip.routeRef)!.providerId } : base;
+  });
 }
 
 function tripIndex(context: TripMatchContext): Map<string, { shard: ScheduleShard; trip: ScheduleTrip }[]> {

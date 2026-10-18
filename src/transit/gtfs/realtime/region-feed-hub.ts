@@ -7,7 +7,7 @@ import { decodeRealtimeFeed, type NormalizedRealtimeFeed } from './decode';
 import { RegionalFeedHubCore } from './hub-core';
 import { ApiKeyQuota, RealtimeSnapshotStore, StaticArtifactStore, readBoundedObject, SF511_QUOTA_NAMESPACE } from './snapshot-store';
 import { loadScheduleWindow } from '../../planner/schedule-index';
-import { applyTripUpdates } from './trip-match';
+import { applyTripUpdates, applyVehiclePositions } from './trip-match';
 import { decodeDiscoveryIndex, sha256 } from '../static/shards';
 
 const POLLED_PREFIX = 'polled:';
@@ -146,6 +146,11 @@ export class RegionFeedHub implements DurableObject {
         const discovery = decodeDiscoveryIndex(discoveryBytes);
         const applied = await applyTripUpdates(decoded, { manifest: current.manifest, shards: window.shards.map(entry => entry.shard), discoveries: [discovery], version: current.version, feedId: 'sf511' });
         payload = applied.stopUpdates; degraded = applied.degraded || window.status === 'unavailable'; warnings = [...applied.warnings, ...window.reasons];
+      }
+      if (spec.kind === 'vehicle_positions') {
+        const window = await loadScheduleWindow({ manifest: current.manifest, instant: new Date(nowSeconds * 1000).toISOString(), windowSeconds: 6 * 3600,
+          readShard: key => readBoundedObject(this.#env.TRANSIT_ARTIFACTS!, key, 64 * 1024 * 1024) });
+        payload = await applyVehiclePositions(decoded.vehicles, { manifest: current.manifest, shards: window.shards.map(entry => entry.shard), version: current.version, feedId: 'sf511' });
       }
       await this.#snapshots.publish(spec.kind, {
           version: current.version,

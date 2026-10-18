@@ -35,6 +35,10 @@ export interface NormalizedVehicle {
   vehicleId?: string;
   label?: string;
   tripId?: string;
+  startDate?: string;
+  startTime?: string;
+  scheduleRelationship?: TripRelationship;
+  tripInstanceRef?: string;
   routeId?: string;
   latitude: number;
   longitude: number;
@@ -129,12 +133,15 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
         entityId: entity.id,
         vehicleId: vehicle.vehicle?.id ?? undefined,
         label: vehicle.vehicle?.label ? sanitizeTransitText(vehicle.vehicle.label, 120) : undefined,
-        tripId: vehicle.trip?.tripId ?? undefined,
-        routeId: vehicle.trip?.routeId ?? undefined,
+        tripId: identifier(vehicle.trip?.tripId),
+        startDate: identifier(vehicle.trip?.startDate),
+        startTime: identifier(vehicle.trip?.startTime),
+        scheduleRelationship: vehicle.trip?.scheduleRelationship === 2 ? 'UNSCHEDULED' : vehicle.trip?.scheduleRelationship == null || vehicle.trip.scheduleRelationship === 0 ? 'SCHEDULED' : 'UNKNOWN',
+        routeId: identifier(vehicle.trip?.routeId),
         latitude: vehicle.position.latitude,
         longitude: vehicle.position.longitude,
-        bearing: vehicle.position.bearing ?? undefined,
-        speedMetersPerSecond: vehicle.position.speed ?? undefined,
+        bearing: ownNumber(vehicle.position, 'bearing'),
+        speedMetersPerSecond: ownNumber(vehicle.position, 'speed'),
         timestampSeconds: ownNumber(vehicle, 'timestamp'),
       });
     }
