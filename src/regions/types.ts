@@ -1,4 +1,5 @@
 import type { SupportedCity } from '../transit/base';
+import type { CoverageBinding } from '../transit/core/coverage';
 
 export type PublicCity = SupportedCity | 'sfbay';
 export type RegionMode = 'off' | 'dark' | 'on' | 'suspended';
@@ -19,8 +20,8 @@ export interface RegionManifest {
   timezone: string;
   bounds: readonly [west: number, south: number, east: number, north: number];
   idStrategy: 'verbatim' | 'agency-prefix';
-  secretEnv: 'SF511_API_KEY';
-  modeEnv: 'SFBAY_MODE';
+  secretEnv: CoverageBinding['secretEnv'];
+  modeEnv: CoverageBinding['modeEnv'];
   realtime: {
     budget: {
       requestsPerHour: number;

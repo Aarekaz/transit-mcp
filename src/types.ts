@@ -1,3 +1,5 @@
+import type { CoverageWorkerBindings } from './transit/core/coverage';
+
 /**
  * Type Definitions
  * 
@@ -21,7 +23,7 @@
  * 
  * NOTE: Update this when adding new environment variables or KV namespaces
  */
-export interface Env {
+export interface Env extends CoverageWorkerBindings {
   // Canonical MCP deployment configuration
   MCP_PUBLIC_ORIGIN: string;
   MCP_ALLOWED_HOSTNAMES: string;
@@ -34,8 +36,6 @@ export interface Env {
 
   // API Keys
   WMATA_API_KEY: string;           // DC Metro (WMATA) API key (secret)
-  SF511_API_KEY?: string;          // Optional Bay Area 511 API key (secret)
-  SFBAY_MODE?: 'off' | 'dark' | 'on' | 'suspended';
   REGION_FEED_HUB?: DurableObjectNamespace;
   TRANSIT_ARTIFACTS?: R2Bucket;
 

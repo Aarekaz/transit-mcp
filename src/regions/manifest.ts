@@ -1,4 +1,5 @@
 import type { PublicCity, RegionMode } from './types';
+export { getCoverage } from '../transit/core/coverage';
 
 const REGION_MODES = new Set<RegionMode>(['off', 'dark', 'on', 'suspended']);
 
