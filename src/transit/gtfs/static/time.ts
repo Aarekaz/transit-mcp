@@ -15,3 +15,12 @@ export function parseGtfsTime(value: string): GtfsTime {
   if (minutes > 59 || seconds > 59) throw new Error(`Invalid GTFS time: ${value}`);
   return { hours, minutes, seconds, totalSeconds: hours * 3600 + minutes * 60 + seconds };
 }
+
+/** Calendar dates are civil dates, not instants in an agency timezone. */
+export function parseServiceDate(value: string): Date {
+  if (!/^\d{8}$/.test(value)) throw new Error('Invalid GTFS service date');
+  const iso = `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+  const date = new Date(`${iso}T00:00:00Z`);
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== iso) throw new Error('Invalid GTFS service date');
+  return date;
+}

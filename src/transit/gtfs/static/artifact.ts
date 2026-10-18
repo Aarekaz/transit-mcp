@@ -1,4 +1,45 @@
 import type { TransitMode } from './modes';
+import { z } from 'zod';
+import { sha256 } from './shards';
+import { parseServiceDate } from './time';
+import type { ValidatorEvidence } from './schema';
+export type { ArtifactManifestV2, ScheduleShard, DiscoveryIndex } from './schema';
+
+const validatorReportSchema = z.object({
+  summary: z.object({ validatorVersion: z.string().trim().min(1), validatedAt: z.string().min(1) }),
+  notices: z.array(z.object({ code: z.string().trim().min(1), severity: z.enum(['ERROR', 'WARNING', 'INFO']), totalNotices: z.number().int().nonnegative() })),
+});
+const warningAllowlistSchema = z.object({
+  coverageId: z.string(),
+  warnings: z.array(z.object({ code: z.string().trim().min(1), reason: z.string().trim().min(1), expires: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })),
+});
+
+/** Validate a caller-supplied canonical MobilityData report before any publication. */
+export async function validateMobilityDataReport(
+  reportJson: string, allowlistInput: unknown, coverageId: string, today: string,
+): Promise<ValidatorEvidence> {
+  let report;
+  try { report = validatorReportSchema.parse(JSON.parse(reportJson)); }
+  catch { throw new Error('Invalid MobilityData validator report'); }
+  if (!Number.isFinite(Date.parse(report.summary.validatedAt))) throw new Error('Invalid MobilityData validator report timestamp');
+  const allowlist = warningAllowlistSchema.safeParse(allowlistInput);
+  if (!allowlist.success || allowlist.data.coverageId !== coverageId) throw new Error('Invalid validator warning allowlist');
+  parseServiceDate(today.replaceAll('-', ''));
+  const entries = new Map<string, { reason: string; expires: string }>();
+  for (const entry of allowlist.data.warnings) {
+    parseServiceDate(entry.expires.replaceAll('-', ''));
+    if (entry.expires <= today) throw new Error('Expired validator warning allowlist entry');
+    if (entries.has(entry.code)) throw new Error('Duplicate validator warning allowlist entry');
+    entries.set(entry.code, entry);
+  }
+  for (const notice of report.notices) {
+    if (notice.totalNotices === 0) continue;
+    if (notice.severity === 'ERROR') throw new Error('MobilityData validator error blocks publication');
+    if (notice.severity === 'WARNING' && !entries.has(notice.code)) throw new Error(`Unallowlisted validator warning: ${notice.code}`);
+  }
+  return { name: 'MobilityData GTFS Validator', version: report.summary.validatorVersion,
+    validatedAt: report.summary.validatedAt, reportSha256: await sha256(new TextEncoder().encode(reportJson)) };
+}
 
 export interface ArtifactStop {
   id: string;
