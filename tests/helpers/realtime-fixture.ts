@@ -2,7 +2,7 @@ import { compileSchedule } from '../../src/transit/gtfs/static/compiler';
 import { SFBAY_COVERAGE } from '../../src/regions/sfbay';
 import type { GtfsScheduleFiles } from '../../src/transit/gtfs/static/schema';
 
-export async function realtimeFixture(frequencies = '') {
+export async function realtimeFixture(frequencies = '', overrides: Partial<GtfsScheduleFiles> = {}) {
   const files: GtfsScheduleFiles = {
     'agency.txt': 'agency_id,agency_name,agency_url,agency_timezone\nA,Muni,https://sfmta.com,America/Los_Angeles\n',
     'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nS,Station,37,-122\nP,Platform,37,-122\nQ,Last,37,-122\n',
@@ -11,6 +11,7 @@ export async function realtimeFixture(frequencies = '') {
     'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,08:00:00,08:00:00,S,1\nT,08:05:00,08:05:00,P,2\nT,08:10:00,08:10:00,S,3\nT,08:15:00,08:15:00,Q,4\n',
     'calendar.txt': 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nD,1,1,1,1,1,1,1,20260101,20261231\n',
     ...(frequencies ? { 'frequencies.txt': frequencies } : {}),
+    ...overrides,
   };
   return compileSchedule({ coverage: SFBAY_COVERAGE, feedId: 'sf511', files,
     window: { startDate: '20260101', endDate: '20261231' },

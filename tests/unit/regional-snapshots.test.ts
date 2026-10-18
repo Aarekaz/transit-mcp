@@ -5,10 +5,13 @@ import { RegionFeedHub } from '../../src/transit/gtfs/realtime/region-feed-hub';
 import { RealtimeSnapshotStore, StaticArtifactStore, SF511_QUOTA_NAMESPACE } from '../../src/transit/gtfs/realtime/snapshot-store';
 import { memoryStorage, realtimeFixture } from '../helpers/realtime-fixture';
 import { transit_realtime } from 'gtfs-realtime-bindings';
+import { decodeRealtimeFeed } from '../../src/transit/gtfs/realtime/decode';
+import { applyTripUpdates } from '../../src/transit/gtfs/realtime/trip-match';
+import { canonicalJson, sha256 } from '../../src/transit/gtfs/static/shards';
 
 const NOW = Date.parse('2026-10-19T08:00:00-07:00') / 1000;
-async function setup() {
-  const db = memoryStorage(), f = await realtimeFixture();
+async function setup(fixture?: Awaited<ReturnType<typeof realtimeFixture>>) {
+  const db = memoryStorage(), f = fixture ?? await realtimeFixture();
   db.objects.set(f.manifest.shards[0]!.key, f.shardBytes);
   db.objects.set(f.manifest.discoveries[0]!.key, f.discoveryBytes);
   const artifacts = new StaticArtifactStore(db.bucket), version = await artifacts.publish(f.manifest);
@@ -19,7 +22,121 @@ async function setup() {
   return { db, f, env, hub, store, version, artifacts, service: createRegionalTransitService(env) };
 }
 
+async function publishTrip(f: Awaited<ReturnType<typeof setup>>, tripUpdate: transit_realtime.ITripUpdate) {
+  const bytes = transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: NOW }, entity: [{ id: 'e', tripUpdate }] }).finish();
+  const applied = await applyTripUpdates(decodeRealtimeFeed(bytes), { manifest: f.f.manifest, shards: [f.f.shard], discoveries: [f.f.discovery], version: f.version, feedId: 'sf511' });
+  await f.store.publish('trip_updates', { version: f.version, receivedAtSeconds: NOW, producerTimestampSeconds: NOW,
+    payload: applied.stopUpdates, degraded: applied.degraded, warnings: applied.warnings });
+  return applied;
+}
+
 describe('regional v2 snapshot service', () => {
+  it('rejects duplicate IDs owned by static trips outside the loaded window', async () => {
+    const f = await setup(await realtimeFixture('', {
+      'trips.txt': 'route_id,service_id,trip_id\nR,FUTURE,U\nR,D,T\n',
+      'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,08:00:00,08:00:00,S,1\nU,09:00:00,09:00:00,P,1\n',
+      'calendar.txt': 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nD,1,1,1,1,1,1,1,20260101,20261231\nFUTURE,1,1,1,1,1,1,1,20270101,20271231\n',
+    }));
+    expect(f.f.shard.trips.map(trip => trip.providerId)).toEqual(['T']);
+    expect(f.f.shard.transferBoundaryTrips).toEqual([]);
+    const applied = await publishTrip(f, { trip: { tripId: 'T', startDate: '20261019', scheduleRelationship: 6 },
+      tripProperties: { tripId: 'U', startDate: '20261019', startTime: '08:00:00' }, delay: 120 });
+    expect(applied.stopUpdates).toEqual([]);
+    expect(applied.degraded).toBe(true);
+    expect((await f.service.getStationPredictions('S', NOW)).payload).toEqual([
+      expect.objectContaining({ tripId: 'T', arrivalTimeSeconds: NOW, status: 'scheduled_only' }),
+    ]);
+  });
+
+  it.each([undefined, ['T', 'T'], ['U', 'T'], [42], ['']].map(tripProviderIds => ({ tripProviderIds })))('rejects malformed discovery trip identity indexes: %j', async ({ tripProviderIds }) => {
+    const f = await setup();
+    const bytes = new TextEncoder().encode(canonicalJson({ ...f.f.discovery, tripProviderIds }));
+    const descriptor = { ...f.f.manifest.discoveries[0]!, sha256: await sha256(bytes), byteLength: bytes.length };
+    f.db.objects.set(descriptor.key, bytes);
+    await f.artifacts.publish({ ...f.f.manifest, discoveries: [descriptor] });
+    await expect(f.service.getRoutes()).rejects.toThrow(/discovery/i);
+  });
+
+  it('returns a schedule-only duplicated trip alongside the unchanged original service', async () => {
+    const f = await setup();
+    const applied = await publishTrip(f, { trip: { tripId: 'T', startDate: '20261019', scheduleRelationship: 6 },
+      tripProperties: { tripId: 'copy', startDate: '20261019', startTime: '08:02:00' } });
+    expect(applied.degraded).toBe(false);
+    const result = await f.service.getStationPredictions('S', NOW);
+    expect(result.payload?.map(row => [row.tripId, row.arrivalTimeSeconds, row.status])).toEqual([
+      ['T', NOW, 'scheduled_only'], ['copy', NOW + 120, 'scheduled_only'],
+      ['T', NOW + 600, 'scheduled_only'], ['copy', NOW + 720, 'scheduled_only'],
+    ]);
+  });
+
+  it('uses the complete NO_DATA replacement schedule with changed times and a new stop', async () => {
+    const f = await setup(await realtimeFixture('', {
+      'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nS,Station,37,-122\nP,Platform,37,-122\nQ,Last,37,-122\nX,New,37,-122\n',
+    }));
+    const applied = await publishTrip(f, { trip: { tripId: 'T', routeId: 'R', startDate: '20261019', scheduleRelationship: 5 },
+      stopTimeUpdate: [
+        { stopId: 'S', stopSequence: 1, scheduleRelationship: 2, arrival: { time: NOW + 120 }, departure: { time: NOW + 150 } },
+        { stopId: 'X', stopSequence: 2, scheduleRelationship: 2, arrival: { time: NOW + 420 }, departure: { time: NOW + 450 } },
+      ] });
+    expect(applied.degraded).toBe(false);
+    expect((await f.service.getStationPredictions('S', NOW)).payload).toEqual([
+      expect.objectContaining({ tripId: 'T', arrivalTimeSeconds: NOW + 120, departureTimeSeconds: NOW + 150, status: 'scheduled_only' }),
+    ]);
+    expect((await f.service.getStationPredictions('X', NOW)).payload).toEqual([
+      expect.objectContaining({ tripId: 'T', arrivalTimeSeconds: NOW + 420, departureTimeSeconds: NOW + 450, status: 'scheduled_only' }),
+    ]);
+    expect((await f.service.getStationPredictions('P', NOW)).payload).toEqual([]);
+    expect((await f.service.getStationPredictions('Q', NOW)).payload).toEqual([]);
+  });
+
+  it.each([1, 5])('suppresses SKIPPED extra calls with supplied times for trip relationship %s', async scheduleRelationship => {
+    const f = await setup();
+    const applied = await publishTrip(f, { trip: { tripId: scheduleRelationship === 1 ? 'extra' : 'T', routeId: 'R', startDate: '20261019', scheduleRelationship },
+      stopTimeUpdate: [{ stopId: 'P', stopSequence: 2, scheduleRelationship: 1, arrival: { time: NOW + 120 }, departure: { time: NOW + 150 } }] });
+    expect(applied.stopUpdates.find(row => row.stopId === 'P')).toMatchObject({ status: 'skipped' });
+    const result = await f.service.getStationPredictions('P', NOW);
+    expect(result.payload?.map(row => [row.tripId, row.arrivalTimeSeconds])).toEqual(scheduleRelationship === 1 ? [['T', NOW + 300]] : []);
+  });
+
+  it('derives the route from the original dated trip for a route-less replacement', async () => {
+    const f = await setup();
+    const applied = await publishTrip(f, { trip: { tripId: 'T', startDate: '20261019', scheduleRelationship: 5 },
+      stopTimeUpdate: [{ stopId: 'S', stopSequence: 1, arrival: { time: NOW + 120 }, departure: { time: NOW + 150 } }] });
+    expect(applied.degraded).toBe(false);
+    expect(applied.match).toEqual({ eligible: 0, matched: 0, rate: 1 });
+    expect((await f.service.getStationPredictions('S', NOW)).payload).toEqual([
+      expect.objectContaining({ tripId: 'T', routeId: 'R', arrivalTimeSeconds: NOW + 120, status: 'realtime' }),
+    ]);
+  });
+
+  it('ignores malformed attached stop updates after matching a canceled trip', async () => {
+    const f = await setup();
+    const applied = await publishTrip(f, { trip: { tripId: 'T', startDate: '20261019', scheduleRelationship: 3 },
+      stopTimeUpdate: [{ stopId: 'not-a-stop', stopSequence: 999, scheduleRelationship: 99 as transit_realtime.TripUpdate.StopTimeUpdate.ScheduleRelationship, arrival: { time: NOW + 120 } }] });
+    expect(applied.match).toEqual({ eligible: 1, matched: 1, rate: 1 });
+    expect(applied.stopUpdates).toHaveLength(4);
+    expect(applied.stopUpdates.every(row => row.status === 'canceled')).toBe(true);
+    expect((await f.service.getStationPredictions('S', NOW)).payload).toEqual([]);
+    expect((await f.service.getStationPredictions('P', NOW)).payload).toEqual([]);
+  });
+
+  it.each([
+    { tripId: 'T', startDate: '20261019', startTime: '08:00:00' },
+    { tripId: 'T', startDate: '20261020', startTime: '09:00:00' },
+    { tripId: 'U', startDate: '20261019', startTime: '08:00:00' },
+  ])('rejects duplicated trip IDs colliding with static service: %j', async tripProperties => {
+    const f = await setup(await realtimeFixture('', {
+      'trips.txt': 'route_id,service_id,trip_id\nR,D,T\nR,D,U\n',
+      'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,08:00:00,08:00:00,S,1\nT,08:05:00,08:05:00,P,2\nU,08:00:00,08:00:00,S,1\nU,08:05:00,08:05:00,P,2\n',
+    }));
+    const applied = await publishTrip(f, { trip: { tripId: 'T', startDate: '20261019', scheduleRelationship: 6 }, tripProperties, delay: 120 });
+    expect(applied.stopUpdates).toEqual([]);
+    expect(applied.degraded).toBe(true);
+    expect((await f.service.getStationPredictions('S', NOW)).payload?.map(row => [row.tripId, row.arrivalTimeSeconds, row.status])).toEqual([
+      ['T', NOW, 'scheduled_only'], ['U', NOW, 'scheduled_only'],
+    ]);
+  });
+
   it('uses immutable discovery and exact static/realtime pins without fetching upstream during requests', async () => {
     const f = await setup(); const upstream = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('No request may fetch upstream'));
     try {
@@ -90,6 +207,24 @@ describe('regional v2 snapshot service', () => {
       expect(f.db.values.get('quota:sfbay:511')).toHaveLength(3);
       expect(JSON.stringify([...f.db.values])).not.toContain('test-credential');
       expect(JSON.stringify([...f.db.values])).not.toContain('arrivalTimeSeconds');
+    } finally { upstream.mockRestore(); warning.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('verifies original discovery bytes before alarm normalization, not only reconstructed JSON', async () => {
+    const f = await setup();
+    const bytes = new TextEncoder().encode(JSON.stringify(Object.fromEntries(Object.entries(f.f.discovery).sort(([a], [b]) => a < b ? 1 : -1))));
+    expect(bytes.length).toBe(f.f.discoveryBytes.length);
+    expect(await sha256(bytes)).not.toBe(f.f.manifest.discoveries[0]!.sha256);
+    f.db.objects.set(f.f.manifest.discoveries[0]!.key, bytes);
+    const feed = transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: NOW }, entity: [
+      { id: 'e', tripUpdate: { trip: { tripId: 'T', startDate: '20261019' }, delay: 60 } },
+    ] }).finish();
+    vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
+    const upstream = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(feed));
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await f.hub.alarm();
+      expect(await f.store.read('trip_updates', f.version)).toBeNull();
     } finally { upstream.mockRestore(); warning.mockRestore(); vi.useRealTimers(); }
   });
 

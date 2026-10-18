@@ -40,6 +40,19 @@ async function fixture(data = input(), windows = [data.window]) {
 }
 
 describe('schedule-window metadata', () => {
+  it('pins a deterministic sorted feed-wide trip-ID index independent of the service window', async () => {
+    const data = input();
+    data.files['trips.txt'] += 'R,D,A,Ocean Beach,0\n';
+    data.files['stop_times.txt'] += 'A,09:10:00,09:10:30,P,1,0\n';
+    const active = await compileSchedule(data);
+    const inactive = await compileSchedule({ ...data, window: { startDate: '20270101', endDate: '20270102' } });
+    expect(active.discovery.tripProviderIds).toEqual(['A', 'T']);
+    expect(inactive.shard.trips).toEqual([]);
+    expect(inactive.discoveryBytes).toEqual(active.discoveryBytes);
+    expect(inactive.manifest.discoveries).toEqual(active.manifest.discoveries);
+    expect(active.discovery.tripProviderIds).not.toContain('09:10:00');
+  });
+
   it('pins discovery to the same source version as the timetable', async () => {
     const result = await compileSchedule(input());
     expect(result.discovery).toMatchObject({ sourceSha256: result.manifest.sources[0]!.sha256 });
