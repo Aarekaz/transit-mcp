@@ -14,6 +14,8 @@ export interface SourceMetadata {
   /** Hash of canonical parsed GTFS tables, independent of CSV ordering. */
   sha256: string;
   feedInfo: Record<string, string>[];
+  /** Deterministic normalization only when the single source agency omits its ID. */
+  anonymousAgencyRef?: TransitRef;
 }
 export interface ScheduleStop {
   ref: TransitRef; providerId: string; name: string;
@@ -61,13 +63,22 @@ export interface ScheduleShard {
   frequencies: { tripRef: TransitRef; startSeconds: number; endSeconds: number; headwaySeconds: number; exactTimes: number }[];
   blocks: Record<string, TransitRef[]>;
   transfers: ScheduleTransfer[]; pathways: SchedulePathway[];
+  /** Transfer endpoints absent from this window. Resolve their service dates via
+   * calendars, then load the same feed/source.sha256 window containing that date.
+   * Times remain relative to the endpoint's own service day, including >24h. */
+  transferBoundaryTrips: (Pick<ScheduleTrip, 'ref' | 'providerId' | 'routeRef' | 'serviceId'> & {
+    firstDepartureSeconds: number | null; lastArrivalSeconds: number | null;
+  })[];
 }
 export interface DiscoveryIndex {
   schemaVersion: 2; coverageId: string; feedId: string;
   stops: ScheduleStop[]; routes: ScheduleRoute[]; stopRoutes: Record<TransitRef, TransitRef[]>;
 }
 export interface ArtifactObject { key: string; sha256: string; byteLength: number }
-export interface ValidatorEvidence { name: 'MobilityData GTFS Validator'; version: string; reportSha256: string; validatedAt: string }
+export interface ValidatorEvidence {
+  name: 'MobilityData GTFS Validator'; version: string; reportSha256: string; validatedAt: string;
+  systemErrorsSha256: string; systemErrorsFormat: 'MobilityData notices';
+}
 export interface ArtifactManifestV2 {
   schemaVersion: 2; coverageId: string; sources: SourceMetadata[];
   agencyTimezones: Record<TransitRef, string>;

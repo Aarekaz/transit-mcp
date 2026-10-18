@@ -58,7 +58,11 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     return left < right ? -1 : left > right ? 1 : 0;
   })]));
   const rows = (name: string) => tables[name] ?? [];
-  const agencies = indexed(rows('agency.txt'), 'agency_id');
+  const agencyRows = rows('agency.txt');
+  // GTFS permits the ID to be absent only for a single agency. Keep the raw
+  // tables unchanged for source hashing, and expose normalization as provenance.
+  const anonymousAgencyId = agencyRows.length === 1 && !agencyRows[0]!.agency_id ? '__anonymous_agency__' : undefined;
+  const agencies = indexed(anonymousAgencyId ? [{ ...agencyRows[0]!, agency_id: anonymousAgencyId }] : agencyRows, 'agency_id');
   if (!agencies.size) throw new Error('Missing agency.txt');
   const agencyTimezones: Record<TransitRef, string> = {};
   for (const [id, agency] of agencies) {
@@ -182,7 +186,8 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     signpostedAs: row.signposted_as ?? '', reversedSignpostedAs: row.reversed_signposted_as ?? '',
   }));
   const source = { feedId, url: url.href, retrievedAt: input.source.retrievedAt,
-    sha256: await sha256(new TextEncoder().encode(canonicalJson(tables))), feedInfo: rows('feed_info.txt') };
+    sha256: await sha256(new TextEncoder().encode(canonicalJson(tables))), feedInfo: rows('feed_info.txt'),
+    ...(anonymousAgencyId ? { anonymousAgencyRef: ref('agency', anonymousAgencyId) } : {}) };
   for (const info of source.feedInfo) {
     for (const field of ['feed_publisher_url', 'feed_contact_url']) {
       if (!info[field]) continue;
@@ -198,10 +203,15 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
   const activePatterns = new Set(activeTrips.map(trip => trip.patternId));
   const blocks: Record<string, TransitRef[]> = Object.create(null);
   for (const trip of activeTrips) if (trip.blockId) (blocks[trip.blockId] ??= []).push(trip.ref);
+  const transferTripRefs = new Set(transfers.flatMap(transfer => [transfer.fromTripRef, transfer.toTripRef].filter((value): value is TransitRef => value !== undefined)));
+  const transferBoundaryTrips = trips.filter(trip => transferTripRefs.has(trip.ref) && !activeRefs.has(trip.ref)).map(trip => ({
+    ref: trip.ref, providerId: trip.providerId, routeRef: trip.routeRef, serviceId: trip.serviceId,
+    firstDepartureSeconds: trip.stopTimes[0]!.departureSeconds, lastArrivalSeconds: trip.stopTimes.at(-1)!.arrivalSeconds,
+  }));
   const shard: ScheduleShard = { schemaVersion: 2, coverageId: coverage.id, feedId, window: { ...window }, source, agencyTimezones,
     stops, routes, trips: activeTrips, patterns: [...patterns.values()].filter(p => activePatterns.has(p.id)).sort((a, b) => a.id < b.id ? -1 : 1),
     calendars, frequencies: frequencies.filter(f => activeRefs.has(f.tripRef)), blocks,
-    transfers: transfers.filter(t => (!t.fromTripRef || activeRefs.has(t.fromTripRef)) && (!t.toTripRef || activeRefs.has(t.toTripRef))), pathways };
+    transfers, transferBoundaryTrips, pathways };
   const discovery = { schemaVersion: 2 as const, coverageId: coverage.id, feedId, stops: stops.filter(s => s.locationType !== 3), routes,
     stopRoutes: Object.fromEntries(Object.entries(stopRoutes).map(([key, values]) => [key, [...new Set(values)].sort()])) };
   const shardBytes = encodeScheduleShard(shard);

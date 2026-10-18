@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { mkdir, rename } from 'node:fs/promises';
 import { compileSchedule } from '../src/transit/gtfs/static/compiler';
-import { validateMobilityDataReport } from '../src/transit/gtfs/static/artifact';
+import { validateMobilityDataReport, validateMobilityDataSystemErrors } from '../src/transit/gtfs/static/artifact';
 import { canonicalJson, sha256 } from '../src/transit/gtfs/static/shards';
 import type { GtfsScheduleFiles } from '../src/transit/gtfs/static/schema';
 import { SFBAY_COVERAGE } from '../src/regions/sfbay';
@@ -16,6 +16,7 @@ const inputDirectory = required('SFBAY_GTFS_DIRECTORY');
 // The canonical report has no input content hash. Require an explicit report for
 // every invocation and record its own hash/version; never discover a stale report.
 const reportPath = required('SFBAY_VALIDATOR_REPORT');
+const systemErrorsPath = required('SFBAY_VALIDATOR_SYSTEM_ERRORS');
 const outputDirectory = process.argv[2] ?? '.artifacts/sfbay-v2';
 const mandatory = ['agency.txt', 'stops.txt', 'routes.txt', 'trips.txt', 'stop_times.txt'] as const;
 const optional = ['calendar.txt', 'calendar_dates.txt', 'feed_info.txt', 'frequencies.txt', 'transfers.txt', 'pathways.txt'] as const;
@@ -27,11 +28,12 @@ const entries = await Promise.all([...mandatory, ...optional].map(async name => 
 const files = Object.fromEntries(entries.filter(entry => entry !== null)) as GtfsScheduleFiles;
 const reportJson = await Bun.file(reportPath).text();
 const validator = await validateMobilityDataReport(reportJson, allowlist, SFBAY_COVERAGE.id, new Date().toISOString().slice(0, 10));
+const systemErrors = await validateMobilityDataSystemErrors(await Bun.file(systemErrorsPath).text());
 const result = await compileSchedule({ coverage: SFBAY_COVERAGE, feedId: 'sf511', files,
   window: { startDate: required('SFBAY_WINDOW_START'), endDate: required('SFBAY_WINDOW_END') },
   source: { url: 'https://api.511.org/transit/datafeeds', retrievedAt: required('SFBAY_SOURCE_RETRIEVED_AT') },
 });
-result.manifest.validator = validator;
+result.manifest.validator = { ...validator, ...systemErrors };
 // Optional provenance bindings supplied by a validation pipeline fail closed.
 const report = JSON.parse(reportJson);
 if ((report.sourceSha256 !== undefined && report.sourceSha256 !== result.manifest.sources[0]!.sha256) ||
