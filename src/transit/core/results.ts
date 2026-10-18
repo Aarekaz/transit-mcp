@@ -10,6 +10,7 @@ export const VERIFICATION_REASONS = [
   'STOP_SKIPPED',
   'VALIDATOR_REJECTED',
   'COVERAGE_UNAVAILABLE',
+  'SCOPE_LIMIT_EXCEEDED',
 ] as const;
 
 export type VerificationReason = typeof VERIFICATION_REASONS[number];
