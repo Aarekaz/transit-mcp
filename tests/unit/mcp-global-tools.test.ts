@@ -125,6 +125,28 @@ describe('global transit MCP boundary', () => {
       producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload }) }) } as unknown as DurableObjectNamespace;
     expect((await call(f.env, 'get_service_status', { ref: ref('route', 'R') })).result.structuredContent).toMatchObject({ status: 'unavailable', reasons: ['SCHEDULE_EXPIRED'], alerts: [] });
   });
+  it('fails closed when coverage-wide trip-ID-less alert resolution needs an expired schedule window', async () => {
+    const f = await fixture(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2027-10-19T08:59:00-07:00'));
+    const now = Date.now() / 1000;
+    const payload = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: now },
+      entity: [{ id: 'idless', alert: { informedEntity: [{ trip: { routeId: 'R', directionId: 0, startDate: '20271019', startTime: '09:00:00' } }] } }] }).finish()).alerts;
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload }) }) } as unknown as DurableObjectNamespace;
+    expect((await call(f.env, 'get_service_status', { coverage: 'sfbay' })).result.structuredContent).toMatchObject({ status: 'unavailable', reasons: ['SCHEDULE_EXPIRED'], alerts: [] });
+  });
+  it.each([{ selectors: [] }, { selectors: [{}] }])('retains network-wide alerts without requiring schedule data: $selectors', async ({ selectors }) => {
+    const f = await fixture(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2027-10-19T08:59:00-07:00'));
+    f.db.objects.delete(f.compiled.manifest.shards[0]!.key);
+    const now = Date.now() / 1000;
+    const payload = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: now },
+      entity: [{ id: 'network', alert: { informedEntity: selectors } }] }).finish()).alerts;
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload }) }) } as unknown as DurableObjectNamespace;
+    const result = (await call(f.env, 'get_service_status', { coverage: 'sfbay' })).result.structuredContent;
+    expect(result).toMatchObject({ status: 'realtime', reasons: [] });
+    expect(result.alerts.map((alert: any) => alert.id)).toEqual(['network']);
+    expect(result.alerts[0].selectors).toEqual(selectors);
+  });
   it.each([
     { name: 'route and wrong trip are a conjunction', selectors: [{ routeId: 'R', trip: { tripId: 'U' } }], wanted: false },
     { name: 'another service date is not the same trip', selectors: [{ trip: { tripId: 'T', startDate: '20261020' } }], wanted: false },
