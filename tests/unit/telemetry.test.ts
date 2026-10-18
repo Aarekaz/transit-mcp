@@ -5,7 +5,6 @@ import { serializeTelemetry } from '../../src/telemetry';
 describe('serializeTelemetry', () => {
   it('serializes only the documented safe fields', () => {
     const serialized = serializeTelemetry({
-      correlationId: 'req-123',
       era: 'modern',
       protocolVersion: '2026-07-28',
       mcpMethod: 'tools/call',
@@ -26,7 +25,6 @@ describe('serializeTelemetry', () => {
     });
 
     expect(JSON.parse(serialized)).toEqual({
-      correlationId: 'req-123',
       era: 'modern',
       protocolVersion: '2026-07-28',
       mcpMethod: 'tools/call',
@@ -67,7 +65,7 @@ describe('serializeTelemetry', () => {
 });
 
 describe('serializeTelemetry usage fields', () => {
-  it('keeps a well-formed client name and session id', () => {
+  it('keeps only a known software category and drops even well-formed identifiers', () => {
     expect(JSON.parse(serializeTelemetry({
       mcpMethod: 'initialize',
       clientName: 'Claude Desktop',
@@ -75,7 +73,6 @@ describe('serializeTelemetry usage fields', () => {
     }))).toEqual({
       mcpMethod: 'initialize',
       clientName: 'Claude Desktop',
-      sessionId: 'abc-123_XYZ',
     });
   });
 
@@ -83,6 +80,22 @@ describe('serializeTelemetry usage fields', () => {
     expect(JSON.parse(serializeTelemetry({
       clientName: 'evil<script>',
       sessionId: 'has space',
-    }))).toEqual({});
+    }))).toEqual({ clientName: 'unclassified' });
+  });
+
+  it('never serializes request/location data smuggled through permitted string fields', () => {
+    const serialized = serializeTelemetry({
+      correlationId: 'stable-user-123', sessionId: 'stable-session-123',
+      clientName: 'Home Address', mcpName: 'tr:sfbay:sf511:stop:abc',
+      mcpMethod: 'secret/place', upstream: 'private-api-key', protocolVersion: '1234-12-12',
+      arguments: { origin: 'home', destination: 'work', latitude: 37.1, longitude: -122.2 },
+      query: 'Home Address', refs: ['tr:sfbay:sf511:stop:abc'], itinerary: { secret: true },
+      ip: '192.0.2.1', apiKey: 'private-api-key', userId: 'stable-user-123',
+    });
+    expect(JSON.parse(serialized)).toEqual({ clientName: 'unclassified' });
+  });
+
+  it.each(['ChatGPT', 'openai-mcp', 'Claude Desktop', 'claude-ai', 'transit-prompt-evals'])('keeps explicit client category %s', clientName => {
+    expect(JSON.parse(serializeTelemetry({ clientName }))).toEqual({ clientName });
   });
 });
