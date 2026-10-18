@@ -1,9 +1,56 @@
 import { describe, expect, it } from 'vitest';
 import { validateItinerary } from '../../src/transit/planner/validator';
-import { at, golden, plannerFixture, plannerInput, ref, transferInput } from '../helpers/planner-fixture';
+import { at, entranceInput, golden, pathwayInput, plannerFixture, plannerInput, ref, transferInput } from '../helpers/planner-fixture';
 import type { Itinerary, TransitLeg } from '../../src/transit/planner/types';
 
 describe('independent itinerary validation against canonical stop-times', () => {
+  it('deduplicates identical dated pathway metadata but rejects conflicting definitions', async () => {
+    const f = await plannerFixture(pathwayInput()), candidate = golden(f), first = candidate.legs[0] as TransitLeg;
+    Object.assign(first, { headsign: 'Interchange', to: ref('stop', 'B'), alightSequence: 2, arrivalTime: at('09:10:00'), scheduledArrivalTime: at('09:10:00') });
+    candidate.legs.push({ kind: 'walk', from: ref('stop', 'B'), to: ref('stop', 'D'), departureTime: at('09:10:00'), arrivalTime: at('09:11:40'),
+      distanceMetres: 60, verification: 'pathway', pathwayId: 'p', estimated: false },
+    { ...first, tripRef: ref('trip', 'U'), tripInstanceRef: 'tr:sfbay:sf511:trip:VQ:20261019:MDk6MTI6MDA', routeRef: ref('route', 'S'),
+      directionId: 1, headsign: 'Destination', from: ref('stop', 'D'), to: ref('stop', 'C'), boardSequence: 1, alightSequence: 2,
+      instanceStartSeconds: 33120, scheduledDepartureTime: at('09:12:00'), departureTime: at('09:12:00'), scheduledArrivalTime: at('09:25:00'), arrivalTime: at('09:25:00') });
+    candidate.arrivalTime = at('09:25:00'); candidate.transfers = 1; candidate.walkingMetres = 60; candidate.maxWalkMetres = 100;
+    expect((await validateItinerary(candidate, f.source)).valid).toBe(true);
+    const dated = structuredClone(f.source.shards[0]!); dated.window = { startDate: '20261001', endDate: '20261018' };
+    expect((await validateItinerary(candidate, { ...f.source, shards: [...f.source.shards, dated] })).valid).toBe(true);
+    dated.pathways[0]!.traversalSeconds = 110;
+    expect((await validateItinerary(candidate, { ...f.source, shards: [...f.source.shards, dated] })).valid).toBe(false);
+  });
+
+  it('independently proves block adjacency between dated instances of the same frequency template', async () => {
+    const input = plannerInput();
+    input.files['trips.txt'] = input.files['trips.txt'].replace('Destination,0,', 'Destination,0,block');
+    input.files['stop_times.txt'] = 'trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type\nT,09:00:00,09:00:00,A,1,0,0\nT,09:05:00,09:05:00,A,2,0,0\n';
+    input.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\nT,09:00:00,09:30:00,600,1\n';
+    const f = await plannerFixture(input), candidate = golden(f), first = candidate.legs[0] as TransitLeg;
+    Object.assign(first, { to: ref('stop', 'A'), alightSequence: 2, scheduledArrivalTime: at('09:05:00'), arrivalTime: at('09:05:00') });
+    candidate.destination = ref('stop', 'A'); candidate.arrivalTime = at('09:15:00');
+    candidate.legs.push({ ...first, tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MTA6MDA', instanceStartSeconds: 33000,
+      scheduledDepartureTime: at('09:10:00'), departureTime: at('09:10:00'), scheduledArrivalTime: at('09:15:00'), arrivalTime: at('09:15:00'), continuation: true });
+    expect((await validateItinerary(candidate, f.source)).valid).toBe(true);
+    Object.assign(candidate.legs[1]!, { tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MjA6MDA', instanceStartSeconds: 33600,
+      scheduledDepartureTime: at('09:20:00'), departureTime: at('09:20:00'), scheduledArrivalTime: at('09:25:00'), arrivalTime: at('09:25:00') });
+    candidate.arrivalTime = at('09:25:00');
+    expect((await validateItinerary(candidate, f.source)).valid).toBe(false);
+  });
+
+  it('accepts a bounded exterior entrance connection and rejects an invented internal shortcut', async () => {
+    const f = await plannerFixture(entranceInput()), candidate = golden(f), ride = candidate.legs[0] as TransitLeg;
+    Object.assign(ride, { from: ref('stop', 'E'), alightSequence: 2, instanceStartSeconds: 32460,
+      tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDE6MDA', departureTime: at('09:01:00'), scheduledDepartureTime: at('09:01:00') });
+    candidate.maxWalkMetres = 100; candidate.walkingMetres = 76; candidate.departureTime = at('08:59:00');
+    candidate.legs.unshift({ kind: 'walk', from: ref('stop', 'A'), to: ref('stop', 'D'), departureTime: at('08:59:00'), arrivalTime: at('08:59:45'),
+      distanceMetres: 56, verification: 'unverified', estimated: true },
+    { kind: 'walk', from: ref('stop', 'D'), to: ref('stop', 'E'), departureTime: at('08:59:45'), arrivalTime: at('09:00:05'),
+      distanceMetres: 20, verification: 'pathway', pathwayId: 'east', estimated: false });
+    expect((await validateItinerary(candidate, f.source)).valid).toBe(true);
+    candidate.legs.splice(1, 1, { kind: 'walk', from: ref('stop', 'D'), to: ref('stop', 'E'), departureTime: at('08:59:45'), arrivalTime: at('08:59:45'),
+      distanceMetres: 0, verification: 'unverified', estimated: true }); candidate.walkingMetres = 56;
+    expect((await validateItinerary(candidate, f.source)).valid).toBe(false);
+  });
   it('accepts a hand-authored valid journey without calling the router', async () => {
     const f = await plannerFixture();
     expect(await validateItinerary(golden(f), f.source)).toEqual({ valid: true, reasons: [] });

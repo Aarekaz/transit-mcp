@@ -1,6 +1,7 @@
 import { formatTripInstanceRef, parseTransitRef, type TransitRef } from '../core/refs';
 import { sameStaticVersion, staticVersion } from '../gtfs/realtime/snapshot-store';
 import type { ScheduleShard, ScheduleStop, ScheduleTrip } from '../gtfs/static/schema';
+import { canonicalJson } from '../gtfs/static/shards';
 import { isServiceActive, parseInstant, serviceDayOrigin } from './service-day';
 import type { Itinerary, JourneyEndpoint, TransitLeg, ValidationResult, ValidationSource } from './types';
 
@@ -27,6 +28,32 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
     const rows = fresh ? snapshot.payload! : [];
     const allStops = source.shards.flatMap(shard => shard.stops);
     const stop = (ref: TransitRef): ScheduleStop | undefined => allStops.find(value => value.ref === ref);
+    const pathwayDefinitions = new Map<string, ScheduleShard['pathways'][number]>();
+    for (const shard of source.shards) for (const definition of shard.pathways) {
+      const identity = JSON.stringify([shard.feedId, shard.source.sha256, definition.id]);
+      const prior = pathwayDefinitions.get(identity);
+      if (prior && canonicalJson(prior) !== canonicalJson(definition)) reject('PATHWAY_CONFLICT');
+      else pathwayDefinitions.set(identity, definition);
+    }
+    const canonicalPathways = [...pathwayDefinitions.values()];
+    // Independently discover station/complex components from canonical parents
+    // and pathways; no routing connectivity or union-find is reused.
+    const connections = new Map<TransitRef, Set<TransitRef>>();
+    const connect = (a: TransitRef, b: TransitRef) => {
+      for (const [from, to] of [[a, b], [b, a]] as const) { const neighbours = connections.get(from) ?? new Set<TransitRef>(); neighbours.add(to); connections.set(from, neighbours); }
+    };
+    for (const location of allStops) if (location.parentStationRef) connect(location.ref, location.parentStationRef);
+    for (const path of canonicalPathways) connect(path.fromStopRef, path.toStopRef);
+    const complex = new Map<TransitRef, TransitRef>();
+    for (const location of allStops) {
+      if (complex.has(location.ref)) continue;
+      const pending = [location.ref]; complex.set(location.ref, location.ref);
+      for (let cursor = 0; cursor < pending.length; cursor++) for (const neighbour of connections.get(pending[cursor]!) ?? []) {
+        if (!complex.has(neighbour)) { complex.set(neighbour, location.ref); pending.push(neighbour); }
+      }
+    }
+    const controlledComplexes = new Set(canonicalPathways.map(path => complex.get(path.fromStopRef)));
+    const streetAccessible = (ref: TransitRef) => !controlledComplexes.has(complex.get(ref)) || stop(ref)?.locationType === 2;
     const endpointEqual = (a: JourneyEndpoint, b: JourneyEndpoint) => typeof a === 'string' || typeof b === 'string' ? a === b : a.latitude === b.latitude && a.longitude === b.longitude;
     const point = (value: JourneyEndpoint) => typeof value === 'string' ? stop(value) : value;
     const metresBetween = (from: JourneyEndpoint, to: JourneyEndpoint) => {
@@ -59,7 +86,7 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
         walked += leg.distanceMetres;
         let expectedDistance = metresBetween(leg.from, leg.to), expectedSeconds = Math.ceil(expectedDistance / 1.25);
         if (leg.verification === 'pathway') {
-          const paths = source.shards.flatMap(shard => shard.pathways).filter(path => path.id === leg.pathwayId &&
+          const paths = canonicalPathways.filter(path => path.id === leg.pathwayId &&
             (path.fromStopRef === leg.from && path.toStopRef === leg.to || path.bidirectional && path.toStopRef === leg.from && path.fromStopRef === leg.to));
           if (paths.length !== 1) { reject('PATHWAY'); continue; }
           const path = paths[0]!;
@@ -68,13 +95,11 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
           if (leg.estimated !== (path.traversalSeconds === null)) reject('WALK_ESTIMATE');
         } else if (leg.verification === 'unverified') {
           if (!leg.estimated || leg.pathwayId !== undefined || leg.distanceMetres > 800) reject('WALK_ESTIMATE');
-          const paths = source.shards.flatMap(shard => shard.pathways), nodes = new Set(paths.flatMap(path => [path.fromStopRef, path.toStopRef]));
           if (typeof leg.from === 'string' && typeof leg.to === 'string') {
-            const station = (ref: TransitRef) => stop(ref)?.parentStationRef ?? ref;
-            if (nodes.has(leg.from) && nodes.has(leg.to) || station(leg.from) === station(leg.to) && [...nodes].some(ref => station(ref) === station(leg.from as TransitRef))) reject('PATHWAY_BYPASS');
+            if (!streetAccessible(leg.from) || !streetAccessible(leg.to) || complex.get(leg.from) === complex.get(leg.to) && controlledComplexes.has(complex.get(leg.from))) reject('PATHWAY_BYPASS');
           } else {
             const ref = typeof leg.from === 'string' ? leg.from : typeof leg.to === 'string' ? leg.to : undefined;
-            if (ref && nodes.has(ref) && stop(ref)?.locationType !== 2) reject('PATHWAY_BYPASS');
+            if (ref && !streetAccessible(ref)) reject('PATHWAY_BYPASS');
           }
         } else reject('WALK_VERIFICATION');
         if (leg.distanceMetres !== expectedDistance || arrive - depart !== expectedSeconds * 1000) reject('WALK_TIME_DISTANCE');
@@ -153,14 +178,41 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
         const linked = rules.some(rule => rule.transferType === 4);
         let sameBlock = trip.blockId !== '' && trip.blockId === prior.trip.blockId && shard.feedId === prior.shard.feedId && leg.serviceDate === prior.leg.serviceDate && prior.leg.to === leg.from;
         if (sameBlock) {
-          const intervening = source.shards.filter(s => s.feedId === shard.feedId).flatMap(s => s.trips.filter(t => t.blockId === trip.blockId && t.ref !== prior.trip.ref && t.ref !== trip.ref &&
-            isServiceActive(s.calendars[t.serviceId]!, leg.serviceDate))).some(t => {
-            const starts = shard.frequencies.filter(f => f.tripRef === t.ref);
-            if (!starts.length) return t.stopTimes[0]?.departureSeconds != null && t.stopTimes[0].departureSeconds >= prior.leg.instanceStartSeconds && t.stopTimes[0].departureSeconds <= leg.instanceStartSeconds;
-            return starts.some(f => f.startSeconds < leg.instanceStartSeconds && f.endSeconds > prior.leg.instanceStartSeconds);
-          });
+          const priorRoute = prior.shard.routes.find(route => route.ref === prior.trip.routeRef)!;
+          const priorOrigin = serviceDayOrigin(prior.leg.serviceDate, prior.shard.agencyTimezones[priorRoute.agencyRef]!);
+          const priorInstant = priorOrigin + prior.leg.instanceStartSeconds * 1000;
+          let foundPrior = false;
+          let successor: { trip: TransitRef; start: number; instant: number } | undefined;
+          for (const dated of source.shards) {
+            if (dated.feedId !== shard.feedId || leg.serviceDate < dated.window.startDate || leg.serviceDate > dated.window.endDate) continue;
+            for (const template of dated.trips) {
+              if (template.blockId !== trip.blockId || !isServiceActive(dated.calendars[template.serviceId]!, leg.serviceDate)) continue;
+              const route = dated.routes.find(route => route.ref === template.routeRef);
+              if (!route) continue;
+              const dayOrigin = serviceDayOrigin(leg.serviceDate, dated.agencyTimezones[route.agencyRef]!);
+              const record = (start: number) => {
+                if (template.ref === prior.trip.ref && start === prior.leg.instanceStartSeconds) { foundPrior = true; return; }
+                const instant = dayOrigin + start * 1000;
+                const after = instant > priorInstant || instant === priorInstant && template.ref > prior.trip.ref;
+                if (after && (!successor || instant < successor.instant || instant === successor.instant && template.ref < successor.trip)) successor = { trip: template.ref, start, instant };
+              };
+              const intervals = dated.frequencies.filter(frequency => frequency.tripRef === template.ref);
+              if (!intervals.length && template.stopTimes[0]?.departureSeconds != null) record(template.stopTimes[0].departureSeconds);
+              for (const interval of intervals) {
+                if (interval.exactTimes !== 1) { sameBlock = false; continue; }
+                // Only the first instance at/after the prior start and its next
+                // occurrence can be the successor. Enumerate those independently
+                // from canonical frequency arithmetic without retaining a graph.
+                const offset = Math.max(0, Math.ceil(((priorInstant - dayOrigin) / 1000 - interval.startSeconds) / interval.headwaySeconds));
+                const first = interval.startSeconds + offset * interval.headwaySeconds;
+                if (first < interval.endSeconds) record(first);
+                if (first + interval.headwaySeconds < interval.endSeconds) record(first + interval.headwaySeconds);
+              }
+            }
+          }
+          const adjacent = foundPrior && successor?.trip === trip.ref && successor.start === leg.instanceStartSeconds;
           const conflictingLink = source.shards.flatMap(s => s.transfers).some(rule => rule.fromTripRef === prior.trip.ref && (rule.transferType === 4 || rule.transferType === 5) && rule.toTripRef !== trip.ref);
-          sameBlock = !intervening && !conflictingLink;
+          sameBlock = sameBlock && adjacent && !conflictingLink;
         }
         const continuation = terminal && !rules.some(rule => rule.transferType === 5) && (linked || sameBlock);
         if (leg.continuation !== continuation) reject('CONTINUATION');

@@ -1,7 +1,9 @@
-import { formatTripInstanceRef, type TransitRef } from '../core/refs';
+import { formatTripInstanceRef, parseTransitRef, type TransitRef } from '../core/refs';
 import type { VerificationReason } from '../core/results';
 import type { NormalizedStopUpdate } from '../gtfs/realtime/decode';
 import type { ScheduleShard, ScheduleStop, ScheduleTransfer, ScheduleTrip } from '../gtfs/static/schema';
+import { canonicalJson } from '../gtfs/static/shards';
+import { parseGtfsTime } from '../gtfs/static/time';
 import type { LoadedScheduleShard } from './schedule-index';
 import { formatInstant, isServiceActive, parseInstant } from './service-day';
 import type { Itinerary, ItineraryLeg, JourneyEndpoint, JourneyQuery, TransitLeg, WalkLeg } from './types';
@@ -10,7 +12,7 @@ interface Instance {
   shard: ScheduleShard; trip: ScheduleTrip; date: string; timezone: string; origin: number; start: number;
   ref: TransitLeg['tripInstanceRef']; shift: number; updates: Map<number, NormalizedStopUpdate>;
 }
-interface Label { stop: TransitRef; time: number; walking: number; boardings: number; legs: ItineraryLeg[]; last?: TransitLeg }
+interface Label { stop: TransitRef; time: number; walking: number; boardings: number; legs: ItineraryLeg[]; last?: TransitLeg; signature?: string; transitKey?: string }
 export interface RouterOutput { candidates: Itinerary[]; reasons: VerificationReason[]; rounds: number; estimatedWorkingSetBytes: number }
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const signature = (legs: ItineraryLeg[]) => legs.map(l => l.kind === 'transit' ? `${l.tripInstanceRef}/${l.boardSequence}/${l.alightSequence}` : `${JSON.stringify(l.from)}/${JSON.stringify(l.to)}/${l.pathwayId ?? ''}`).join('|');
@@ -49,20 +51,44 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
   realtime: NormalizedStopUpdate[], realtimeTimestamp: number | undefined, baseBytes: number, signal?: AbortSignal): Promise<RouterOutput> {
   assertNotAborted(signal);
   if (baseBytes + realtime.length * 512 >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
+  let realtimeBytes = 0;
+  for (const row of realtime) {
+    // Include UTF-16 identities plus the normalized record and index/key copies.
+    realtimeBytes += 512 + 8 * [row.entityId, row.tripId, row.routeId, row.stopId, row.tripInstanceRef, row.serviceDate].reduce((sum, value) => sum + (value?.length ?? 0), 0);
+    if (baseBytes + realtimeBytes >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
+  }
   const begin = parseInstant(query.departAt), end = begin + (query.windowSeconds ?? 7200) * 1000;
   const maxWalk = Math.min(800, query.maxWalkMetres ?? 800), maxTransfers = query.maxTransfers ?? 3;
   const stops = new Map<TransitRef, ScheduleStop>();
   const transfers: ScheduleTransfer[] = [], pathways: ScheduleShard['pathways'] = [];
-  for (const { shard } of loaded) { for (const stop of shard.stops) stops.set(stop.ref, stop); transfers.push(...shard.transfers); pathways.push(...shard.pathways); }
+  const pathwayDefinitions = new Map<string, string>();
+  for (const { shard } of loaded) {
+    for (const stop of shard.stops) stops.set(stop.ref, stop);
+    transfers.push(...shard.transfers);
+    for (const pathway of shard.pathways) {
+      const key = `${shard.feedId}/${shard.source.sha256}/${pathway.id}`, definition = canonicalJson(pathway);
+      const previous = pathwayDefinitions.get(key);
+      if (previous !== undefined && previous !== definition) throw new Error('Conflicting canonical pathway definitions');
+      if (previous === undefined) { pathwayDefinitions.set(key, definition); pathways.push(pathway); }
+    }
+  }
   for (const endpoint of [query.origin, query.destination]) if (typeof endpoint === 'string' && !stops.has(endpoint)) throw new Error('ENTITY_NOT_FOUND: unknown journey stop');
+  if (baseBytes + realtimeBytes + stops.size * 512 >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
   const reasons = new Set<VerificationReason>();
   const updates = new Map<string, Map<number, NormalizedStopUpdate>>();
+  const observedStarts = new Map<string, Set<number>>();
   for (const row of realtime) if (row.tripInstanceRef && row.stopSequence !== undefined) {
     const calls = updates.get(row.tripInstanceRef) ?? new Map<number, NormalizedStopUpdate>();
     if (calls.has(row.stopSequence)) throw new Error('Ambiguous realtime stop update');
     calls.set(row.stopSequence, row); updates.set(row.tripInstanceRef, calls);
+    const parsed = parseTransitRef(row.tripInstanceRef);
+    if (parsed?.kind === 'trip' && 'serviceDate' in parsed) {
+      const key = `${parsed.feed}/${parsed.id}/${parsed.serviceDate}`, starts = observedStarts.get(key) ?? new Set<number>();
+      starts.add(parseGtfsTime(parsed.startTime).totalSeconds); observedStarts.set(key, starts);
+    }
   }
   const instances: Instance[] = [], seen = new Set<string>();
+  let instanceBytes = 0;
   const approximate: { trip: ScheduleTrip; origin: number; start: number; end: number }[] = [];
   for (const { shard, serviceDays } of loaded) {
     const routes = new Map(shard.routes.map(route => [route.ref, route]));
@@ -75,11 +101,25 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
         const origin = parseInstant(day.startTime);
         const add = (start: number) => {
           const shift = start - first, last = trip.stopTimes.at(-1)!.arrivalSeconds;
-          if (last == null || origin + (last + shift) * 1000 < begin || origin + start * 1000 >= end) return;
           const ref = formatTripInstanceRef({ coverage: shard.coverageId, feed: shard.feedId, id: trip.providerId, serviceDate: day.serviceDate, startTime: startString(start) });
-          if (seen.has(ref)) return; seen.add(ref);
-          instances.push({ shard, trip, date: day.serviceDate, timezone: day.timezone, origin, start, shift, ref, updates: updates.get(ref) ?? new Map() });
-          if (baseBytes + instances.length * 1024 > 48 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
+          const tripUpdates = updates.get(ref);
+          if (!tripUpdates && (last == null || origin + (last + shift) * 1000 < begin || origin + start * 1000 >= end)) return;
+          if (tripUpdates) {
+            let canBoard = false, overlaps = false;
+            for (const call of trip.stopTimes) {
+              const update = tripUpdates.get(call.sequence);
+              const arrival = update?.status === 'realtime' && update.arrivalTimeSeconds !== undefined ? update.arrivalTimeSeconds * 1000 : call.arrivalSeconds === null ? null : origin + (call.arrivalSeconds + shift) * 1000;
+              const departure = update?.status === 'realtime' && update.departureTimeSeconds !== undefined ? update.departureTimeSeconds * 1000 : call.departureSeconds === null ? null : origin + (call.departureSeconds + shift) * 1000;
+              if (canBoard && arrival !== null && arrival >= begin && arrival <= end) overlaps = true;
+              if (departure !== null && departure >= begin && departure < end) canBoard = true;
+            }
+            if (!overlaps) return;
+          }
+          if (seen.has(ref)) return;
+          const charge = 1024 + ref.length * 8;
+          if (baseBytes + realtimeBytes + stops.size * 512 + instanceBytes + charge >= 48 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
+          instanceBytes += charge; seen.add(ref);
+          instances.push({ shard, trip, date: day.serviceDate, timezone: day.timezone, origin, start, shift, ref, updates: tripUpdates ?? new Map() });
         };
         if (!intervals.length) add(first);
         for (const interval of intervals) {
@@ -92,6 +132,9 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
           }
           const index = Math.max(0, Math.ceil(((begin - origin) / 1000 - lastOffset - interval.startSeconds) / interval.headwaySeconds));
           for (let start = interval.startSeconds + index * interval.headwaySeconds; start < interval.endSeconds && origin + start * 1000 < end; start += interval.headwaySeconds) add(start);
+        }
+        for (const start of observedStarts.get(`${shard.feedId}/${trip.providerId}/${day.serviceDate}`) ?? []) {
+          if (intervals.some(interval => interval.exactTimes === 1 && start >= interval.startSeconds && start < interval.endSeconds && (start - interval.startSeconds) % interval.headwaySeconds === 0)) add(start);
         }
       }
     }
@@ -106,8 +149,22 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
   }
   for (const block of blocks.values()) for (let index = 0; index < block.length - 1; index++) blockSuccessor.set(block[index]!.ref, block[index + 1]!.ref);
   const pathNodes = new Set(pathways.flatMap(p => [p.fromStopRef, p.toStopRef]));
-  const sameStation = (a: TransitRef, b: TransitRef) => (stops.get(a)?.parentStationRef ?? a) === (stops.get(b)?.parentStationRef ?? b);
-  const pathwayControlled = (a: TransitRef, b: TransitRef) => pathNodes.has(a) && pathNodes.has(b) || sameStation(a, b) && [...pathNodes].some(p => sameStation(p, a));
+  // Parent stations and explicit pathways define complexes. Street estimates may
+  // connect distinct entrances, but cannot bypass the internal access graph.
+  const roots = new Map<TransitRef, TransitRef>();
+  const root = (ref: TransitRef): TransitRef => {
+    let result = ref;
+    while (roots.has(result)) result = roots.get(result)!;
+    let node = ref;
+    while (roots.has(node)) { const parent = roots.get(node)!; roots.set(node, result); node = parent; }
+    return result;
+  };
+  const join = (a: TransitRef, b: TransitRef) => { const left = root(a), right = root(b); if (left !== right) roots.set(right, left); };
+  for (const stop of stops.values()) if (stop.parentStationRef) join(stop.ref, stop.parentStationRef);
+  for (const pathway of pathways) join(pathway.fromStopRef, pathway.toStopRef);
+  const controlled = new Set([...pathNodes].map(root));
+  const exteriorAccess = (ref: TransitRef) => !controlled.has(root(ref)) || stops.get(ref)?.locationType === 2;
+  const pathwayControlled = (a: TransitRef, b: TransitRef) => root(a) === root(b) && controlled.has(root(a)) || !exteriorAccess(a) || !exteriorAccess(b);
   // Topological reachability is only used to disclose a limitation. It never
   // creates precise departures or claims that an approximate connection works.
   const reachesDestination = new Set<TransitRef>();
@@ -132,21 +189,42 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
       }
     }
   }
-  let labelCount = 0, rounds = 0;
-  const estimatedBytes = () => baseBytes + instances.length * 1024 + labelCount * 3072 + stops.size * 512 + realtime.length * 512;
-  function countLabel() { labelCount++; if (estimatedBytes() >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required'); }
+  let retainedLabelBytes = 0, rounds = 0;
+  const estimatedBytes = () => baseBytes + instanceBytes + retainedLabelBytes + stops.size * 512 + realtimeBytes;
+  function labelCharge(label: Label): number {
+    // Charge full leg objects even when shared, plus path arrays, signatures,
+    // state-map keys and queue/sort copies. Never rely on a fixed bytes/label.
+    const legBytes = label.legs.reduce((total, leg) => total + 512 + Object.values(leg).reduce<number>((size, value) => size + (typeof value === 'string' ? value.length * 2 : 32), 0), 0);
+    const charge = 1024 + label.legs.length * 64 + legBytes * 4;
+    if (label.legs.length > 100 || estimatedBytes() + charge >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
+    return charge;
+  }
+  function retain(label: Label): Label {
+    retainedLabelBytes += labelCharge(label);
+    label.signature = signature(label.legs);
+    label.transitKey = signature(label.legs.filter(leg => leg.kind === 'transit'));
+    return label;
+  }
   const makeWalk = (from: JourneyEndpoint, to: JourneyEndpoint, time: number, metres: number, seconds = Math.ceil(metres / 1.25), pathwayId?: string): WalkLeg => ({
     kind: 'walk', from, to, departureTime: iso(time), arrivalTime: iso(time + seconds * 1000), distanceMetres: metres,
     verification: pathwayId ? 'pathway' : 'unverified', estimated: !pathwayId || seconds === undefined, ...(pathwayId ? { pathwayId } : {}),
   });
   function walkClosure(seeds: Label[]): Label[] {
-    const result = [...seeds], visited = new Set<string>();
-    for (let index = 0; index < result.length; index++) {
-      const label = result[index]!;
-      const key = `${label.stop}|${label.time}|${label.walking}|${signature(label.legs)}`;
-      if (visited.has(key)) continue; visited.add(key);
-      const walked = new Set<JourneyEndpoint>([label.stop]);
-      for (let i = label.legs.length - 1; i >= 0 && label.legs[i]!.kind === 'walk'; i--) { walked.add(label.legs[i]!.from); walked.add(label.legs[i]!.to); }
+    const queue: Label[] = [], states = new Map<string, Label[]>();
+    const stateKey = (label: Label) => `${label.stop}/${label.boardings}/${label.transitKey}/${label.legs.at(-1)?.kind === 'transit' ? 'onboard' : 'walking'}`;
+    const offer = (label: Label, retained: boolean) => {
+      const key = stateKey(label), bucket = states.get(key) ?? [];
+      // Equal resources have identical future transfer possibilities. Keeping
+      // the first deterministic representative collapses zero-cost permutations.
+      if (bucket.some(other => other.time <= label.time && other.walking <= label.walking)) return;
+      states.set(key, [...bucket.filter(other => !(label.time <= other.time && label.walking <= other.walking)), label]);
+      if (!retained) retain(label);
+      queue.push(label);
+    };
+    seeds.forEach(label => offer(label, true));
+    for (let index = 0; index < queue.length; index++) {
+      const label = queue[index]!;
+      if (!states.get(stateKey(label))?.includes(label)) continue;
       const edges: WalkLeg[] = [];
       for (const path of pathways) {
         const to = path.fromStopRef === label.stop ? path.toStopRef : path.bidirectional && path.toStopRef === label.stop ? path.fromStopRef : undefined;
@@ -163,32 +241,32 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
         if (metres <= maxWalk - label.walking) edges.push(makeWalk(label.stop, stop.ref, label.time, metres));
       }
       for (const leg of edges) {
-        if (walked.has(leg.to) || label.walking + leg.distanceMetres > maxWalk || Date.parse(leg.arrivalTime) > end) continue;
+        if (label.walking + leg.distanceMetres > maxWalk || Date.parse(leg.arrivalTime) > end) continue;
         const next: Label = { ...label, stop: leg.to as TransitRef, time: Date.parse(leg.arrivalTime), walking: label.walking + leg.distanceMetres, legs: [...label.legs, leg] };
-        countLabel(); result.push(next);
+        offer(next, false);
       }
     }
-    return result;
+    return [...states.values()].flat();
   }
   let frontier: Label[] = [];
-  if (typeof query.origin === 'string') frontier.push({ stop: query.origin, time: begin, walking: 0, boardings: 0, legs: [] });
+  if (typeof query.origin === 'string') frontier.push(retain({ stop: query.origin, time: begin, walking: 0, boardings: 0, legs: [] }));
   else for (const stop of stops.values()) {
     // Pathway-defined platforms are accessed through their entrance graph.
-    if (pathNodes.has(stop.ref) && stop.locationType !== 2) continue;
+    if (!exteriorAccess(stop.ref)) continue;
     const metres = distance(query.origin, stop.ref, stops); if (metres > maxWalk) continue;
     const leg = makeWalk(query.origin, stop.ref, begin, metres);
-    frontier.push({ stop: stop.ref, time: Date.parse(leg.arrivalTime), walking: metres, boardings: 0, legs: [leg] }); countLabel();
+    frontier.push(retain({ stop: stop.ref, time: Date.parse(leg.arrivalTime), walking: metres, boardings: 0, legs: [leg] }));
   }
   frontier = walkClosure(frontier);
   const finished: Label[] = [];
   const finish = (label: Label) => {
     if (!label.last) return;
     if (typeof query.destination === 'string') { if (label.stop === query.destination) finished.push(label); return; }
-    if (pathNodes.has(label.stop) && stops.get(label.stop)?.locationType !== 2) return;
+    if (!exteriorAccess(label.stop)) return;
     const metres = distance(label.stop, query.destination, stops);
     if (metres + label.walking > maxWalk) return;
     const leg = makeWalk(label.stop, query.destination, label.time, metres);
-    if (Date.parse(leg.arrivalTime) <= end) finished.push({ ...label, time: Date.parse(leg.arrivalTime), walking: label.walking + metres, legs: [...label.legs, leg] });
+    if (Date.parse(leg.arrivalTime) <= end) finished.push(retain({ ...label, time: Date.parse(leg.arrivalTime), walking: label.walking + metres, legs: [...label.legs, leg] }));
   };
   const timeAt = (instance: Instance, index: number, event: 'arrival' | 'departure') => {
     const call = instance.trip.stopTimes[index]!, row = instance.updates.get(call.sequence), seconds = event === 'arrival' ? call.arrivalSeconds : call.departureSeconds;
@@ -244,9 +322,12 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
               departureTime: iso(departure, instance.timezone), arrivalTime: iso(arrival, instance.timezone), status: predicted ? 'realtime' : 'scheduled_only',
               ...(predicted ? { realtimeTimestampSeconds: realtimeTimestamp } : {}), scheduleVersion: instance.shard.source.sha256, continuation };
             const candidate: Label = { stop: dest.stopRef, time: arrival, walking: label.walking, boardings, legs: [...label.legs, leg], last: leg };
-            const key = `${instance.ref}/${dest.sequence}/${candidate.walking}`, signatures = stateCounts.get(key) ?? new Set<string>(), sig = signature(candidate.legs);
+            // Check variable string/path allocation before constructing a new
+            // signature, including candidates that are later deduplicated.
+            labelCharge(candidate);
+            const key = `${instance.ref}/${dest.sequence}/${candidate.walking}/${label.transitKey}`, signatures = stateCounts.get(key) ?? new Set<string>(), sig = signature(candidate.legs);
             if (signatures.has(sig) || signatures.size >= 3) continue; signatures.add(sig); stateCounts.set(key, signatures);
-            countLabel(); next.push(candidate);
+            retain(candidate); next.push(candidate);
             const sameRound = current.get(dest.stopRef) ?? []; sameRound.push(candidate); current.set(dest.stopRef, sameRound);
             if (alight === calls.length - 1) {
               const terminals = terminalLabels.get(instance.trip.ref) ?? []; terminals.push(candidate); terminalLabels.set(instance.trip.ref, terminals);
@@ -262,10 +343,9 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     frontier.forEach(finish);
   }
   const unique = new Map<string, Label>();
-  for (const label of finished) unique.set(signature(label.legs), label);
-  const ordered = [...unique.values()].sort((a, b) => a.time - b.time || a.boardings - b.boardings || a.walking - b.walking || compare(signature(a.legs), signature(b.legs)));
-  const candidates = ordered.filter(label => !ordered.some(other => other.time <= label.time && other.boardings <= label.boardings && other.walking <= label.walking &&
-    (other.boardings < label.boardings || other.walking < label.walking))).map(label => ({
+  for (const label of finished) unique.set(label.signature!, label);
+  const ordered = [...unique.values()].sort((a, b) => a.time - b.time || a.boardings - b.boardings || a.walking - b.walking || compare(a.signature!, b.signature!));
+  const candidates = ordered.map(label => ({
     coverageId: query.manifest.coverageId, artifactVersion, origin: query.origin, destination: query.destination, departAt: query.departAt,
     windowSeconds: query.windowSeconds ?? 7200, maxWalkMetres: maxWalk, maxTransfers, departureTime: label.legs[0]!.departureTime,
     arrivalTime: label.legs.at(-1)!.arrivalTime, walkingMetres: label.walking, transfers: label.boardings - 1,

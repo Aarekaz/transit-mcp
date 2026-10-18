@@ -2,11 +2,61 @@ import { describe, expect, it } from 'vitest';
 import { planJourney } from '../../src/transit/planner/plan';
 import { routeDepartAt } from '../../src/transit/planner/raptor';
 import { loadScheduleWindow } from '../../src/transit/planner/schedule-index';
-import { at, plannerFixture, plannerInput, ref, transferInput } from '../helpers/planner-fixture';
+import { at, colocatedInput, entranceInput, pathwayInput, plannerFixture, plannerInput, ref, transferInput } from '../helpers/planner-fixture';
 import type { NormalizedStopUpdate } from '../../src/transit/gtfs/realtime/decode';
 import type { NormalizedRealtimeSnapshot } from '../../src/transit/gtfs/realtime/snapshot-store';
 
 describe('depart-at transit routing', () => {
+  it('bounds colocated walking states while retaining distinct transit alternatives', async () => {
+    const f = await plannerFixture(colocatedInput());
+    const began = performance.now();
+    const result = await planJourney({ ...f.query, maxWalkMetres: 800 });
+    expect(performance.now() - began).toBeLessThan(250);
+    expect(result.candidates.map(candidate => candidate.arrivalTime)).toEqual([at('09:20:00'), at('09:25:00')]);
+    expect(result.diagnostics.estimatedWorkingSetBytes).toBeLessThan(64 * 1024 * 1024);
+  });
+
+  it('keeps a valid slower transfer when the faster direct candidate fails validation', async () => {
+    const input = transferInput();
+    input.files['trips.txt'] = input.files['trips.txt'].replaceAll(',block', ',') + 'R,D,V,Destination,0,\n';
+    input.files['stop_times.txt'] += 'V,09:00:00,09:00:00,A,1,0,0\nV,09:10:00,09:10:00,D,2,0,0\nV,09:20:00,09:20:00,C,3,0,0\n';
+    const f = await plannerFixture(input);
+    const realtime = { version: f.version, producerTimestampSeconds: Date.parse(f.query.now) / 1000, receivedAtSeconds: Date.parse(f.query.now) / 1000,
+      payload: [{ entityId: 'e', tripInstanceRef: 'tr:sfbay:sf511:trip:Vg:20261019:MDk6MDA6MDA', stopId: 'D', stopSequence: 2,
+        departureTimeSeconds: Date.parse(at('09:30:00')) / 1000, status: 'realtime' as const }] };
+    expect(await planJourney({ ...f.query, realtime })).toMatchObject({ reasons: ['VALIDATOR_REJECTED'], candidates: [{ arrivalTime: at('09:25:00'), transfers: 1 }] });
+  });
+
+  it.each([false, true])('boards fresh delayed service after its scheduled end (frequency=%s)', async frequency => {
+    const input = plannerInput();
+    if (frequency) input.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\nT,09:00:00,09:01:00,600,1\n';
+    const f = await plannerFixture(input), now = at('09:21:00');
+    const realtime = { version: f.version, producerTimestampSeconds: Date.parse(now) / 1000, receivedAtSeconds: Date.parse(now) / 1000,
+      payload: ['A', 'B', 'C'].map((stopId, index) => ({ entityId: 'e', tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDA6MDA', stopId, stopSequence: index + 1,
+        arrivalTimeSeconds: Date.parse(at(['09:25:00', '09:35:00', '09:45:00'][index]!)) / 1000,
+        departureTimeSeconds: Date.parse(at(['09:25:00', '09:35:00', '09:45:00'][index]!)) / 1000, status: 'realtime' as const })) };
+    expect((await planJourney({ ...f.query, now, departAt: now, realtime })).candidates[0]).toMatchObject({ departureTime: at('09:25:00'), arrivalTime: at('09:45:00'), status: 'realtime' });
+  });
+
+  it('returns the same pathway itinerary across one or two dated shards', async () => {
+    const input = pathwayInput(), single = await plannerFixture(input), split = await plannerFixture(input, [
+      { startDate: '20260101', endDate: '20261018' }, { startDate: '20261019', endDate: '20261231' },
+    ]);
+    const one = await planJourney({ ...single.query, maxWalkMetres: 100 });
+    const two = await planJourney({ ...split.query, maxWalkMetres: 100 });
+    expect(one.candidates).toHaveLength(1);
+    expect(two.candidates.map(candidate => candidate.legs)).toEqual(one.candidates.map(candidate => candidate.legs));
+    expect(split.reads).toHaveLength(2);
+  });
+
+  it('allows exterior entrance walks between stations while preserving each internal pathway', async () => {
+    const f = await plannerFixture(entranceInput());
+    const result = await planJourney({ ...f.query, maxWalkMetres: 100 });
+    expect(result.candidates[0]?.legs).toMatchObject([
+      { kind: 'walk', from: ref('stop', 'A'), to: ref('stop', 'D'), verification: 'unverified', estimated: true, distanceMetres: 56 },
+      { kind: 'walk', from: ref('stop', 'D'), to: ref('stop', 'E'), verification: 'pathway', pathwayId: 'east' }, { kind: 'transit' },
+    ]);
+  });
   it('finds a deterministic direct trip from canonical stop order and reads only the required window', async () => {
     const f = await plannerFixture();
     const result = await planJourney(f.query);
@@ -180,5 +230,21 @@ describe('depart-at transit routing', () => {
     const realtime = { version: f.version, producerTimestampSeconds: Date.parse(f.query.now) / 1000, receivedAtSeconds: Date.parse(f.query.now) / 1000,
       payload: Array<NormalizedStopUpdate>(140000).fill({ entityId: 'unmatched', stopId: 'A' }) };
     await expect(planJourney({ ...f.query, realtime })).rejects.toThrow(/working-set budget/i);
+  });
+
+  it('charges retained variable-length leg text before it can exceed the working-set budget', async () => {
+    const input = plannerInput();
+    input.files['trips.txt'] = input.files['trips.txt'].replace('Destination', 'D'.repeat(250000));
+    input.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\nT,09:00:00,10:00:00,600,1\n';
+    const f = await plannerFixture(input);
+    await expect(planJourney(f.query)).rejects.toThrow(/working-set budget.*Durable Object/i);
+  });
+
+  it('budgets normalized realtime identity strings before building routing indexes', async () => {
+    const input = plannerInput(); input.files['calendar_dates.txt'] = 'service_id,date,exception_type\nD,20261019,2\n';
+    const f = await plannerFixture(input);
+    const realtime = { version: f.version, producerTimestampSeconds: Date.parse(f.query.now) / 1000, receivedAtSeconds: Date.parse(f.query.now) / 1000,
+      payload: Array<NormalizedStopUpdate>(20000).fill({ entityId: 'e'.repeat(512), stopId: 's'.repeat(512), tripId: 't'.repeat(512) }) };
+    await expect(planJourney({ ...f.query, realtime })).rejects.toThrow(/working-set budget.*Durable Object/i);
   });
 });

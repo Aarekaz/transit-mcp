@@ -48,8 +48,10 @@ export async function planJourney(query: JourneyQuery, signal?: AbortSignal): Pr
     realtime: query.realtime, realtimeMaxAgeSeconds: query.realtimeMaxAgeSeconds };
   for (const candidate of routed.candidates) {
     assertNotAborted(signal);
-    if ((await validateItinerary(candidate, source, signal)).valid) candidates.push(candidate);
-    else reasons.add('VALIDATOR_REJECTED');
+    if (!(await validateItinerary(candidate, source, signal)).valid) { reasons.add('VALIDATOR_REJECTED'); continue; }
+    // Only independently proven journeys may dominate another candidate.
+    if (!candidates.some(other => Date.parse(other.arrivalTime) <= Date.parse(candidate.arrivalTime) && other.transfers <= candidate.transfers && other.walkingMetres <= candidate.walkingMetres &&
+      (other.transfers < candidate.transfers || other.walkingMetres < candidate.walkingMetres))) candidates.push(candidate);
     if (candidates.length === 3) break;
   }
   return { status: candidates.length ? candidates.some(candidate => candidate.status === 'realtime') ? 'realtime' : 'scheduled_only' : 'unavailable',
