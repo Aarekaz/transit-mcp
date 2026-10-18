@@ -32,6 +32,13 @@ const packageJson = JSON.parse(readProjectFile('package.json')) as {
 };
 const workflow = readOptionalProjectFile('.github/workflows/type-check.yml');
 
+const forbiddenSfLiveClaimPatterns = [
+  /(?:live|real-time)[^.!?\n]{0,120}(?:San Francisco |SF )?Bay Area/i,
+  /(?:San Francisco |SF )?Bay Area[^.!?\n]{0,120}(?:live|real-time)/i,
+  /(?:live|real-time)\s+SF Bay\b/i,
+  /\bSF Bay\b[^.!?\n]{0,40}(?:is\s+)?(?:live|real-time)\b/i,
+] as const;
+
 describe('release operator documentation', () => {
   it('keeps SF Bay dark while documenting the in-development rollout', () => {
     for (const [name, document] of [
@@ -56,12 +63,9 @@ describe('release operator documentation', () => {
       ['social image', ogImageSvg],
       ['changelog', changelog],
     ] as const) {
-      expect(document, name).not.toMatch(
-        /(?:live|real-time)[^.!?\n]{0,120}(?:San Francisco |SF )?Bay Area/i,
-      );
-      expect(document, name).not.toMatch(
-        /(?:San Francisco |SF )?Bay Area[^.!?\n]{0,120}(?:live|real-time)/i,
-      );
+      for (const pattern of forbiddenSfLiveClaimPatterns) {
+        expect(document, name).not.toMatch(pattern);
+      }
     }
 
     expect(readme).toMatch(/13 MCP tools/i);
@@ -71,8 +75,17 @@ describe('release operator documentation', () => {
     expect(privacy).toContain('511 SF Bay');
     expect(terms).toContain('511 SF Bay');
     expect(transitBoardSource).toContain('<title>Transit MCP Transit Board</title>');
+    expect(ogImageSvg).toContain('SF Bay: in development');
+    expect(ogImageSvg).toContain('2 live regions');
     expect([...wrangler.matchAll(/"SFBAY_MODE": "([^"]+)"/g)].map(match => match[1]))
       .toEqual(['dark', 'dark']);
+  });
+
+  it.each([
+    'Live SF Bay arrivals and service alerts',
+    'SF Bay transit is live',
+  ])('recognizes a canonical SF Bay live claim: %s', claim => {
+    expect(forbiddenSfLiveClaimPatterns.some(pattern => pattern.test(claim))).toBe(true);
   });
 
   it('documents Transit MCP 6.0 as anonymous with no credential setup', () => {
