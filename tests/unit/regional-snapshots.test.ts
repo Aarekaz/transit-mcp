@@ -22,8 +22,9 @@ async function setup(fixture?: Awaited<ReturnType<typeof realtimeFixture>>) {
   return { db, f, env, hub, store, version, artifacts, service: createRegionalTransitService(env) };
 }
 
-async function publishTrip(f: Awaited<ReturnType<typeof setup>>, tripUpdate: transit_realtime.ITripUpdate) {
-  const bytes = transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: NOW }, entity: [{ id: 'e', tripUpdate }] }).finish();
+async function publishTrip(f: Awaited<ReturnType<typeof setup>>, ...tripUpdates: transit_realtime.ITripUpdate[]) {
+  const bytes = transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: NOW },
+    entity: tripUpdates.map((tripUpdate, index) => ({ id: `e${index}`, tripUpdate })) }).finish();
   const applied = await applyTripUpdates(decodeRealtimeFeed(bytes), { manifest: f.f.manifest, shards: [f.f.shard], discoveries: [f.f.discovery], version: f.version, feedId: 'sf511' });
   await f.store.publish('trip_updates', { version: f.version, receivedAtSeconds: NOW, producerTimestampSeconds: NOW,
     payload: applied.stopUpdates, degraded: applied.degraded, warnings: applied.warnings });
@@ -31,6 +32,47 @@ async function publishTrip(f: Awaited<ReturnType<typeof setup>>, tripUpdate: tra
 }
 
 describe('regional v2 snapshot service', () => {
+  it('advertises only observed absolute calls for an off-headway non-exact frequency instance', async () => {
+    const f = await setup(await realtimeFixture('trip_id,start_time,end_time,headway_secs,exact_times\nT,08:00:00,10:00:00,600,0\n'));
+    const applied = await publishTrip(f, {
+      trip: { tripId: 'T', startDate: '20261019', startTime: '08:12:00', scheduleRelationship: 2 },
+      stopTimeUpdate: [{ stopSequence: 1, arrival: { time: NOW + 780 } }], delay: 60,
+    });
+    expect(applied.degraded).toBe(false);
+    expect(applied.stopUpdates[0]).toMatchObject({ status: 'realtime', arrivalTimeSeconds: NOW + 780 });
+    expect(applied.stopUpdates[0]?.departureTimeSeconds).toBeUndefined();
+    expect((await f.service.getStationPredictions('S', NOW)).payload).toEqual([
+      expect.objectContaining({ tripId: 'T', stopSequence: 1, arrivalTimeSeconds: NOW + 780, status: 'realtime' }),
+    ]);
+    expect((await f.service.getStationPredictions('P', NOW)).payload).toEqual([]);
+    expect((await f.service.getStationPredictions('Q', NOW)).payload).toEqual([]);
+  });
+
+  it('keeps duplicate and replacement schedules while suppressing template-only calls in a mixed snapshot', async () => {
+    const f = await setup(await realtimeFixture('trip_id,start_time,end_time,headway_secs,exact_times\nT,08:00:00,10:00:00,600,0\n', {
+      'trips.txt': 'route_id,service_id,trip_id\nR,D,T\nR,D,U\nR,D,V\n',
+      'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,08:00:00,08:00:00,S,1\nT,08:05:00,08:05:00,P,2\nU,08:00:00,08:00:00,S,1\nU,08:05:00,08:05:00,P,2\nV,08:00:00,08:00:00,S,1\nV,08:05:00,08:05:00,P,2\n',
+    }));
+    const applied = await publishTrip(f,
+      { trip: { tripId: 'T', startDate: '20261019', startTime: '08:12:00', scheduleRelationship: 2 },
+        stopTimeUpdate: [{ stopSequence: 1, arrival: { time: NOW + 780 } }] },
+      { trip: { tripId: 'U', startDate: '20261019', scheduleRelationship: 6 },
+        tripProperties: { tripId: 'copy', startDate: '20261019', startTime: '08:20:00' } },
+      { trip: { tripId: 'V', startDate: '20261019', scheduleRelationship: 5 }, stopTimeUpdate: [
+        { stopId: 'S', stopSequence: 1, scheduleRelationship: 2, arrival: { time: NOW + 1800 }, departure: { time: NOW + 1800 } },
+        { stopId: 'P', stopSequence: 2, scheduleRelationship: 2, arrival: { time: NOW + 2100 }, departure: { time: NOW + 2100 } },
+      ] },
+    );
+    expect(applied.degraded).toBe(false);
+    expect((await f.service.getStationPredictions('S', NOW)).payload?.map(row => [row.tripId, row.arrivalTimeSeconds, row.status])).toEqual([
+      ['U', NOW, 'scheduled_only'], ['T', NOW + 780, 'realtime'],
+      ['copy', NOW + 1200, 'scheduled_only'], ['V', NOW + 1800, 'scheduled_only'],
+    ]);
+    expect((await f.service.getStationPredictions('P', NOW)).payload?.map(row => [row.tripId, row.arrivalTimeSeconds, row.status])).toEqual([
+      ['U', NOW + 300, 'scheduled_only'], ['copy', NOW + 1500, 'scheduled_only'], ['V', NOW + 2100, 'scheduled_only'],
+    ]);
+  });
+
   it('rejects duplicate IDs owned by static trips outside the loaded window', async () => {
     const f = await setup(await realtimeFixture('', {
       'trips.txt': 'route_id,service_id,trip_id\nR,FUTURE,U\nR,D,T\n',

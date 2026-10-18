@@ -91,6 +91,8 @@ export function createRegionalTransitService(env: Env): RegionalTransitService {
         used.add(update);
         if (update.status === 'canceled' || update.status === 'skipped') return true;
         if (update.status === 'realtime') { payload.push(update); return true; }
+        // Non-exact frequency template offsets are not precise scheduled calls.
+        if (update.scheduleRelationship === 'UNSCHEDULED') return true;
         if (update.status === 'scheduled_only' && (update.scheduledArrivalTimeSeconds !== undefined || update.scheduledDepartureTimeSeconds !== undefined)) {
           payload.push({ ...update, arrivalTimeSeconds: update.scheduledArrivalTimeSeconds, departureTimeSeconds: update.scheduledDepartureTimeSeconds });
           return true;
