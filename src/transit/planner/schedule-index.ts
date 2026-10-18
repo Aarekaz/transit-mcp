@@ -1,0 +1,112 @@
+import { parseTransitRef, type TransitRef } from '../core/refs';
+import type { VerificationReason } from '../core/results';
+import type { ArtifactManifestV2, ScheduleShard, SourceMetadata } from '../gtfs/static/schema';
+import { canonicalJson, decodeScheduleShard, sha256 } from '../gtfs/static/shards';
+import { parseServiceDate } from '../gtfs/static/time';
+import { formatInstant, MAX_STOP_TIME_SECONDS, parseInstant, serviceDateAtInstant, serviceDayOrigin, shiftServiceDate } from './service-day';
+
+export interface ScheduleWindowQuery {
+  manifest: ArtifactManifestV2;
+  /** Reads one immutable object. Implementations must also cap transport size. */
+  readShard: (key: string) => Promise<Uint8Array>;
+  instant: string;
+  /** Half-open interval [instant, instant + windowSeconds), maximum seven days. */
+  windowSeconds: number;
+  feedIds?: string[];
+  agencyRefs?: TransitRef[];
+}
+export interface ScheduleDay {
+  agencyRef: TransitRef; timezone: string; serviceDate: string; startTime: string;
+}
+export interface LoadedScheduleShard { shard: ScheduleShard; key: string; serviceDays: ScheduleDay[] }
+export interface ScheduleWindow {
+  status: 'scheduled_only' | 'unavailable'; reasons: VerificationReason[];
+  startTime: string; endTime: string; sources: SourceMetadata[];
+  shards: LoadedScheduleShard[];
+}
+type Descriptor = ArtifactManifestV2['shards'][number];
+const BYTE_BUDGET = 64 * 1024 * 1024;
+
+function covers(descriptor: Descriptor, date: string): boolean {
+  return date >= descriptor.window.startDate && date <= descriptor.window.endDate;
+}
+function withinFeed(source: SourceMetadata, date: string): boolean {
+  return source.feedInfo.every(info => (!info.feed_start_date || date >= info.feed_start_date) && (!info.feed_end_date || date <= info.feed_end_date));
+}
+
+/** Pure selection plus an injected immutable-byte reader; no R2 or global clock dependency. */
+export async function loadScheduleWindow(query: ScheduleWindowQuery): Promise<ScheduleWindow> {
+  const start = parseInstant(query.instant), end = start + query.windowSeconds * 1000;
+  if (!Number.isInteger(query.windowSeconds) || query.windowSeconds <= 0 || query.windowSeconds > 7 * 86400) throw new Error('TIME_OUTSIDE_WINDOW: search window must be between 1 second and 7 days');
+  const { manifest } = query;
+  if (manifest.schemaVersion !== 2) throw new Error('Invalid schedule manifest');
+  const result: ScheduleWindow = { status: 'scheduled_only', reasons: [], startTime: formatInstant(start, 'UTC'),
+    endTime: formatInstant(end, 'UTC'), sources: [], shards: [] };
+  const unavailable = (reason: VerificationReason): ScheduleWindow => ({ ...result, status: 'unavailable', reasons: [reason], shards: [] });
+  const feeds = [...new Set(query.feedIds ?? manifest.sources.map(source => source.feedId))].sort();
+  if (!feeds.length) return unavailable('COVERAGE_UNAVAILABLE');
+  const selected = new Map<string, { descriptor: Descriptor; days: ScheduleDay[]; source: SourceMetadata }>();
+  for (const feed of feeds) {
+    const sources = manifest.sources.filter(source => source.feedId === feed);
+    if (!sources.length) return unavailable('COVERAGE_UNAVAILABLE');
+    if (sources.length !== 1) throw new Error('Ambiguous schedule source identity');
+    const source = sources[0]!;
+    result.sources.push(source);
+    for (const info of source.feedInfo) {
+      if (info.feed_start_date) parseServiceDate(info.feed_start_date);
+      if (info.feed_end_date) parseServiceDate(info.feed_end_date);
+    }
+    const descriptors = manifest.shards.filter(shard => shard.feedId === feed).sort((a, b) => a.byteLength - b.byteLength || a.key.localeCompare(b.key));
+    if (!descriptors.length) return unavailable('SCHEDULE_EXPIRED');
+    for (const descriptor of descriptors) {
+      if (!Number.isInteger(descriptor.maxStopTimeSeconds) || descriptor.maxStopTimeSeconds < 0 || descriptor.maxStopTimeSeconds > MAX_STOP_TIME_SECONDS) throw new Error('Invalid timetable bound');
+      if (!Number.isSafeInteger(descriptor.byteLength) || descriptor.byteLength < 16) throw new Error('Invalid shard byte budget');
+      if (parseServiceDate(descriptor.window.startDate) > parseServiceDate(descriptor.window.endDate)) throw new Error('Invalid shard service window');
+    }
+    // Every window carries the same feed-wide bound, including excluded trips.
+    const maximum = descriptors[0]!.maxStopTimeSeconds;
+    if (descriptors.some(descriptor => descriptor.maxStopTimeSeconds !== maximum)) throw new Error('Inconsistent schedule identity');
+    const agencies = Object.entries(manifest.agencyTimezones).filter(([ref]) => {
+      const parsed = parseTransitRef(ref);
+      return parsed?.kind === 'agency' && parsed.coverage === manifest.coverageId && parsed.feed === feed &&
+        (!query.agencyRefs || query.agencyRefs.includes(ref as TransitRef));
+    });
+    if (!agencies.length && !query.agencyRefs) return unavailable('COVERAGE_UNAVAILABLE');
+    for (const [agencyRef, timezone] of agencies) {
+      const firstCivil = serviceDateAtInstant(start, timezone), lastCivil = serviceDateAtInstant(end - 1, timezone);
+      const first = shiftServiceDate(firstCivil, -Math.ceil(maximum / 86400) - 1);
+      const last = shiftServiceDate(lastCivil, 1);
+      for (let date = first; date <= last; date = shiftServiceDate(date, 1)) {
+        const origin = serviceDayOrigin(date, timezone);
+        const requested = date >= firstCivil && date <= lastCivil;
+        const contributes = origin < end && origin + maximum * 1000 >= start;
+        if (!requested && !contributes) continue;
+        if (!withinFeed(source, date)) {
+          if (requested) return unavailable('SCHEDULE_EXPIRED');
+          continue;
+        }
+        const chosen = [...selected.values()].find(item => item.descriptor.feedId === feed && covers(item.descriptor, date))?.descriptor
+          ?? descriptors.find(descriptor => covers(descriptor, date));
+        if (!chosen) return unavailable('SCHEDULE_EXPIRED');
+        let entry = selected.get(chosen.key);
+        if (!entry) { entry = { descriptor: chosen, days: [], source }; selected.set(chosen.key, entry); }
+        entry.days.push({ agencyRef: agencyRef as TransitRef, timezone, serviceDate: date, startTime: formatInstant(origin, timezone) });
+      }
+    }
+  }
+  const bytesRequired = [...selected.values()].reduce((sum, item) => sum + item.descriptor.byteLength, 0);
+  if (bytesRequired > BYTE_BUDGET) throw new Error('Schedule shard byte budget exceeded');
+  // Sequential decoding bounds the transient byte buffers and pins one source per feed.
+  for (const { descriptor, days, source } of selected.values()) {
+    const bytes = await query.readShard(descriptor.key);
+    if (bytes.byteLength !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Schedule shard integrity failure');
+    const shard = decodeScheduleShard(bytes);
+    const agencyTimezones = Object.fromEntries(Object.entries(manifest.agencyTimezones).filter(([ref]) => parseTransitRef(ref)?.feed === descriptor.feedId));
+    if (shard.coverageId !== manifest.coverageId || shard.feedId !== descriptor.feedId || shard.source.sha256 !== source.sha256 ||
+      canonicalJson(shard.source) !== canonicalJson(source) || canonicalJson(shard.agencyTimezones) !== canonicalJson(agencyTimezones) ||
+      shard.maxStopTimeSeconds !== descriptor.maxStopTimeSeconds || shard.window.startDate !== descriptor.window.startDate || shard.window.endDate !== descriptor.window.endDate ||
+      days.some(day => shard.agencyTimezones[day.agencyRef] !== day.timezone)) throw new Error('Schedule shard identity mismatch');
+    result.shards.push({ shard, key: descriptor.key, serviceDays: days });
+  }
+  return result;
+}

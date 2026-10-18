@@ -208,7 +208,15 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     ref: trip.ref, providerId: trip.providerId, routeRef: trip.routeRef, serviceId: trip.serviceId,
     firstDepartureSeconds: trip.stopTimes[0]!.departureSeconds, lastArrivalSeconds: trip.stopTimes.at(-1)!.arrivalSeconds,
   }));
-  const shard: ScheduleShard = { schemaVersion: 2, coverageId: coverage.id, feedId, window: { ...window }, source, agencyTimezones,
+  let maxStopTimeSeconds = 0;
+  for (const trip of trips) for (const time of trip.stopTimes) maxStopTimeSeconds = Math.max(maxStopTimeSeconds, time.departureSeconds ?? 0);
+  for (const frequency of frequencies) {
+    const trip = tripsByRef.get(frequency.tripRef)!;
+    const first = trip.stopTimes[0]!.departureSeconds;
+    const last = trip.stopTimes.at(-1)!.departureSeconds;
+    if (first !== null && last !== null) maxStopTimeSeconds = Math.max(maxStopTimeSeconds, frequency.endSeconds - 1 + last - first);
+  }
+  const shard: ScheduleShard = { schemaVersion: 2, coverageId: coverage.id, feedId, window: { ...window }, maxStopTimeSeconds, source, agencyTimezones,
     stops, routes, trips: activeTrips, patterns: [...patterns.values()].filter(p => activePatterns.has(p.id)).sort((a, b) => a.id < b.id ? -1 : 1),
     calendars, frequencies: frequencies.filter(f => activeRefs.has(f.tripRef)), blocks,
     transfers, transferBoundaryTrips, pathways };
@@ -221,7 +229,7 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
   return { shard, discovery, shardBytes, discoveryBytes, manifest: {
     schemaVersion: 2, coverageId: coverage.id, sources: [source], agencyTimezones,
     discovery: { key: `${prefix}/discovery/${discoveryHash}.json`, sha256: discoveryHash, byteLength: discoveryBytes.length },
-    shards: [{ feedId, window: { ...window }, key: `${prefix}/${window.startDate}-${window.endDate}/${shardHash}.bin`, sha256: shardHash, byteLength: shardBytes.length }],
+    shards: [{ feedId, window: { ...window }, maxStopTimeSeconds, key: `${prefix}/${window.startDate}-${window.endDate}/${shardHash}.bin`, sha256: shardHash, byteLength: shardBytes.length }],
   } };
 }
 
