@@ -57,6 +57,8 @@ export interface SchedulePathway {
 }
 export interface ScheduleShard {
   schemaVersion: 2; coverageId: string; feedId: string; window: ServiceWindow;
+  /** Feed-wide upper bound, including frequency-expanded calls and trips outside this window. */
+  maxStopTimeSeconds: number;
   source: SourceMetadata; agencyTimezones: Record<TransitRef, string>;
   stops: ScheduleStop[]; routes: ScheduleRoute[]; trips: ScheduleTrip[];
   patterns: SchedulePattern[]; calendars: Record<string, ServiceCalendar>;
@@ -83,7 +85,7 @@ export interface ArtifactManifestV2 {
   schemaVersion: 2; coverageId: string; sources: SourceMetadata[];
   agencyTimezones: Record<TransitRef, string>;
   discovery: ArtifactObject;
-  shards: (ArtifactObject & { feedId: string; window: ServiceWindow })[];
+  shards: (ArtifactObject & { feedId: string; window: ServiceWindow; maxStopTimeSeconds: number })[];
   validator?: ValidatorEvidence;
 }
 export interface CompileScheduleInput {

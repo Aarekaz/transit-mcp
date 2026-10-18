@@ -21,6 +21,7 @@ const calendar = z.object({
 const tripIdentity = { ref: tripRef, providerId: id, routeRef, serviceId: id };
 const metadataSchema = z.object({
   schemaVersion: z.literal(2), coverageId: id, feedId: id,
+  maxStopTimeSeconds: uint.max(2 * (999 * 3600 + 3599)),
   window: z.object({ startDate: date, endDate: date }).refine(value => value.startDate <= value.endDate),
   source: z.object({ feedId: id, url: z.url(), retrievedAt: id.refine(value => Number.isFinite(Date.parse(value))), sha256: hash,
     feedInfo: z.array(z.record(z.string(), z.string())), anonymousAgencyRef: agencyRef.optional() }),
@@ -159,6 +160,7 @@ export function decodeScheduleShard(bytes: Uint8Array): ScheduleShard {
       if ((arrivalSeconds === null) !== (departureSeconds === null) ||
         (arrivalSeconds !== null && departureSeconds !== null && (departureSeconds < arrivalSeconds || arrivalSeconds < (lastDepartures.get(trip.ref) ?? 0) || departureSeconds > 999 * 3600 + 3599))) throw new Error();
       if (departureSeconds !== null) lastDepartures.set(trip.ref, departureSeconds);
+      if (departureSeconds !== null && departureSeconds > shard.maxStopTimeSeconds) throw new Error();
       trip.stopTimes.push({ stopRef: stop.ref, sequence: word(2), arrivalSeconds, departureSeconds,
         pickupType: word(5), dropOffType: word(6), timepoint: word(7), headsign });
     }
@@ -166,6 +168,14 @@ export function decodeScheduleShard(bytes: Uint8Array): ScheduleShard {
       const pattern = patterns.get(trip.patternId)!;
       if (!trip.stopTimes.length || trip.stopTimes.length !== pattern.stopRefs.length || pattern.routeRef !== trip.routeRef || pattern.directionId !== trip.directionId ||
         trip.stopTimes.some((time, index) => time.stopRef !== pattern.stopRefs[index] || time.pickupType !== pattern.pickupTypes[index] || time.dropOffType !== pattern.dropOffTypes[index])) throw new Error();
+    }
+    for (const boundary of shard.transferBoundaryTrips) {
+      if ((boundary.firstDepartureSeconds ?? 0) > shard.maxStopTimeSeconds || (boundary.lastArrivalSeconds ?? 0) > shard.maxStopTimeSeconds) throw new Error();
+    }
+    for (const frequency of shard.frequencies) {
+      const trip = trips.get(frequency.tripRef)!;
+      const first = trip.stopTimes[0]!.departureSeconds, last = trip.stopTimes.at(-1)!.departureSeconds;
+      if (first !== null && last !== null && frequency.endSeconds - 1 + last - first > shard.maxStopTimeSeconds) throw new Error();
     }
     return shard;
   } catch {
