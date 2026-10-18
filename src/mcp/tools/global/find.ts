@@ -26,27 +26,31 @@ export function registerFindTool(server: McpServer, context: MetroMcpContext): v
     inputSchema: z.union([z.strictObject({ ...common, ...absent, ref: boundedText }), z.strictObject({ ...common, ...absent, query: boundedText }),
       z.strictObject({ ...common, ...absent, latitude: coordinatesSchema.shape.latitude, longitude: coordinatesSchema.shape.longitude })]),
     outputSchema: findOutput,
-  }, async (args, handler) => guarded(handler, async () => {
-    checkState(handler, 'find_transit');
-    if (args.ref) return complete(await findEntityResult(context, args.ref, handler.mcpReq.signal));
-    const match = args.query ? getCoverage(args.query) : undefined;
-    const coordinateCoverage = args.latitude === undefined ? undefined : inferCoverage({ latitude: args.latitude, longitude: args.longitude! });
-    // An exact coverage query identifies the coverage being inspected; a name-search
-    // scope must not lend another coverage's availability or provenance to it.
-    const id = match?.id ?? getCoverage(args.coverage ?? '')?.id ?? args.coverage ?? coordinateCoverage ?? 'sfbay';
-    const data = await loadData(context, id, handler.mcpReq.signal);
-    const base = { ...(data ? { ...metadata(id, data), status: 'scheduled_only' as const, reasons: [] } : unavailable(id)),
-      coverages: match ? [{ id: match.id, displayName: match.displayName, aliases: [...match.aliases], supportedModes: [...match.supportedModes], available: Boolean(data), capabilities: match.capabilities }] : [],
-      entities: [], clientCoordinates: args.latitude === undefined ? null : { latitude: args.latitude, longitude: args.longitude! } };
-    let found = data && !match ? args.query ? candidates(data, args.query) : entities(data).filter(entity => entity.kind === 'stop') : [];
-    if (args.latitude !== undefined && data) {
-      const latitude = args.latitude, longitude = args.longitude!;
-      const distance = (ref: string) => { const stop = data.indexes.flatMap(index => index.stops).find(stop => stop.ref === ref); return stop?.latitude != null && stop.longitude != null ? Math.hypot(stop.latitude - latitude, (stop.longitude - longitude) * Math.cos(latitude * Math.PI / 180)) : Infinity; };
-      found = found.filter(entity => distance(entity.ref) <= 0.02).sort((a, b) => distance(a.ref) - distance(b.ref) || a.ref.localeCompare(b.ref));
-    }
-    if (args.context) found.sort((a, b) => Number(b.coverage === args.context?.coverage) + Number(b.feed === args.context?.feed) - Number(a.coverage === args.context?.coverage) - Number(a.feed === args.context?.feed));
-    const ambiguous = args.query && data ? found.filter(candidate => ambiguityCandidate(data, candidate, args.query!)) : [];
-    // Preserve material alternatives in their existing rank, including named place stops.
-    return complete({ ...base, candidates: ambiguous.length > 1 ? ambiguous : found.slice(0, args.limit) });
-  }, () => complete({ ...unavailable(args.coverage), coverages: [], candidates: [], entities: [], clientCoordinates: null })));
+  }, async (args, handler) => {
+    let resolvedCoverage = args.coverage;
+    return guarded(handler, async () => {
+      checkState(handler, 'find_transit');
+      if (args.ref) return complete(await findEntityResult(context, args.ref, handler.mcpReq.signal));
+      const match = args.query ? getCoverage(args.query) : undefined;
+      const coordinateCoverage = args.latitude === undefined ? undefined : inferCoverage({ latitude: args.latitude, longitude: args.longitude! });
+      // An exact coverage query identifies the coverage being inspected; a name-search
+      // scope must not lend another coverage's availability or provenance to it.
+      const id = match?.id ?? getCoverage(args.coverage ?? '')?.id ?? args.coverage ?? coordinateCoverage ?? 'sfbay';
+      resolvedCoverage = id;
+      const data = await loadData(context, id, handler.mcpReq.signal);
+      const base = { ...(data ? { ...metadata(id, data), status: 'scheduled_only' as const, reasons: [] } : unavailable(id)),
+        coverages: match ? [{ id: match.id, displayName: match.displayName, aliases: [...match.aliases], supportedModes: [...match.supportedModes], available: Boolean(data), capabilities: match.capabilities }] : [],
+        entities: [], clientCoordinates: args.latitude === undefined ? null : { latitude: args.latitude, longitude: args.longitude! } };
+      let found = data && !match ? args.query ? candidates(data, args.query) : entities(data).filter(entity => entity.kind === 'stop') : [];
+      if (args.latitude !== undefined && data) {
+        const latitude = args.latitude, longitude = args.longitude!;
+        const distance = (ref: string) => { const stop = data.indexes.flatMap(index => index.stops).find(stop => stop.ref === ref); return stop?.latitude != null && stop.longitude != null ? Math.hypot(stop.latitude - latitude, (stop.longitude - longitude) * Math.cos(latitude * Math.PI / 180)) : Infinity; };
+        found = found.filter(entity => distance(entity.ref) <= 0.02).sort((a, b) => distance(a.ref) - distance(b.ref) || a.ref.localeCompare(b.ref));
+      }
+      if (args.context) found.sort((a, b) => Number(b.coverage === args.context?.coverage) + Number(b.feed === args.context?.feed) - Number(a.coverage === args.context?.coverage) - Number(a.feed === args.context?.feed));
+      const ambiguous = args.query && data ? found.filter(candidate => ambiguityCandidate(data, candidate, args.query!)) : [];
+      // Preserve material alternatives in their existing rank, including named place stops.
+      return complete({ ...base, candidates: ambiguous.length > 1 ? ambiguous : found.slice(0, args.limit) });
+    }, () => complete({ ...unavailable(resolvedCoverage), coverages: [], candidates: [], entities: [], clientCoordinates: null }));
+  });
 }

@@ -132,6 +132,20 @@ describe('DC and NYC synthetic acceptance corpus through the five global tools',
     expect(result.structuredContent).toMatchObject({ status: 'unavailable', sources: [], coverages: [{ id: 'nyc', available: false }] });
   });
 
+  it.each(['missing manifest', 'corrupt discovery', 'storage exception'])('preserves the queried NYC attribution after %s despite a DC search scope', async failure => {
+    const f = await fixture(dc), n = await fixture(nyc, f.db);
+    if (failure === 'missing manifest') await f.db.bucket.delete(`artifacts/nyc/v2/manifests/${n.version.artifactVersion}.json`);
+    else if (failure === 'corrupt discovery') await f.db.bucket.put(n.compiled.manifest.discoveries[0]!.key, 'corrupt discovery');
+    else vi.spyOn(f.db.bucket, 'get').mockRejectedValue(new Error('Private storage failure'));
+    const result = await call(f.env, 'find_transit', { query: 'New York', coverage: 'DC' });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toEqual({
+      status: 'unavailable', reasons: ['COVERAGE_UNAVAILABLE'], asOf: '2026-10-19T12:59:00.000Z', sources: [],
+      attribution: [{ text: 'Transit data provided by the Metropolitan Transportation Authority.', url: 'https://www.mta.info/' }],
+      coverages: [], candidates: [], entities: [], clientCoordinates: null,
+    });
+  });
+
   it('rejects absent coverage identity instead of hashing its coerced undefined name', async () => {
     const f = await fixture(dc);
     const invalid = { ...f.compiled.manifest, coverageId: undefined } as unknown as typeof f.compiled.manifest;
