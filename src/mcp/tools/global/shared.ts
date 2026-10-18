@@ -2,7 +2,8 @@ import { ProtocolError, ProtocolErrorCode, type ServerContext } from '@modelcont
 import { z } from 'zod';
 import type { MetroMcpContext, TransitRequestState } from '../../context';
 import { complete } from '../../shared';
-import { getCoverage, type CoverageManifest } from '../../../transit/core/coverage';
+import { getCoverage, getCoverages, type CoverageManifest } from '../../../transit/core/coverage';
+import { getCoverageMode } from '../../../regions/manifest';
 import { formatEntityRef, parseTransitRef, type TransitRef } from '../../../transit/core/refs';
 import { VERIFICATION_REASONS, type SourceStatus, type VerificationReason } from '../../../transit/core/results';
 import { StaticArtifactStore, readBoundedObject, SF511_QUOTA_NAMESPACE, type StaticVersion } from '../../../transit/gtfs/realtime/snapshot-store';
@@ -67,8 +68,8 @@ export interface TransitData {
 /** Public mode checks belong at the data boundary; catalog registration never changes. */
 export async function loadData(context: MetroMcpContext, coverageId: string, signal: AbortSignal, version?: string): Promise<TransitData | null> {
   const coverage = getCoverage(coverageId);
-  if (!coverage || coverage.id !== 'sfbay' || context.env.SFBAY_MODE !== 'on' || !context.env.TRANSIT_ARTIFACTS) return null;
-  const bucket = context.env.TRANSIT_ARTIFACTS, store = new StaticArtifactStore(bucket);
+  if (!coverage || getCoverageMode(coverage.id, context.env) !== 'on' || !context.env.TRANSIT_ARTIFACTS) return null;
+  const bucket = context.env.TRANSIT_ARTIFACTS, store = new StaticArtifactStore(bucket, coverage.id);
   signal.throwIfAborted();
   const current = version ? await store.read(version) : await store.current();
   signal.throwIfAborted();
@@ -164,7 +165,7 @@ export async function detail(data: TransitData, ref: string) {
 /** This coordinator owns sf511 only; artifact membership does not imply realtime ownership. */
 export type OwnedFeedRead<T> = FeedRead<T> & { feedId: string };
 export async function readFeed<T>(context: MetroMcpContext, data: TransitData, kind: RealtimeFeedKind, now: number, signal: AbortSignal): Promise<OwnedFeedRead<T[]> | null> {
-  if (!context.env.REGION_FEED_HUB) return null;
+  if (data.coverage.id !== 'sfbay' || !context.env.REGION_FEED_HUB) return null;
   const url = new URL(`https://region-feed-hub.internal/${kind}`);
   url.searchParams.set('now', String(now)); url.searchParams.set('artifact', data.version.artifactVersion);
   signal.throwIfAborted();
@@ -181,8 +182,12 @@ export function realtimeSource(data: TransitData, feed: OwnedFeedRead<unknown>, 
 export function inferCoverage(endpoint: z.infer<typeof endpointSchema>): string | undefined {
   if ('ref' in endpoint) return validRef(endpoint.ref, ['stop']).coverage;
   if ('latitude' in endpoint) {
-    const coverage = getCoverage('sfbay'), bounds = coverage?.bounds;
-    if (bounds && endpoint.longitude >= bounds[0] && endpoint.latitude >= bounds[1] && endpoint.longitude <= bounds[2] && endpoint.latitude <= bounds[3]) return coverage!.id;
+    const matches = getCoverages().filter(coverage => {
+      const bounds = coverage.bounds;
+      return bounds && endpoint.longitude >= bounds[0] && endpoint.latitude >= bounds[1] && endpoint.longitude <= bounds[2] && endpoint.latitude <= bounds[3];
+    });
+    // Overlapping coverage bounds cannot establish identity by registry order.
+    if (matches.length === 1) return matches[0]!.id;
   }
   return undefined;
 }
