@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { MetroMcpContext } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
 import { getCoverage } from '../../../transit/core/coverage';
-import { ambiguityCandidate, boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, entities, guarded, loadData, metadata, resultShape, unavailable, validRef } from './shared';
+import { ambiguityCandidate, boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, entities, guarded, inferCoverage, loadData, metadata, resultShape, unavailable, validRef } from './shared';
 
 export const entitySchema = candidateSchema.extend({ scheduleVersion: z.string(), resourceUri: z.string(), coordinates: coordinatesSchema.nullable(), routeRefs: z.array(z.string()),
   agencyRef: z.string().nullable(), mode: z.string().nullable(), patterns: z.array(z.strictObject({ id: z.string(), directionId: z.number().int().nullable(), stopRefs: z.array(z.string()) })),
@@ -30,7 +30,10 @@ export function registerFindTool(server: McpServer, context: MetroMcpContext): v
     checkState(handler, 'find_transit');
     if (args.ref) return complete(await findEntityResult(context, args.ref, handler.mcpReq.signal));
     const match = args.query ? getCoverage(args.query) : undefined;
-    const id = getCoverage(args.coverage ?? '')?.id ?? args.coverage ?? match?.id ?? 'sfbay';
+    const coordinateCoverage = args.latitude === undefined ? undefined : inferCoverage({ latitude: args.latitude, longitude: args.longitude! });
+    // An exact coverage query identifies the coverage being inspected; a name-search
+    // scope must not lend another coverage's availability or provenance to it.
+    const id = match?.id ?? getCoverage(args.coverage ?? '')?.id ?? args.coverage ?? coordinateCoverage ?? 'sfbay';
     const data = await loadData(context, id, handler.mcpReq.signal);
     const base = { ...(data ? { ...metadata(id, data), status: 'scheduled_only' as const, reasons: [] } : unavailable(id)),
       coverages: match ? [{ id: match.id, displayName: match.displayName, aliases: [...match.aliases], supportedModes: [...match.supportedModes], available: Boolean(data), capabilities: match.capabilities }] : [],

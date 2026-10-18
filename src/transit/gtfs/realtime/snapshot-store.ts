@@ -10,8 +10,6 @@ export interface NormalizedRealtimeSnapshot<T = unknown> {
 interface ShardDescriptor { key: string; sha256: string; byteLength: number; partition: number }
 interface SnapshotMetadata extends Omit<NormalizedRealtimeSnapshot, 'payload'> { shards: ShardDescriptor[] }
 const encode = (value: unknown) => new TextEncoder().encode(`${canonicalJson(value)}\n`);
-const MANIFEST_PREFIX = 'artifacts/sfbay/v2/manifests/';
-const POINTER_KEY = 'artifacts/sfbay/v2/current.json';
 const PARTITIONS = 64;
 const SHARD_BYTES = 256 * 1024;
 const PAYLOAD_BYTES = 32 * 1024 * 1024;
@@ -22,7 +20,7 @@ const METADATA_BYTES = 120 * 1024;
 export const SF511_QUOTA_NAMESPACE = 'sfbay:511';
 
 export async function staticVersion(manifest: ArtifactManifestV2): Promise<StaticVersion> {
-  if (manifest.schemaVersion !== 2 || manifest.coverageId !== 'sfbay' || !manifest.sources.length ||
+  if (manifest.schemaVersion !== 2 || typeof manifest.coverageId !== 'string' || !/^[a-z0-9_]+$/.test(manifest.coverageId) || !manifest.sources.length ||
       new Set(manifest.sources.map(s => s.feedId)).size !== manifest.sources.length ||
       manifest.sources.some(s => !/^[a-f0-9]{64}$/.test(s.sha256))) throw new Error('Invalid static source identity');
   return { artifactVersion: await sha256(encode(manifest)), sourceVersions: Object.fromEntries(manifest.sources.map(s => [s.feedId, s.sha256])) };
@@ -56,22 +54,29 @@ export async function readBoundedObject(bucket: R2Bucket, key: string, maximum: 
  * Old immutable manifests remain in R2 and are never loaded just to match stale RT. */
 export class StaticArtifactStore {
   #resident?: { version: StaticVersion; manifest: ArtifactManifestV2 };
-  constructor(private readonly bucket: R2Bucket) {}
+  private readonly manifestPrefix: string;
+  private readonly pointerKey: string;
+  constructor(private readonly bucket: R2Bucket, private readonly coverageId = 'sfbay') {
+    if (!/^[a-z0-9_]+$/.test(coverageId)) throw new Error('Invalid coverage namespace');
+    this.manifestPrefix = `artifacts/${coverageId}/v2/manifests/`;
+    this.pointerKey = `artifacts/${coverageId}/v2/current.json`;
+  }
   get residentVersion(): string | undefined { return this.#resident?.version.artifactVersion; }
 
   async publish(manifest: ArtifactManifestV2): Promise<StaticVersion> {
+    if (manifest.coverageId !== this.coverageId) throw new Error('Static manifest coverage mismatch');
     const version = await staticVersion(manifest);
     if (encode(manifest).length > 2 * 1024 * 1024) throw new Error('Static manifest metadata budget exceeded');
-    const pointer = await this.bucket.get(POINTER_KEY);
+    const pointer = await this.bucket.get(this.pointerKey);
     const prior = pointer ? JSON.parse(await pointer.text()) as { current: string; previous?: string } : undefined;
-    await this.bucket.put(`${MANIFEST_PREFIX}${version.artifactVersion}.json`, encode(manifest));
-    await this.bucket.put(POINTER_KEY, encode({ current: version.artifactVersion, previous: prior?.current === version.artifactVersion ? prior.previous : prior?.current }));
+    await this.bucket.put(`${this.manifestPrefix}${version.artifactVersion}.json`, encode(manifest));
+    await this.bucket.put(this.pointerKey, encode({ current: version.artifactVersion, previous: prior?.current === version.artifactVersion ? prior.previous : prior?.current }));
     this.#resident = { version, manifest };
     return version;
   }
 
   async current(): Promise<{ version: StaticVersion; manifest: ArtifactManifestV2 } | null> {
-    const pointer = await this.bucket.get(POINTER_KEY);
+    const pointer = await this.bucket.get(this.pointerKey);
     if (!pointer) return null;
     if (pointer.size > 1024) throw new Error('Invalid static pointer');
     const value = JSON.parse(await pointer.text()) as { current: string };
@@ -82,9 +87,10 @@ export class StaticArtifactStore {
     if (!/^[a-f0-9]{64}$/.test(artifactVersion)) throw new Error('Invalid artifact version');
     if (this.#resident?.version.artifactVersion === artifactVersion) return this.#resident;
     this.#resident = undefined; // Release old identity before reading the replacement.
-    const bytes = await readBoundedObject(this.bucket, `${MANIFEST_PREFIX}${artifactVersion}.json`, 2 * 1024 * 1024);
+    const bytes = await readBoundedObject(this.bucket, `${this.manifestPrefix}${artifactVersion}.json`, 2 * 1024 * 1024);
     if (await sha256(bytes) !== artifactVersion) throw new Error('Static manifest integrity failure');
     const manifest = JSON.parse(new TextDecoder().decode(bytes)) as ArtifactManifestV2;
+    if (manifest.coverageId !== this.coverageId) throw new Error('Static manifest coverage mismatch');
     const version = await staticVersion(manifest);
     if (version.artifactVersion !== artifactVersion) throw new Error('Static manifest identity mismatch');
     return this.#resident = { version, manifest };

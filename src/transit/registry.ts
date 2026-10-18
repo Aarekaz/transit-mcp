@@ -10,6 +10,10 @@ import { WMATAClient } from './wmata-client';
 import { MTAClient } from './mta-client';
 import { Env } from '../types';
 
+// Global schedule-backed coverage and legacy native clients are distinct registries.
+// Global handlers read immutable artifacts; they must not invoke these API clients.
+export { getCoverage, getCoverages } from './core/coverage';
+
 /**
  * Map of city codes to their client classes
  */

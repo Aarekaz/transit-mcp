@@ -1,0 +1,18 @@
+{
+  "coverage": "dc",
+  "feed": "wmata",
+  "provenance": { "classification": "synthetic_topology", "scope": "Invented IDs, coordinates, timetables and transfers for core acceptance only. Not an authoritative WMATA schedule or production readiness evidence.", "sourceUrl": "https://example.invalid/transit-mcp/fixtures/dc-golden-journeys" },
+  "now": "2026-10-19T08:59:00-04:00",
+  "files": {
+    "agency.txt": "agency_id,agency_name,agency_url,agency_timezone\nsyn_wmata,WMATA,https://www.wmata.com,America/New_York\n",
+    "stops.txt": "stop_id,stop_name,stop_lat,stop_lon\nsyn_dupont,Dupont Circle,38.909,-77.043\nsyn_farragut,Farragut North,38.903,-77.04\nsyn_metro_red,Metro Center Red,38.898,-77.028\nsyn_metro_blue,Metro Center Blue,38.898,-77.0281\nsyn_dca,Ronald Reagan Washington National Airport,38.853,-77.044\nsyn_shady,Shady Grove,39.12,-77.16\n",
+    "routes.txt": "route_id,agency_id,route_short_name,route_long_name,route_type\nsyn_red,syn_wmata,RD,Red,1\nsyn_blue,syn_wmata,BL,Blue,1\n",
+    "trips.txt": "route_id,service_id,trip_id,trip_headsign,direction_id\nsyn_red,D,syn_glenmont,Glenmont,0\nsyn_red,D,syn_shady_train,Shady Grove,1\nsyn_blue,D,syn_franconia,Franconia-Springfield,0\n",
+    "stop_times.txt": "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nsyn_glenmont,09:00:00,09:00:00,syn_dupont,1\nsyn_glenmont,09:03:00,09:03:00,syn_farragut,2\nsyn_glenmont,09:06:00,09:06:00,syn_metro_red,3\nsyn_shady_train,08:55:00,08:55:00,syn_metro_red,1\nsyn_shady_train,08:58:00,08:58:00,syn_farragut,2\nsyn_shady_train,09:01:00,09:01:00,syn_dupont,3\nsyn_shady_train,09:40:00,09:40:00,syn_shady,4\nsyn_franconia,09:09:00,09:09:00,syn_metro_blue,1\nsyn_franconia,09:30:00,09:30:00,syn_dca,2\n",
+    "calendar.txt": "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nD,1,1,1,1,1,1,1,20261019,20261025\n",
+    "pathways.txt": "pathway_id,from_stop_id,to_stop_id,pathway_mode,is_bidirectional,length,traversal_time\nsyn_metro_transfer,syn_metro_red,syn_metro_blue,1,1,50,120\n"
+  },
+  "journeys": [
+    { "name": "Dupont Circle to DCA via Glenmont-bound Red and Blue", "origin": "Dupont Circle", "destination": "DCA", "departAt": "2026-10-19T08:59:00-04:00", "want": { "trips": ["syn_glenmont", "syn_franconia"], "headsigns": ["Glenmont", "Franconia-Springfield"], "arrivalTime": "2026-10-19T13:30:00.000Z", "transfers": 1 } }
+  ]
+}

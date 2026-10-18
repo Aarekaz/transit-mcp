@@ -1,4 +1,6 @@
 import { SFBAY_COVERAGE } from '../../regions/sfbay';
+import { DC_COVERAGE } from '../../regions/dc';
+import { NYC_COVERAGE } from '../../regions/nyc';
 import type { RealtimeFeedSpec, RegionMode } from '../../regions/types';
 import type { TransitMode } from '../gtfs/static/modes';
 import type { CoverageId } from './refs';
@@ -14,6 +16,10 @@ export type CoverageWorkerBindings = {
   [Key in CoverageBinding['secretEnv']]?: string;
 } & {
   [Key in CoverageBinding['modeEnv']]?: RegionMode;
+} & {
+  /** JSON object of known coverage IDs to rollout modes. New coverage defaults off.
+   * SFBAY_MODE remains authoritative for SF and its existing ingestion coordinator. */
+  TRANSIT_COVERAGE_MODES?: string;
 };
 
 /** Source support, independent of whether a coverage is publicly enabled. */
@@ -48,7 +54,9 @@ export interface CoverageManifest {
   attribution: readonly TransitAttribution[];
 }
 
-const coverages: readonly CoverageManifest[] = [SFBAY_COVERAGE];
+const coverages: readonly CoverageManifest[] = [SFBAY_COVERAGE, DC_COVERAGE, NYC_COVERAGE];
+
+export function getCoverages(): readonly CoverageManifest[] { return coverages; }
 
 /** Registry lookup does not enable a coverage or change legacy discovery. */
 export function getCoverage(id: string): CoverageManifest | undefined {
