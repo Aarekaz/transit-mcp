@@ -2,6 +2,7 @@ import { createExecutionContext, SELF } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { CLIENT_CAPABILITIES_META_KEY } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import GtfsRealtimeBindings from 'gtfs-realtime-bindings';
 
 import worker from '../../src/index';
 import { compileSchedule } from '../../src/transit/gtfs/static/compiler';
@@ -412,7 +413,11 @@ describe('assembled MCP Worker', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const request = new Request(input);
       if (request.url.startsWith('https://api-endpoint.mta.info/')) {
-        return new Response('upstream unavailable in deterministic MRTR test', { status: 503 });
+        // A complete empty board requires a successful, valid feed. Failures are
+        // errors and are covered separately by provider completeness regressions.
+        return new Response(GtfsRealtimeBindings.transit_realtime.FeedMessage.encode({
+          header: { gtfsRealtimeVersion: '1.0', timestamp: 1792339200 }, entity: [],
+        }).finish());
       }
       throw new Error(`Unmatched outbound request: ${request.url}`);
     });

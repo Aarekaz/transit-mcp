@@ -62,6 +62,9 @@ export interface TransitStation {
 
   /** Optional: Transfer connections to other stations */
   transfers?: StationTransfer[];
+
+  /** Provider station-complex links, without an asserted walking duration. */
+  stationTogether?: string[];
 }
 
 /**

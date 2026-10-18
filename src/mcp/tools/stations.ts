@@ -133,10 +133,10 @@ export function registerStationTools(
           );
         }
         stationId = accepted.stationId;
-      } else if (/^[A-Z]\d{2}$/i.test(stationName)) {
+      } else if (city === 'dc' && /^[A-Z]\d{2}$/i.test(stationName)) {
         stationId = stationName.toUpperCase();
-      } else if (/^\d+[NS]?$/.test(stationName)) {
-        stationId = stationName;
+      } else if (city === 'nyc' && /^(?:[A-Z]+\d+|\d+)[NS]?$/i.test(stationName)) {
+        stationId = stationName.toUpperCase();
       } else {
         const matches = await client.searchStation(stationName, signal);
         if (matches.length === 0) {
