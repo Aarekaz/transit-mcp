@@ -44,7 +44,7 @@ export function registerPrompts(server: McpServer): void {
         role: 'user',
         content: {
           type: 'text',
-          text: `Plan a ${city.toUpperCase()} transit commute from "${fromStation}" to "${toStation}". Use search_stations to resolve each, get_station_predictions on the origin for the next train, and check get_incidents for relevant alerts. Return a concrete plan with line, direction, transfer points, and an estimated end-to-end time.`,
+          text: `Use plan_trip with coverage "${city}", origin {query: "${fromStation}"} and destination {query: "${toStation}"}. Resolve both endpoints in that call. Report the verified itinerary and its status, or explain unavailable coverage. Never construct, extend or repair journeys from departures or station predictions.`,
         },
       }],
     }),

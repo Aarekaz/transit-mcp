@@ -1,9 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import { validateItinerary } from '../../src/transit/planner/validator';
-import { at, entranceInput, golden, pathwayInput, plannerFixture, plannerInput, ref, transferInput } from '../helpers/planner-fixture';
+import { at, entranceInput, golden, goldenTransfer, pathwayInput, plannerFixture, plannerInput, ref, transferInput } from '../helpers/planner-fixture';
 import type { Itinerary, TransitLeg } from '../../src/transit/planner/types';
 
 describe('independent itinerary validation against canonical stop-times', () => {
+  it.each(['canceled', 'skipped'] as const)('localizes a %s second ride without invalidating the first', async status => {
+    const input = transferInput(); input.files['trips.txt'] = input.files['trips.txt'].replaceAll(',block', ',');
+    const f = await plannerFixture(input), candidate = goldenTransfer(f), now = Date.parse(f.query.now) / 1000;
+    expect((await validateItinerary(candidate, f.source)).valid).toBe(true);
+    const result = await validateItinerary(candidate, { ...f.source, realtime: { version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, payload: [{ entityId: 'second', stopId: 'B', stopSequence: 1,
+        tripInstanceRef: 'tr:sfbay:sf511:trip:VQ:20261019:MDk6MTI6MDA', status }] } });
+    expect(result).toMatchObject({ valid: false, legFailures: [{ index: 1, reasons: [status === 'canceled' ? 'TRIP_CANCELED' : 'STOP_SKIPPED'] }], transferFailures: [] });
+  });
+
+  it('localizes an invalid transfer boundary without invalidating either ride', async () => {
+    const input = transferInput(); input.files['trips.txt'] = input.files['trips.txt'].replaceAll(',block', ',');
+    input.files['transfers.txt'] = 'from_stop_id,to_stop_id,transfer_type,min_transfer_time\nB,B,2,180\n';
+    const f = await plannerFixture(input);
+    expect(await validateItinerary(goldenTransfer(f), f.source)).toMatchObject({ valid: false, reasons: ['TRANSFER_MINIMUM'],
+      legFailures: [], transferFailures: [{ fromLegIndex: 0, toLegIndex: 1, reasons: ['TRANSFER_MINIMUM'] }] });
+  });
   it('deduplicates identical dated pathway metadata but rejects conflicting definitions', async () => {
     const f = await plannerFixture(pathwayInput()), candidate = golden(f), first = candidate.legs[0] as TransitLeg;
     Object.assign(first, { headsign: 'Interchange', to: ref('stop', 'B'), alightSequence: 2, arrivalTime: at('09:10:00'), scheduledArrivalTime: at('09:10:00') });
@@ -53,7 +70,7 @@ describe('independent itinerary validation against canonical stop-times', () => 
   });
   it('accepts a hand-authored valid journey without calling the router', async () => {
     const f = await plannerFixture();
-    expect(await validateItinerary(golden(f), f.source)).toEqual({ valid: true, reasons: [] });
+    expect(await validateItinerary(golden(f), f.source)).toEqual({ valid: true, reasons: [], legFailures: [], transferFailures: [] });
   });
 
   // Each mutation models one incorrect planner claim; the oracle is hand-authored above.

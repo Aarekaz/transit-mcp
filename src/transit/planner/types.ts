@@ -45,7 +45,12 @@ export interface JourneyQuery extends Omit<ValidationSource, 'shards'> {
   /** Vehicle changes, default three, maximum four. In-seat continuation does not consume one. */
   maxTransfers?: number;
 }
-export interface ValidationResult { valid: boolean; reasons: string[] }
+export interface ValidationResult {
+  valid: boolean;
+  reasons: string[];
+  legFailures: { index: number; reasons: string[] }[];
+  transferFailures: { fromLegIndex: number; toLegIndex: number; reasons: string[] }[];
+}
 export interface JourneyResult {
   status: VerificationStatus; reasons: VerificationReason[]; candidates: Itinerary[];
   diagnostics: { rounds: number; estimatedWorkingSetBytes: number };

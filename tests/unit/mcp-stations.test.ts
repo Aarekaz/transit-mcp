@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   MetroMcpContext,
   MetroRequestState,
+  LegacyStationRequestState,
 } from '../../src/mcp/context';
 import { registerStationTools } from '../../src/mcp/tools/stations';
 import { TransitError } from '../../src/error-handler';
@@ -200,7 +201,7 @@ async function invoke(
 async function mintSelectionState(
   stateCodec: RequestStateCodec<MetroRequestState>,
   context = requestContext(),
-  overrides: Partial<MetroRequestState> = {},
+  overrides: Partial<LegacyStationRequestState> = {},
 ) {
   return await stateCodec.mint({
     phase: 'station-selection',

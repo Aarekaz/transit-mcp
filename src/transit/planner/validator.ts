@@ -5,7 +5,7 @@ import { canonicalJson } from '../gtfs/static/shards';
 import { isServiceActive, parseInstant, serviceDayOrigin } from './service-day';
 import type { Itinerary, JourneyEndpoint, TransitLeg, ValidationResult, ValidationSource } from './types';
 
-interface CheckedRide { leg: TransitLeg; trip: ScheduleTrip; shard: ScheduleShard; board: number; alight: number }
+interface CheckedRide { index: number; leg: TransitLeg; trip: ScheduleTrip; shard: ScheduleShard; board: number; alight: number }
 
 /** Independent proof over canonical GTFS rows. No router import, labels, route
  * indexes, scan order, predecessor graph or candidate-repair path is used. */
@@ -13,7 +13,19 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
   const abort = () => { if (signal?.aborted) throw new DOMException('Journey validation aborted', 'AbortError'); };
   abort();
   const reasons = new Set<string>();
-  const reject = (reason: string) => { reasons.add(reason); };
+  const legFailures = new Map<number, Set<string>>();
+  const transferFailures: ValidationResult['transferFailures'] = [];
+  let currentLeg: number | undefined;
+  const reject = (reason: string, index = currentLeg) => {
+    reasons.add(reason);
+    if (index !== undefined) { const failures = legFailures.get(index) ?? new Set<string>(); failures.add(reason); legFailures.set(index, failures); }
+  };
+  const rejectTransfer = (reason: string, fromLegIndex: number, toLegIndex: number) => {
+    reasons.add(reason);
+    let boundary = transferFailures.find(item => item.fromLegIndex === fromLegIndex && item.toLegIndex === toLegIndex);
+    if (!boundary) { boundary = { fromLegIndex, toLegIndex, reasons: [] }; transferFailures.push(boundary); }
+    if (!boundary.reasons.includes(reason)) boundary.reasons.push(reason);
+  };
   try {
     const version = await staticVersion(source.manifest); abort();
     if (itinerary.coverageId !== source.manifest.coverageId || itinerary.artifactVersion !== version.artifactVersion) reject('SCHEDULE_VERSION');
@@ -68,18 +80,22 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
       return Number.isFinite(endpoint.latitude) && Math.abs(endpoint.latitude) <= 90 && Number.isFinite(endpoint.longitude) && Math.abs(endpoint.longitude) <= 180;
     };
     if (!validEndpoint(itinerary.origin) || !validEndpoint(itinerary.destination)) reject('ENDPOINT');
-    if (!itinerary.legs.length || itinerary.legs.length > 100) return { valid: false, reasons: ['LEG_COUNT'] };
+    if (!itinerary.legs.length || itinerary.legs.length > 100) return { valid: false, reasons: ['LEG_COUNT'], legFailures: [], transferFailures: [] };
     if (!endpointEqual(itinerary.legs[0]!.from, itinerary.origin) || !endpointEqual(itinerary.legs.at(-1)!.to, itinerary.destination)) reject('ENDPOINT');
     let previousTime = requested, walked = 0, changes = -1, realtime = false;
     let previousRide: CheckedRide | undefined;
     const checked: CheckedRide[] = [];
     for (let index = 0; index < itinerary.legs.length; index++) {
       abort();
+      currentLeg = index;
       const leg = itinerary.legs[index]!, previous = itinerary.legs[index - 1];
       const depart = parseInstant(leg.departureTime), arrive = parseInstant(leg.arrivalTime);
-      if (depart < previousTime || arrive < depart || arrive > requested + itinerary.windowSeconds * 1000) reject('TIME_ORDER');
+      if (depart < previousTime) {
+        if (previous) rejectTransfer('TIME_ORDER', index - 1, index); else reject('TIME_ORDER');
+      }
+      if (arrive < depart || arrive > requested + itinerary.windowSeconds * 1000) reject('TIME_ORDER');
       previousTime = arrive;
-      if (previous && !endpointEqual(previous.to, leg.from) && !(leg.kind === 'transit' && leg.continuation)) reject('DISCONNECTED_LEGS');
+      if (previous && !endpointEqual(previous.to, leg.from) && !(leg.kind === 'transit' && leg.continuation)) rejectTransfer('DISCONNECTED_LEGS', index - 1, index);
       if (!validEndpoint(leg.from) || !validEndpoint(leg.to)) reject('ENDPOINT');
       if (leg.kind === 'walk') {
         if (!Number.isFinite(leg.distanceMetres) || leg.distanceMetres < 0) { reject('WALK_DISTANCE'); continue; }
@@ -159,7 +175,7 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
           lastScheduled = schedule; lastAdjusted = actual;
         }
       }
-      const thisRide = { leg, trip, shard, board, alight };
+      const thisRide = { index, leg, trip, shard, board, alight };
       if (previousRide) {
         const prior = previousRide, matchesStop = (ref: TransitRef | undefined, actual: TransitRef) => !ref || ref === actual || ref === stop(actual)?.parentStationRef;
         const applicable = source.shards.flatMap(s => s.transfers).filter(rule => matchesStop(rule.fromStopRef, prior.leg.to) && matchesStop(rule.toStopRef, leg.from) &&
@@ -172,8 +188,8 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
           buckets.set(rank, [...(buckets.get(rank) ?? []), rule]);
         }
         const rules = buckets.get([...buckets.keys()].sort((a, b) => b - a)[0]!) ?? [];
-        if (rules.some(rule => rule.transferType === 3)) reject('TRANSFER_FORBIDDEN');
-        if (rules.some(rule => depart - parseInstant(prior.leg.arrivalTime) < (rule.minTransferSeconds ?? 0) * 1000)) reject('TRANSFER_MINIMUM');
+        if (rules.some(rule => rule.transferType === 3)) rejectTransfer('TRANSFER_FORBIDDEN', prior.index, index);
+        if (rules.some(rule => depart - parseInstant(prior.leg.arrivalTime) < (rule.minTransferSeconds ?? 0) * 1000)) rejectTransfer('TRANSFER_MINIMUM', prior.index, index);
         const terminal = prior.alight === prior.trip.stopTimes.length - 1 && board === 0 && previous?.kind === 'transit';
         const linked = rules.some(rule => rule.transferType === 4);
         let sameBlock = trip.blockId !== '' && trip.blockId === prior.trip.blockId && shard.feedId === prior.shard.feedId && leg.serviceDate === prior.leg.serviceDate && prior.leg.to === leg.from;
@@ -215,14 +231,15 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
           sameBlock = sameBlock && adjacent && !conflictingLink;
         }
         const continuation = terminal && !rules.some(rule => rule.transferType === 5) && (linked || sameBlock);
-        if (leg.continuation !== continuation) reject('CONTINUATION');
+        if (leg.continuation !== continuation) rejectTransfer('CONTINUATION', prior.index, index);
       } else if (leg.continuation) reject('CONTINUATION');
       if (!leg.continuation) changes++;
       if (boarding.pickupType !== 0 && !leg.continuation) reject('PICKUP');
       checked.push(thisRide); previousRide = thisRide;
     }
+    currentLeg = undefined;
     checked.forEach((ride, index) => {
-      if (ride.trip.stopTimes[ride.alight]!.dropOffType !== 0 && !checked[index + 1]?.leg.continuation) reject('DROPOFF');
+      if (ride.trip.stopTimes[ride.alight]!.dropOffType !== 0 && !checked[index + 1]?.leg.continuation) reject('DROPOFF', ride.index);
     });
     if (!checked.length || changes !== itinerary.transfers || changes > itinerary.maxTransfers) reject('TRANSFER_COUNT');
     if (walked !== itinerary.walkingMetres || walked > itinerary.maxWalkMetres || walked > 800) reject('WALK_BUDGET');
@@ -233,5 +250,5 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
     reject('MALFORMED_ITINERARY');
   }
-  return { valid: reasons.size === 0, reasons: [...reasons] };
+  return { valid: reasons.size === 0, reasons: [...reasons], legFailures: [...legFailures].map(([index, failures]) => ({ index, reasons: [...failures] })), transferFailures };
 }
