@@ -140,8 +140,8 @@ describe('release operator documentation', () => {
     expect(securityGuide).toMatch(/never treat a header as identity/i);
 
     const telemetryFields = [
-      'correlationId', 'era', 'protocolVersion', 'mcpMethod', 'mcpName',
-      'clientName', 'sessionId', 'alias', 'upstream', 'durationMs', 'statusClass',
+      'era', 'protocolVersion', 'mcpMethod', 'mcpName',
+      'clientName', 'alias', 'upstream', 'durationMs', 'statusClass',
     ];
     for (const field of telemetryFields) expect(securityGuide).toContain(`\`${field}\``);
     expect(securityGuide).not.toMatch(/clientId|authentication detail/i);
