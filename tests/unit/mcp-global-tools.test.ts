@@ -1,5 +1,7 @@
 import { CLIENT_CAPABILITIES_META_KEY, PROTOCOL_VERSION_META_KEY, createMcpHandler } from '@modelcontextprotocol/server';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/server/validators/ajv';
+import { transit_realtime } from 'gtfs-realtime-bindings';
+import { decodeRealtimeFeed } from '../../src/transit/gtfs/realtime/decode';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMetroMcpServer } from '../../src/mcp/server';
 import { StaticArtifactStore } from '../../src/transit/gtfs/realtime/snapshot-store';
@@ -50,6 +52,47 @@ async function addOtherFeed(f: Awaited<ReturnType<typeof fixture>>, input = plan
 afterEach(() => vi.useRealTimers());
 
 describe('global transit MCP boundary', () => {
+  it.each([
+    { name: 'route and wrong trip are a conjunction', selectors: [{ routeId: 'R', trip: { tripId: 'U' } }], wanted: false },
+    { name: 'another service date is not the same trip', selectors: [{ trip: { tripId: 'T', startDate: '20261020' } }], wanted: false },
+    { name: 'another frequency start is not the same instance', frequency: true, selectors: [{ trip: { tripId: 'T', startDate: '20261019', startTime: '09:10:00' } }], wanted: false },
+    { name: 'incomplete frequency identity does not broaden scope', frequency: true, selectors: [{ trip: { tripId: 'T', startDate: '20261019' } }], wanted: false },
+    { name: 'full matching dated frequency trip applies', frequency: true, selectors: [{ agencyId: 'A', routeId: 'R', stopId: 'B', trip: { tripId: 'T', startDate: '20261019', startTime: '09:00:00' } }], wanted: true },
+    { name: 'wrong agency is not network-wide', selectors: [{ agencyId: 'other' }], wanted: false },
+    { name: 'empty trip descriptor is not network-wide', selectors: [{ trip: {} }], wanted: false },
+    { name: 'no selectors is network-wide', selectors: [], wanted: true },
+    { name: 'separate selectors are alternatives', selectors: [{ routeId: 'S' }, { routeId: 'R', trip: { tripId: 'T', startDate: '20261019' } }], wanted: true },
+  ])('matches alert selectors: $name', async ({ frequency, selectors, wanted }) => {
+    const input = plannerInput();
+    if (frequency) input.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\nT,09:00:00,09:30:00,600,1\n';
+    const f = await fixture(false, input), now = Math.floor(Date.now() / 1000);
+    const decoded = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: now }, entity: [{ id: 'scoped', alert: {
+      informedEntity: selectors, headerText: { translation: [{ text: '<b>Delay</b>' }] }, descriptionText: { translation: [{ text: 'Agency notice' }] },
+    } }] }).finish());
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload: decoded.alerts }) }) } as unknown as DurableObjectNamespace;
+    const result = (await call(f.env, 'get_service_status', { ref: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDA6MDA' })).result.structuredContent;
+    expect(result.alerts.map((alert: any) => alert.id)).toEqual(wanted ? ['scoped'] : []);
+    if (wanted) {
+      expect(result.alerts[0].agencyText).toEqual({ title: 'Delay', description: 'Agency notice', label: 'agency_supplied' });
+      expect(result.alerts[0].selectors).toEqual(selectors.length > 1 ? [selectors[1]] : selectors);
+    }
+  });
+  it('matches an itinerary selector against one canonical leg, never fields collected from different legs', async () => {
+    const input = transferInput(); input.files['trips.txt'] = input.files['trips.txt'].replaceAll(',block', ',');
+    const f = await fixture(false, input), now = Math.floor(Date.now() / 1000), itinerary = goldenTransfer(f);
+    const selectors = [{ routeId: 'R', trip: { tripId: 'U', startDate: '20261019' } },
+      { agencyId: 'A', routeId: 'S', stopId: 'C', trip: { tripId: 'U', startDate: '20261019', startTime: '09:12:00' } }, { routeId: '91' }];
+    const payload = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: now }, entity: [
+      { id: 'mixed', alert: { informedEntity: selectors } }, { id: 'cross-leg-only', alert: { informedEntity: [selectors[0]!] } },
+    ] }).finish()).alerts;
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async (url: string) => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload: url.includes('service_alerts') ? payload : [] }) }) } as unknown as DurableObjectNamespace;
+    const result = (await call(f.env, 'get_service_status', { itinerary: { ...itinerary, legs: itinerary.legs.map((leg, index) => ({ ...leg,
+      mode: 'tram', agencyRef: 'tr:sfbay:sf511:agency:QQ', intermediateStopCount: 0, transferRequired: index > 0, sources: [], validatorOutcome: 'valid' })) } })).result.structuredContent;
+    expect(result.alerts).toMatchObject([{ id: 'mixed', selectors: [selectors[1]], routeIds: ['S'], stopIds: ['C'] }]);
+    expect(result.alerts).toHaveLength(1);
+  });
   it('pages past 100 canceled departures before limiting and orders shifted predictions in the query window', async () => {
     const input = plannerInput(), updates: Record<string, unknown>[] = [];
     input.files['trips.txt'] = 'route_id,service_id,trip_id,trip_headsign,direction_id,block_id\n';
@@ -129,14 +172,14 @@ describe('global transit MCP boundary', () => {
     const f = await fixture(false, input), now = Math.floor(Date.now() / 1000);
     f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async (url: string) => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
       producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload: url.includes('service_alerts') ? [
-        { id: 'network', header: '', description: '', routeIds: [], stopIds: [] },
-        { id: 'first-route', header: '', description: '', routeIds: ['R'], stopIds: [] },
-        { id: 'second-route', header: '', description: '', routeIds: ['S'], stopIds: [] },
-        { id: 'interchange', header: '', description: '', routeIds: [], stopIds: ['B'] },
-        { id: 'first-trip', header: '', description: '', routeIds: [], stopIds: [], tripIds: ['T'] },
-        { id: 'other-trip', header: '', description: '', routeIds: [], stopIds: [], tripIds: ['unrelated'] },
-        { id: 'other-route', header: '', description: '', routeIds: ['91'], stopIds: [] },
-        { id: 'other-stop', header: '', description: '', routeIds: [], stopIds: ['D'] },
+        { id: 'network', header: '', description: '', routeIds: [], stopIds: [], selectors: [] },
+        { id: 'first-route', header: '', description: '', routeIds: ['R'], stopIds: [], selectors: [{ routeId: 'R' }] },
+        { id: 'second-route', header: '', description: '', routeIds: ['S'], stopIds: [], selectors: [{ routeId: 'S' }] },
+        { id: 'interchange', header: '', description: '', routeIds: [], stopIds: ['B'], selectors: [{ stopId: 'B' }] },
+        { id: 'first-trip', header: '', description: '', routeIds: [], stopIds: [], tripIds: ['T'], selectors: [{ trip: { tripId: 'T' } }] },
+        { id: 'other-trip', header: '', description: '', routeIds: [], stopIds: [], tripIds: ['unrelated'], selectors: [{ trip: { tripId: 'unrelated' } }] },
+        { id: 'other-route', header: '', description: '', routeIds: ['91'], stopIds: [], selectors: [{ routeId: '91' }] },
+        { id: 'other-stop', header: '', description: '', routeIds: [], stopIds: ['D'], selectors: [{ stopId: 'D' }] },
       ] : [] }) }) } as unknown as DurableObjectNamespace;
     const itinerary = goldenTransfer(f);
     const args = selector === 'trip' ? { ref: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDA6MDA' } : { itinerary: { ...itinerary,
@@ -271,9 +314,9 @@ describe('global transit MCP boundary', () => {
     const { env, version } = await fixture(); const now = Math.floor(Date.now() / 1000);
     env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'stale', status: 'realtime', version,
       producerTimestampSeconds: now - 1300, receivedAtSeconds: now - 1299, warnings: [], payload: [
-        { id: 'all', header: '<b>Network</b>', description: 'Agency message', routeIds: [], stopIds: [] },
-        { id: 'right', header: 'Delay', description: 'Agency message', routeIds: ['R'], stopIds: [] },
-        { id: 'other', header: 'Unrelated', description: 'Agency message', routeIds: ['S'], stopIds: [] },
+        { id: 'all', header: '<b>Network</b>', description: 'Agency message', routeIds: [], stopIds: [], selectors: [] },
+        { id: 'right', header: 'Delay', description: 'Agency message', routeIds: ['R'], stopIds: [], selectors: [{ routeId: 'R' }] },
+        { id: 'other', header: 'Unrelated', description: 'Agency message', routeIds: ['S'], stopIds: [], selectors: [{ routeId: 'S' }] },
       ] }) }) } as unknown as DurableObjectNamespace;
     const result = (await call(env, 'get_service_status', { ref: ref('route', 'R') })).result.structuredContent;
     expect(result.alerts).toMatchObject([{ id: 'all', agencyText: { title: 'Network', label: 'agency_supplied' }, stale: true }, { id: 'right', stale: true }]);

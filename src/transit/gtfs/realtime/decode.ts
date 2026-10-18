@@ -56,6 +56,12 @@ export interface NormalizedAlert {
   routeIds: string[];
   stopIds: string[];
   tripIds?: string[];
+  /** Conjunction within one selector; alternatives between selectors. */
+  selectors: NormalizedAlertSelector[];
+}
+export interface NormalizedAlertSelector {
+  agencyId?: string; routeId?: string; routeType?: number; stopId?: string; directionId?: number;
+  trip?: { tripId?: string; startDate?: string; startTime?: string; routeId?: string; directionId?: number };
 }
 
 export interface NormalizedRealtimeFeed {
@@ -81,6 +87,21 @@ function ownNumber(object: object | null | undefined, key: string): number | und
 function identifier(value: string | null | undefined): string | undefined {
   // IDs are never rewritten: doing so could alias two provider entities.
   return value && value.length <= 512 && !/[\u0000-\u001f\u007f]/.test(value) ? value : undefined;
+}
+
+function alertSelector(value: transit_realtime.IEntitySelector): NormalizedAlertSelector {
+  const selector: NormalizedAlertSelector = {};
+  // Preserve presence: protobuf defaults must not create constraints, and an
+  // explicitly empty/invalid identifier must not become a general selector.
+  for (const key of ['agencyId', 'routeId', 'stopId'] as const) if (Object.hasOwn(value, key)) selector[key] = value[key] ?? '';
+  for (const key of ['routeType', 'directionId'] as const) { const number = ownNumber(value, key); if (number !== undefined) selector[key] = number; }
+  if (value.trip) {
+    selector.trip = {};
+    for (const key of ['tripId', 'startDate', 'startTime', 'routeId'] as const) if (Object.hasOwn(value.trip, key)) selector.trip[key] = value.trip[key] ?? '';
+    const direction = ownNumber(value.trip, 'directionId'); if (direction !== undefined) selector.trip.directionId = direction;
+    // GTFS explicitly ignores schedule_relationship in alert TripDescriptors.
+  }
+  return selector;
 }
 
 function firstTranslation(value: transit_realtime.ITranslatedString | null | undefined): string {
@@ -156,6 +177,7 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
         routeIds: [...new Set(informedEntities.flatMap(item => item.routeId ? [item.routeId] : []))],
         stopIds: [...new Set(informedEntities.flatMap(item => item.stopId ? [item.stopId] : []))],
         tripIds: [...new Set(informedEntities.flatMap(item => item.trip?.tripId ? [item.trip.tripId] : []))],
+        selectors: informedEntities.map(alertSelector),
       });
     }
   }
