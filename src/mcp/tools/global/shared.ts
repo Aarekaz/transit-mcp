@@ -121,6 +121,12 @@ function placeAliasMatch(data: TransitData, entity: Candidate, normalized: strin
 }
 export const exactCandidate = (data: TransitData, entity: Candidate, query: string) =>
   entityNames(data, entity).includes(normalizeEntityName(query)) || placeAliasMatch(data, entity, normalizeEntityName(query));
+/** A public place alias must not hide separately named stops, such as airport terminals. */
+export function ambiguityCandidate(data: TransitData, entity: Candidate, query: string): boolean {
+  const normalized = normalizeEntityName(query);
+  return exactCandidate(data, entity, query) || entity.kind === 'stop' && normalizeEntityName(entity.name).includes(normalized) &&
+    (data.coverage.placeAliases ?? []).some(place => place.aliases.some(alias => normalizeEntityName(alias) === normalized));
+}
 export function knownEntity(data: TransitData, ref: string): Candidate {
   const parsed = validRef(ref, ['agency', 'route', 'stop', 'trip']);
   const base = formatEntityRef(parsed);
