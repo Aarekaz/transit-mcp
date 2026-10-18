@@ -12,6 +12,8 @@ The long-term goal is worldwide coverage wherever authoritative schedule, realti
 
 Journey planning is the highest-risk capability, not the whole product. Supported clients must also be able to query stops and stations, agencies, routes, scheduled service, live arrivals and departures, disruptions, elevators or accessibility facts when published, vehicle or train status, transfers, and source metadata. The MCP serves both interactive questions and proactive agents that check a future appointment, resolve nearby transit, plan the journey, and refresh live conditions before departure.
 
+Personal context remains a client responsibility. An agent may know that “home” maps to a particular station or that a calendar event maps to an address, then call Transit MCP with the resulting name, reference, or coordinates. Transit MCP validates the transit interpretation and returns authoritative network facts; it does not store a user's home, work, calendar, identity, or long-term travel profile. This lets capable agents use prior context while keeping the MCP useful to stateless clients.
+
 ## 2. SF launch scope
 
 The first production Bay Area release covers Muni, BART, Caltrain, and SamTrans through the consolidated 511 SF Bay regional feeds. The architecture may ingest other operators present in the regional feed, but the public launch claim is limited to operators represented in the golden-route corpus and passing the same validation gates.
@@ -48,7 +50,7 @@ GTFS Schedule is the authoritative description of stops, routes, ordered trip pa
 
 ### 4.3 Realtime never floats free of a schedule
 
-Every realtime snapshot records the exact static artifact version against which its trip and stop identifiers were matched. Two adjacent schedule versions remain readable during feed changeovers. Realtime that cannot be matched above the configured threshold is reported as degraded and cannot silently masquerade as complete live data.
+Every realtime snapshot records the exact static artifact version against which its trip and stop identifiers were matched. The current and previous versions remain addressable in R2 during feed changeovers, but only one is resident in an isolate. Realtime that cannot be matched above the manifest threshold is reported as degraded and cannot silently masquerade as complete live data.
 
 ### 4.4 Deterministic planning, independent validation
 
@@ -82,7 +84,7 @@ All identifiers exposed by the new core are opaque, globally namespaced referenc
 
 ```ts
 type CoverageId = string; // lowercase ASCII: [a-z0-9_]+; SF is permanently "sfbay"
-type TransitRef = `tr:${CoverageId}:${string}:${string}`;
+type TransitRef = `tr:${CoverageId}:${string}:${string}:${string}`;
 
 type VerificationStatus =
   | 'realtime'
@@ -101,15 +103,16 @@ interface SourceStatus {
 interface TransitResultStatus {
   status: VerificationStatus;
   reasons: VerificationReason[];
-  timezone: string;
   sources: SourceStatus[];
   attribution: Array<{ text: string; url: string; license?: string }>;
 }
 ```
 
-The third reference segment is a lowercase feed or agency namespace. The final segment is the provider identifier encoded as unpadded base64url, so provider punctuation cannot change reference structure. Clients treat the complete reference as opaque. Coverage IDs are stable public identifiers, never localized display names; the already-used `sfbay` value is permanent. National and cross-border networks receive one stable coverage ID and retain agency timezone metadata per feed.
+References use `tr:{coverage}:{feed}:{kind}:{encoded-id}`. `kind` is `agency`, `route`, `stop`, or `trip`. The final segment is the provider identifier encoded as unpadded base64url, so provider punctuation cannot change reference structure. A trip instance appends service date and encoded start time: `tr:{coverage}:{feed}:trip:{encoded-trip-id}:{yyyymmdd}:{encoded-start-time}`. This distinguishes “Amtrak 91 today” from another operator's train 91 and from Amtrak 91 on another date.
 
-Verification reasons are a closed enum, including `REALTIME_STALE`, `REALTIME_UNAVAILABLE`, `SCHEDULE_EXPIRED`, `SCHEDULE_REALTIME_MISMATCH`, `TRIP_CANCELED`, `STOP_SKIPPED`, `VALIDATOR_REJECTED`, and `REGION_UNAVAILABLE`. Free-form upstream text is never used as a reason code.
+Clients treat references as opaque. Coverage IDs are stable public identifiers; the already-used `sfbay` value is permanent. The third segment is always the source feed namespace, not sometimes an agency. Agency, route, and stop references remain stable while their source IDs remain stable. Scheduled trip definitions are artifact-version-scoped; trip instances are also scoped by service date and start time. National and cross-border networks retain timezone metadata per agency, source, and itinerary leg. Every timestamp includes its UTC offset.
+
+Verification reasons are a closed enum, including `REALTIME_STALE`, `REALTIME_UNAVAILABLE`, `SCHEDULE_EXPIRED`, `SCHEDULE_REALTIME_MISMATCH`, `TRIP_CANCELED`, `STOP_SKIPPED`, `VALIDATOR_REJECTED`, and `COVERAGE_UNAVAILABLE`. Free-form upstream text is never used as a reason code.
 
 `scheduled_only` is a successful, usable result when a valid schedule exists but realtime cannot be trusted. `unavailable` contains no itineraries or departures. For mixed itineraries, the least authoritative leg determines the overall status. This prevents clients from treating partial output as realtime.
 
@@ -131,6 +134,15 @@ Trip matching uses `trip_id` and `start_date`, plus `start_time` for frequency-b
 
 The default 511 allowance is 60 requests per hour per API key. Polling intervals across production, preview, and developer environments must fit the shared credential limit with safety reserve. Production and preview use separate keys or preview polling stays suspended. A higher allowance improves freshness but does not change correctness behavior.
 
+Every coverage manifest must define machine-checked thresholds; missing values block activation. Initial SF thresholds are:
+
+- Trip Updates are realtime through 180 seconds of producer age and stale through 10 minutes; beyond that, departures degrade to scheduled-only.
+- Vehicle Positions are realtime through 360 seconds and unavailable beyond 10 minutes. A five-minute-old position may be returned only with its observation time and age, never as “currently at.”
+- Alerts are current through 20 minutes; older alerts are labelled stale and do not independently invalidate a schedule.
+- At least 95 percent of scheduled Trip Update entities, excluding spec-defined added or replacement service, must match the pinned static artifact during dark-mode acceptance.
+- Unverified initial or transfer walking is capped at 800 metres for launch.
+- Schedule coverage must include every requested service date; artifact age alone never expires otherwise valid service.
+
 ### 6.3 Runtime planning
 
 The first router uses a deterministic round-based public-transit algorithm over the minimum required precompiled shards. The validator is independent code over canonical trip stop-times but does not duplicate the in-memory network index. Street routing is out of scope for launch. Initial and transfer walks use explicit GTFS transfers and pathways or a bounded straight-line estimate, marked `estimated: true`; the system refuses journeys whose required unverified walk exceeds the configured limit. Same-vehicle continuation through `block_id` and GTFS transfer types, including in-seat transfers, are handled explicitly.
@@ -147,37 +159,35 @@ The long-term model-facing surface is five capability tools. It does not grow wh
 
 #### `find_transit`
 
-Use when the user supplies an agency, route, trip or train number, station, stop, curated landmark alias, or coordinates that must be resolved. It returns typed opaque references and ranked candidates. It does not promise general address geocoding. Each coverage unit owns a small, reviewed alias table for launch-critical places such as Pier 39 and SFO; aliases are versioned and tested with the golden corpus. Client-supplied coordinates remain identified as client-supplied in the result.
+Use when the user supplies a coverage or city name, agency, route, trip or train number, station, stop, curated landmark alias, coordinates, or an existing reference. It returns typed opaque references, ranked candidates, or entity detail. Coverage results include display names and aliases, supported modes, and a capability matrix for schedules, realtime departures, alerts, vehicles, planning, and accessibility data. It does not promise general address geocoding. Each coverage unit owns a small, reviewed alias table for launch-critical places such as San Francisco, SF, Bay Area, Pier 39, and SFO. Client-supplied coordinates remain identified as client-supplied in the result.
+
+Context supplied by the calling agent may rank candidates but cannot establish identity. A query such as `91` may return Amtrak train 91 and similarly named services from other networks; the tool resolves it to a dated trip-instance reference before live status is requested. If context already establishes Amtrak and the service date, that candidate may rank first while alternatives remain visible when ambiguity is material.
 
 #### `plan_trip`
 
-Use for every origin-to-destination question. Clients must not assemble journeys from departure tools. It accepts opaque stop references or coordinates, departure time, maximum walking distance, and accessibility preference when supported. Coverage is inferred from references or coordinates and is supplied only when a name query needs disambiguation. It returns up to three independently validated itineraries with required result status and provenance. It may cross coverage boundaries when compiled transfer links connect them.
+Use for every origin-to-destination question. Clients must not assemble journeys from departure tools. Each endpoint accepts exactly one of `{ref}`, `{query}`, or `{latitude, longitude}`. Departure time defaults to now; maximum walking distance and accessibility preference are optional when supported. Coverage is inferred from references or coordinates and is supplied only to scope a name query. The tool resolves both endpoints in the same call and uses its single elicitation round when needed. It returns up to three independently validated itineraries with required result status and provenance. Cross-coverage planning is deferred beyond the SF launch; the contract permits it later without changing endpoint shapes.
 
 Each leg includes mode, agency, route, direction or headsign, boarding and alighting references, scheduled and realtime-adjusted times, intermediate-stop count, transfer requirements, source status, and validator outcome.
 
 #### `get_departures`
 
-Use for “what leaves here next?” It returns departures at one stop with route, headsign, direction, platform when authoritative, scheduled time, predicted time, and verification status. It is not a journey planner.
+Use for “what leaves here next?”, “the last train tonight”, or “the first train Sunday.” It accepts a stop reference, an ISO time defaulting to now, a bounded search window, optional route or agency filters, and a result limit. It returns departures with dated trip-instance references, route, headsign, direction, platform when authoritative, scheduled time, predicted time, and verification status. Approaching services are departures; clients pass the returned trip reference to `get_vehicle_status` when they also need an observed location. It is not a journey planner.
 
 #### `get_service_status`
 
-Use for disruptions, alerts, closures, delays, elevator or accessibility incidents, and general network health. It accepts one or more coverage, agency, route, trip, or stop references and returns normalized status plus clearly labelled agency-supplied text. This keeps disruption queries out of the journey planner while allowing the planner to attach relevant status to an itinerary.
+Use for disruptions, alerts, closures, delays, elevator or accessibility incidents, general network health, or rechecking an existing journey. It accepts coverage, agency, route, dated trip-instance, stop, or itinerary-leg references and returns normalized status plus clearly labelled agency-supplied text. Rechecking a chosen itinerary reports whether each leg still validates rather than silently substituting a different journey.
 
 #### `get_vehicle_status`
 
-Use for “where is train 91?”, “what is the next Amtrak train approaching Washington Union Station?”, or live vehicles on a route. It accepts a trip, train, route, or stop reference and returns only the fields published by authoritative realtime sources: vehicle position, current or next stop, delay, occupancy, bearing, speed, and observation time when available. Missing capabilities are explicit and never estimated from schedules.
+Use for “where is this train?” or live vehicles currently observed on a route. It accepts a dated trip-instance or route reference, never a bare number or stop reference, and returns only fields published by authoritative realtime sources: vehicle position, current or next stop, delay, occupancy, bearing, speed, and observation time when available. Missing capabilities are explicit and never estimated from schedules.
 
 ### 7.2 Resources
 
-Detailed static network inspection is available through versioned resources rather than one tool per entity type:
-
-`transit://topology/{routeRef}?version={scheduleVersion}`
+Detailed static network inspection is additionally available through one versioned resource:
 
 `transit://entity/{transitRef}?version={scheduleVersion}`
 
-`transit://timetable/{stopOrRouteRef}?serviceDate={yyyy-mm-dd}&version={scheduleVersion}`
-
-It returns ordered patterns and direction or headsign metadata from one immutable artifact. Because the URI contains the version, it may receive a long-lived public cache hint. Artifact retention must exceed the advertised cache lifetime; pruned versions return an explicit not-found result rather than mutable content at the old URI.
+It returns detail appropriate to the reference, including ordered route patterns and scheduled stop calls. The same essential detail is available through `find_transit({ref})`, because clients cannot be assumed to expose model-controlled resource reads. The resource is an application-controlled optimization, not the only path to an answer. Because the URI contains the version, it may receive a long-lived public cache hint. Artifact retention must exceed the advertised cache lifetime; pruned versions return explicit not-found rather than mutable content at the old URI.
 
 ### 7.3 Tool descriptions and annotations
 
@@ -203,13 +213,13 @@ The existing `commute-planner` prompt is rewritten to call `plan_trip`; it must 
 
 ## 8. Error model and elicitation
 
-- A trustworthy schedule-only or verified-realtime answer is a successful tool result.
-- A data-state refusal is a successful result with `status: unavailable`, fixed reason codes such as `REALTIME_UNAVAILABLE`, `SCHEDULE_EXPIRED`, or `REGION_UNAVAILABLE`, and empty itineraries or departures. The model should explain it rather than retry indefinitely.
+- A trustworthy schedule-only or realtime answer is a successful tool result.
+- A data-state refusal is a successful result with `status: unavailable`, fixed reason codes such as `REALTIME_UNAVAILABLE`, `SCHEDULE_EXPIRED`, or `COVERAGE_UNAVAILABLE`, and empty itineraries or departures. The model should explain it rather than retry indefinitely.
 - A caller-correctable problem uses `isError: true` and begins with a stable code, such as `ENTITY_NOT_FOUND`, `ENTITY_AMBIGUOUS`, `INVALID_TRANSIT_REF`, or `TIME_OUTSIDE_WINDOW`.
 - Protocol errors are reserved for malformed MCP envelopes, unknown methods, and invalid or mismatched signed request state.
 - Raw upstream bodies, URLs containing credentials, stack traces, and agency text never appear in errors.
 
-Ambiguous origin and destination choices are requested together because the server permits one elicitation round. Clients without elicitation support receive `ENTITY_AMBIGUOUS` with a structured candidate list conforming to the tool's error-result schema. Signed request state is a discriminated union per tool, contains the minimum candidate references needed to resume the call, expires after five minutes, and contains no secrets. Elicitation is the preferred resolution; the fallback is not a second competing meaning for ambiguity.
+Ambiguous origin and destination choices are requested together because the server permits one elicitation round. Clients without elicitation support receive `ENTITY_AMBIGUOUS` with candidates encoded in a documented error envelope containing `code`, `message`, and `candidates`; this envelope is tested directly because MCP does not validate `isError` structured content against the success output schema. Signed request state is a discriminated union per tool, contains the minimum candidate references needed to resume the call, expires after five minutes, and contains no secrets. Elicitation is the preferred resolution; the fallback is not a second competing meaning for ambiguity.
 
 ## 9. DC and NYC improvements
 
@@ -258,6 +268,7 @@ Because the tool surface is stable across coverage units, network onboarding doe
 - Every region manifest records required attribution text, URL, and known license terms; every result envelope carries the applicable attribution entries.
 - Keys and credential-bearing URLs are redacted before errors, logs, or telemetry.
 - Coordinates, place queries, stop references, and itineraries are not included in telemetry.
+- Personal aliases such as “home” and “work” are resolved by the client and are never persisted by Transit MCP.
 - Telemetry is allowlisted aggregate health: feed age, payload size, match rate, validation counts, latency, and reason codes.
 - Tool outputs and the Transit Board render untrusted text as text, never executable markup.
 - Rate limiting remains independent of the upstream polling budget.
@@ -301,7 +312,7 @@ Results are compared offline with official agency planners or a separately deplo
 
 - Full launch artifacts remain within the 64 MiB data working-set target and the 250 ms p95 planning CPU target. Measurements include concurrent-request overhead.
 - Request volume cannot increase upstream API calls.
-- Dark-mode metrics demonstrate bounded payloads, acceptable match rates, and quota compliance.
+- Dark-mode metrics demonstrate bounded payloads, the manifest's freshness and 95-percent matching thresholds, and quota compliance.
 - Preview runs live API smoke tests without exposing secrets.
 - Production activation requires a current artifact, healthy snapshots, accepted 511 attribution, passing golden journeys, and explicit deployment approval.
 
@@ -311,13 +322,13 @@ Results are compared offline with official agency planners or a separately deplo
 2. Finalize the canonical binary shards, version pinning, realtime status model, and independent validator using SF's GTFS-native feeds.
 3. Implement the five global capability tools and versioned static resources for SF.
 4. Repair DC and NYC honesty defects behind their existing contracts and add replay fixtures.
-5. Onboard DC and NYC to the same planner surface as the first proof that the core is coverage-neutral.
-6. Run the golden corpus, performance gates, official MCP conformance, and preview live tests.
-7. Activate the MCP data plane and tools.
-8. Only after the deployed surface is verified, update README, landing-page, directory, SEO, and launch copy to say SF is live.
+5. Run the SF golden corpus, performance gates, official MCP conformance, and preview live tests.
+6. Activate SF after its gates pass; DC and NYC planner migration is not an SF launch dependency.
+7. Only after the deployed surface is verified, update README, landing-page, directory, SEO, and launch copy to say SF is live.
+8. Onboard DC and NYC to the same planner surface, then run their own golden journeys as the first proof that the core is coverage-neutral.
 
 ## 14. Definition of done
 
 SF is complete when a client can ask “How do I get from Pier 39 to SFO right now?”, resolve Pier 39 through the checked-in alias corpus, and receive a source-backed, freshness-labelled, independently validated itinerary—or a precise structured explanation of why no trustworthy itinerary can be produced. The same standard must hold for the DC and NYC golden journeys before those regions are described as supporting journey planning.
 
-The architecture is ready for the next region when onboarding it requires a manifest, authoritative feeds, documented normalization, and a conformance corpus—not new routing logic or a new family of city-named tools.
+The architecture is ready for the next coverage unit when onboarding it requires a manifest, authoritative feeds, documented normalization, and a conformance corpus—not new routing logic or a new family of city-named tools.
