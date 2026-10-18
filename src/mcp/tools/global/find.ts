@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { MetroMcpContext } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
 import { getCoverage } from '../../../transit/core/coverage';
-import { boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, entities, exactCandidate, guarded, loadData, metadata, resultShape, unavailable, validRef } from './shared';
+import { ambiguityCandidate, boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, entities, guarded, loadData, metadata, resultShape, unavailable, validRef } from './shared';
 
 export const entitySchema = candidateSchema.extend({ scheduleVersion: z.string(), resourceUri: z.string(), coordinates: coordinatesSchema.nullable(), routeRefs: z.array(z.string()),
   agencyRef: z.string().nullable(), mode: z.string().nullable(), patterns: z.array(z.strictObject({ id: z.string(), directionId: z.number().int().nullable(), stopRefs: z.array(z.string()) })),
@@ -42,8 +42,8 @@ export function registerFindTool(server: McpServer, context: MetroMcpContext): v
       found = found.filter(entity => distance(entity.ref) <= 0.02).sort((a, b) => distance(a.ref) - distance(b.ref) || a.ref.localeCompare(b.ref));
     }
     if (args.context) found.sort((a, b) => Number(b.coverage === args.context?.coverage) + Number(b.feed === args.context?.feed) - Number(a.coverage === args.context?.coverage) - Number(a.feed === args.context?.feed));
-    const exact = args.query && data ? found.filter(candidate => exactCandidate(data, candidate, args.query!)) : [];
-    // A display limit must not hide materially ambiguous exact identities.
-    return complete({ ...base, candidates: exact.length > 1 ? found.filter(candidate => exact.includes(candidate)) : found.slice(0, args.limit) });
+    const ambiguous = args.query && data ? found.filter(candidate => ambiguityCandidate(data, candidate, args.query!)) : [];
+    // Preserve material alternatives in their existing rank, including named place stops.
+    return complete({ ...base, candidates: ambiguous.length > 1 ? ambiguous : found.slice(0, args.limit) });
   }, () => complete({ ...unavailable(args.coverage), coverages: [], candidates: [], entities: [], clientCoordinates: null })));
 }

@@ -35,21 +35,26 @@ describe('SF Bay synthetic acceptance corpus through global MCP tools', () => {
     expect(result.structuredContent.candidates.map((candidate: { providerId: string }) => candidate.providerId)).toEqual(['syn_airport_rail']);
   });
 
-  it('retains every exact airport identity despite a display limit and excludes unrelated names and routes', async () => {
+  // Breaks if two exact alias targets hide a separate stop whose public name says SFO.
+  it.each([{ name: 'default limit', limit: undefined }, { name: 'limit one', limit: 1 }])('preserves airport and terminal ambiguity with $name', async ({ limit }) => {
     const fixture = await sfBayCorpusFixture('scheduled', undefined, { ...corpus.files,
       'stops.txt': corpus.files['stops.txt'] +
+        'syn_airport_a_terminal,SFO International Terminal,37.616,-122.392\n' +
         'syn_airport_second,San Francisco International Airport,37.6158,-122.3921\n' +
         'syn_airport_office,San Francisco International Airport Maintenance,37.62,-122.39\n',
       'routes.txt': corpus.files['routes.txt'] + 'syn_false_route,syn_muni,,San Francisco International Airport,3\n',
     });
     const env = createMockEnv({ SFBAY_MODE: 'on', TRANSIT_ARTIFACTS: fixture.bucket });
-    const found = await call(env, 'find_transit', { query: 'sfo', coverage: 'SF', limit: 1 });
-    expect(found.structuredContent.candidates.map((candidate: { providerId: string }) => candidate.providerId)).toEqual(['syn_airport_rail', 'syn_airport_second']);
     const plan = await call(env, 'plan_trip', { coverage: 'SF', origin: { query: 'Pier 39' }, destination: { query: 'SFO' } });
     expect(plan.isError).toBe(true);
     expect(plan.structuredContent.code).toBe('ENTITY_AMBIGUOUS');
-    expect(plan.structuredContent.candidates.map((candidate: { providerId: string }) => candidate.providerId)).toEqual(['syn_airport_rail', 'syn_airport_second']);
+    expect(plan.structuredContent.candidates.map((candidate: { providerId: string }) => candidate.providerId))
+      .toEqual(['syn_airport_rail', 'syn_airport_second', 'syn_airport_a_terminal']);
     expect(plan.structuredContent).not.toHaveProperty('itineraries');
+    const found = await call(env, 'find_transit', { query: ' sFo ', coverage: 'SF', ...(limit === undefined ? {} : { limit }) });
+    // Reviewed targets rank first even though the terminal has an earlier provider ID.
+    expect(found.structuredContent.candidates.map((candidate: { providerId: string }) => candidate.providerId))
+      .toEqual(['syn_airport_rail', 'syn_airport_second', 'syn_airport_a_terminal']);
   });
 
   it('does not invent an airport entity when the reviewed target is missing from the artifact', async () => {
