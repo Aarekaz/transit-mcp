@@ -337,7 +337,7 @@ describe('GTFS realtime policy', () => {
         {
           id: 'alert-entity',
           alert: {
-            informedEntity: [{ routeId: 'route-1', trip: { tripId: 'trip-1' } }],
+            informedEntity: [{ agencyId: 'agency-1', routeId: 'route-1', stopId: 'stop-1', trip: { tripId: 'trip-1', startDate: '20261019', startTime: '09:00:00' } }, { routeId: 'route-2' }],
             headerText: { translation: [{ text: '<b>Delay</b>' }] },
             descriptionText: { translation: [{ text: 'Use alternate service' }] },
           },
@@ -351,7 +351,9 @@ describe('GTFS realtime policy', () => {
     expect(feed.vehicles[0]?.vehicleId).toBe('vehicle-1');
     expect(feed.vehicles[0]?.latitude).toBeCloseTo(37.77, 4);
     expect(feed.vehicles[0]?.longitude).toBeCloseTo(-122.42, 4);
-    expect(feed.alerts[0]).toMatchObject({ id: 'alert-entity', header: 'Delay', routeIds: ['route-1'], tripIds: ['trip-1'] });
+    expect(feed.alerts[0]).toMatchObject({ id: 'alert-entity', header: 'Delay', routeIds: ['route-1', 'route-2'], tripIds: ['trip-1'], selectors: [
+      { agencyId: 'agency-1', routeId: 'route-1', stopId: 'stop-1', trip: { tripId: 'trip-1', startDate: '20261019', startTime: '09:00:00' } }, { routeId: 'route-2' },
+    ] });
     expect(() => decodeRealtimeFeed(new Uint8Array([255]))).toThrow('Malformed GTFS-Realtime feed');
   });
 
