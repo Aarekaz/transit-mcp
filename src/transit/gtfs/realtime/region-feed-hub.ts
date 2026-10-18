@@ -1,17 +1,15 @@
 import type { Env } from '../../../types';
-import { SFBAY_REGION } from '../../../regions/sfbay';
+import { SFBAY_REGION, SFBAY_COVERAGE } from '../../../regions/sfbay';
 import type { RealtimeFeedKind, RealtimeFeedSpec } from '../../../regions/types';
 import { allocatePollIntervals } from '../upstream/budget';
 import { buildUpstreamRequest } from '../upstream/request';
 import { decodeRealtimeFeed, type NormalizedRealtimeFeed } from './decode';
-import { RegionalFeedHubCore, type FeedSnapshot } from './hub-core';
+import { RegionalFeedHubCore } from './hub-core';
+import { ApiKeyQuota, RealtimeSnapshotStore, StaticArtifactStore, readBoundedObject, SF511_QUOTA_NAMESPACE } from './snapshot-store';
+import { loadScheduleWindow } from '../../planner/schedule-index';
+import { applyTripUpdates } from './trip-match';
 
-const SNAPSHOT_PREFIX = 'snapshot:';
 const POLLED_PREFIX = 'polled:';
-
-function snapshotKey(kind: RealtimeFeedKind): string {
-  return `${SNAPSHOT_PREFIX}${kind}`;
-}
 
 function polledKey(kind: RealtimeFeedKind): string {
   return `${POLLED_PREFIX}${kind}`;
@@ -37,10 +35,20 @@ export class RegionFeedHub implements DurableObject {
   readonly #state: DurableObjectState;
   readonly #env: Env;
   readonly #intervals: Record<RealtimeFeedKind, number>;
+  readonly #snapshots?: RealtimeSnapshotStore;
+  readonly #artifacts?: StaticArtifactStore;
+  readonly #quota: ApiKeyQuota;
+  readonly #coordinator: boolean;
 
   constructor(state: DurableObjectState, env: Env) {
     this.#state = state;
     this.#env = env;
+    this.#coordinator = !state.id || state.id.toString() === env.REGION_FEED_HUB?.idFromName(SF511_QUOTA_NAMESPACE).toString();
+    this.#quota = new ApiKeyQuota(state.storage, SFBAY_REGION.realtime.budget);
+    if (env.TRANSIT_ARTIFACTS) {
+      this.#snapshots = new RealtimeSnapshotStore(state.storage, env.TRANSIT_ARTIFACTS);
+      this.#artifacts = new StaticArtifactStore(env.TRANSIT_ARTIFACTS);
+    }
     this.#intervals = allocatePollIntervals({
       ...SFBAY_REGION.realtime.budget,
       feeds: SFBAY_REGION.realtime.feeds.map(feed => ({
@@ -50,6 +58,7 @@ export class RegionFeedHub implements DurableObject {
       })),
     }) as Record<RealtimeFeedKind, number>;
     state.blockConcurrencyWhile(async () => {
+      if (!this.#coordinator) return;
       if (await state.storage.getAlarm() == null) {
         await state.storage.setAlarm(Date.now() + 1_000);
       }
@@ -58,19 +67,30 @@ export class RegionFeedHub implements DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (!this.#coordinator) return Response.json({ error: 'inactive_coordinator' }, { status: 409 });
     if (url.pathname === '/health') return new Response(null, { status: 204 });
+    if (url.pathname === '/quota/static' && request.method === 'POST') {
+      return Response.json({ allowed: await this.#quota.claim('static', Math.floor(Date.now() / 1000)) });
+    }
     const kind = url.pathname.slice(1) as RealtimeFeedKind;
     if (!SFBAY_REGION.realtime.feeds.some(feed => feed.kind === kind)) {
       return Response.json({ error: 'not_found' }, { status: 404 });
     }
     const now = Number(url.searchParams.get('now')) || Math.floor(Date.now() / 1_000);
-    const snapshot = await this.#state.storage.get<FeedSnapshot<unknown[]>>(snapshotKey(kind));
-    const core = new RegionalFeedHubCore(this.#intervals);
+    const core = new RegionalFeedHubCore(SFBAY_COVERAGE.thresholds);
+    const current = await this.#artifacts?.current();
+    if (!current || !this.#snapshots) return Response.json(core.read(kind, now));
+    if (url.searchParams.get('artifact') !== current.version.artifactVersion) {
+      return Response.json({ ...core.read(kind, now), version: current.version, degraded: true, warnings: ['SCHEDULE_REALTIME_MISMATCH'] });
+    }
+    const stops = url.searchParams.getAll('stop');
+    const snapshot = await this.#snapshots.read(kind, current.version, stops.length && kind === 'trip_updates' ? stops : undefined);
     if (snapshot) core.replace(kind, snapshot);
     return Response.json(core.read(kind, now));
   }
 
   async alarm(): Promise<void> {
+    if (!this.#coordinator) return;
     const nowSeconds = Math.floor(Date.now() / 1_000);
     if (this.#env.SFBAY_MODE !== 'off' && this.#env.SFBAY_MODE !== 'suspended' && this.#env.SF511_API_KEY) {
       for (const feed of SFBAY_REGION.realtime.feeds) {
@@ -88,6 +108,9 @@ export class RegionFeedHub implements DurableObject {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), spec.timeoutMs);
     try {
+      const current = await this.#artifacts?.current();
+      if (!current || !this.#snapshots || !this.#env.TRANSIT_ARTIFACTS) return;
+      if (!await this.#quota.claim(spec.kind, nowSeconds)) return;
       await this.#state.storage.put(pollAttemptState(spec.kind, nowSeconds));
       const upstream = buildUpstreamRequest(spec.url, this.#env.SF511_API_KEY!);
       const response = await fetch(upstream, { signal: controller.signal });
@@ -96,22 +119,37 @@ export class RegionFeedHub implements DurableObject {
       if (Number.isFinite(declaredBytes) && declaredBytes > spec.maxBytes) {
         throw new Error('upstream_body_too_large');
       }
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.byteLength > spec.maxBytes) throw new Error('upstream_body_too_large');
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('upstream_empty_body');
+      const chunks: Uint8Array[] = []; let size = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read(); if (done) break;
+          size += value.byteLength;
+          if (size > spec.maxBytes) { await reader.cancel(); throw new Error('upstream_body_too_large'); }
+          chunks.push(value);
+        }
+      } finally { reader.releaseLock(); }
+      const bytes = new Uint8Array(size); let offset = 0;
+      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
       const decoded = decodeRealtimeFeed(bytes);
-      await this.#state.storage.put({
-        [snapshotKey(spec.kind)]: {
+      let payload = payloadFor(spec.kind, decoded), warnings = decoded.warnings, degraded = false;
+      if (spec.kind === 'trip_updates') {
+        const window = await loadScheduleWindow({ manifest: current.manifest, instant: new Date(nowSeconds * 1000).toISOString(), windowSeconds: 6 * 3600,
+          readShard: key => readBoundedObject(this.#env.TRANSIT_ARTIFACTS!, key, 64 * 1024 * 1024) });
+        const applied = await applyTripUpdates(decoded, { manifest: current.manifest, shards: window.shards.map(entry => entry.shard), version: current.version, feedId: 'sf511' });
+        payload = applied.stopUpdates; degraded = applied.degraded || window.status === 'unavailable'; warnings = [...applied.warnings, ...window.reasons];
+      }
+      await this.#snapshots.publish(spec.kind, {
+          version: current.version,
           producerTimestampSeconds: decoded.producerTimestampSeconds,
           receivedAtSeconds: nowSeconds,
-          payload: payloadFor(spec.kind, decoded),
-          warnings: decoded.warnings,
-        },
+          payload, warnings, degraded,
       });
     } catch (error) {
       const reason = safePollFailureReason(error);
       if (reason === 'malformed_feed') {
-        const existing = await this.#state.storage.get<FeedSnapshot<unknown[]>>(snapshotKey(spec.kind));
-        if (existing) await this.#state.storage.put(snapshotKey(spec.kind), { ...existing, warnings: [...new Set([...(existing.warnings ?? []), reason])] });
+        await this.#snapshots?.warn(spec.kind, reason);
       }
       console.warn(JSON.stringify({
         event: 'regional_feed_poll_failed',

@@ -1,5 +1,16 @@
 export type FeedFreshness = "fresh" | "stale" | "expired" | "unavailable";
 
+export function observationAge(timestamp: number | null | undefined, nowSeconds: number): number | null {
+  return timestamp == null || !Number.isFinite(timestamp) || timestamp <= 0 || timestamp > nowSeconds ? null : nowSeconds - timestamp;
+}
+
+export function classifyManifestFreshness(timestamp: number | null | undefined, nowSeconds: number, freshThrough: number, staleThrough = Infinity): FeedFreshness {
+  const age = observationAge(timestamp, nowSeconds);
+  if (age === null) return 'unavailable';
+  if (age <= freshThrough) return 'fresh';
+  return age <= staleThrough ? 'stale' : 'expired';
+}
+
 export function classifyFreshness(
   producerTimestampSeconds: number | null | undefined,
   nowSeconds: number,
