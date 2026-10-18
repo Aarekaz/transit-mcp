@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { MetroMcpContext } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
 import { getCoverage } from '../../../transit/core/coverage';
-import { boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, entities, guarded, loadData, metadata, resultShape, unavailable, validRef } from './shared';
+import { boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, entities, exactCandidate, guarded, loadData, metadata, resultShape, unavailable, validRef } from './shared';
 
 export const entitySchema = candidateSchema.extend({ scheduleVersion: z.string(), resourceUri: z.string(), coordinates: coordinatesSchema.nullable(), routeRefs: z.array(z.string()),
   agencyRef: z.string().nullable(), mode: z.string().nullable(), patterns: z.array(z.strictObject({ id: z.string(), directionId: z.number().int().nullable(), stopRefs: z.array(z.string()) })),
@@ -18,12 +18,13 @@ export async function findEntityResult(context: MetroMcpContext, ref: string, si
   return { ...metadata(parsed.coverage, data, data.manifest.sources[0]!.retrievedAt), status: 'scheduled_only' as const, reasons: [], coverages: [], candidates: [], entities: [await detail(data, ref)], clientCoordinates: null };
 }
 export function registerFindTool(server: McpServer, context: MetroMcpContext): void {
+  const common = { coverage: coverageSchema.optional(), context: z.strictObject({ coverage: coverageSchema.optional(), feed: boundedText.optional(), serviceDate: z.string().regex(/^\d{8}$/).optional() }).optional(), limit: z.number().int().min(1).max(50).default(20) };
+  const absent = { ref: z.never().optional(), query: z.never().optional(), latitude: z.never().optional(), longitude: z.never().optional() };
   server.registerTool('find_transit', {
     title: 'Find transit entities', description: 'Resolve a coverage, agency, route, train number, station or stop; inspect an exact reference or nearby coordinates. Context ranks candidates without selecting identity. No general address geocoding. Use plan_trip for journeys.',
     annotations: readOnlyLive('Find transit entities'),
-    inputSchema: z.strictObject({ ref: boundedText.optional(), query: boundedText.optional(), latitude: z.number().min(-90).max(90).optional(), longitude: z.number().min(-180).max(180).optional(),
-      coverage: coverageSchema.optional(), context: z.strictObject({ coverage: coverageSchema.optional(), feed: boundedText.optional(), serviceDate: z.string().regex(/^\d{8}$/).optional() }).optional(), limit: z.number().int().min(1).max(50).default(20) })
-      .refine(value => Number(value.ref !== undefined) + Number(value.query !== undefined) + Number(value.latitude !== undefined || value.longitude !== undefined) === 1 && ((value.latitude === undefined) === (value.longitude === undefined)), 'Supply exactly one ref, query, or coordinate pair.'),
+    inputSchema: z.union([z.strictObject({ ...common, ...absent, ref: boundedText }), z.strictObject({ ...common, ...absent, query: boundedText }),
+      z.strictObject({ ...common, ...absent, latitude: coordinatesSchema.shape.latitude, longitude: coordinatesSchema.shape.longitude })]),
     outputSchema: findOutput,
   }, async (args, handler) => guarded(handler, async () => {
     checkState(handler, 'find_transit');
@@ -41,7 +42,7 @@ export function registerFindTool(server: McpServer, context: MetroMcpContext): v
       found = found.filter(entity => distance(entity.ref) <= 0.02).sort((a, b) => distance(a.ref) - distance(b.ref) || a.ref.localeCompare(b.ref));
     }
     if (args.context) found.sort((a, b) => Number(b.coverage === args.context?.coverage) + Number(b.feed === args.context?.feed) - Number(a.coverage === args.context?.coverage) - Number(a.feed === args.context?.feed));
-    const exact = args.query ? found.filter(candidate => candidate.providerId.toLowerCase() === args.query!.toLowerCase()) : [];
+    const exact = args.query && data ? found.filter(candidate => exactCandidate(data, candidate, args.query!)) : [];
     // A display limit must not hide materially ambiguous exact identities.
     return complete({ ...base, candidates: exact.length > 1 ? found.filter(candidate => exact.includes(candidate)) : found.slice(0, args.limit) });
   }, () => complete({ ...unavailable(args.coverage), coverages: [], candidates: [], entities: [], clientCoordinates: null })));

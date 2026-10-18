@@ -78,6 +78,25 @@ describe('schedule-window metadata', () => {
 });
 
 describe('scheduled departures', () => {
+  it('pages exact same-time ties without repeats or lost candidates', async () => {
+    const data = input();
+    for (const id of ['A', 'B']) {
+      data.files['trips.txt'] += `R,D,${id},Ocean Beach,0\n`;
+      data.files['stop_times.txt'] += `${id},09:00:00,09:00:30,P,1,0\n`;
+    }
+    const f = await fixture(data), query = { ...f, stopRef: STOP, instant: '2026-10-19T09:00:00-07:00', windowSeconds: 60, limit: 1 };
+    const first = await getScheduledDepartures(query);
+    expect(first).toHaveProperty('nextCursor');
+    const second = await getScheduledDepartures({ ...query, cursor: first.nextCursor! });
+    const third = await getScheduledDepartures({ ...query, cursor: second.nextCursor! });
+    expect([...first.departures, ...second.departures, ...third.departures].map(row => row.tripRef)).toEqual(['tr:sfbay:sf511:trip:Qg', 'tr:sfbay:sf511:trip:QQ', 'tr:sfbay:sf511:trip:VA']);
+    expect(third).toHaveProperty('nextCursor', null);
+  });
+  it('fails explicitly instead of returning a partial page when the bounded candidate scan is exceeded', async () => {
+    const data = input(); data.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\nT,09:00:00,12:00:00,1,1\n';
+    const f = await fixture(data);
+    await expect(getScheduledDepartures({ ...f, stopRef: STOP, instant: '2026-10-19T09:00:00-07:00', windowSeconds: 4 * 3600 })).rejects.toThrow('TIME_OUTSIDE_WINDOW: departure candidate budget exceeded');
+  });
   it('returns exact departures with dated refs, source version, offsets and anonymous agency identity', async () => {
     const f = await fixture();
     vi.useFakeTimers(); vi.setSystemTime(new Date('2040-01-01T00:00:00Z'));
