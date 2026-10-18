@@ -22,6 +22,7 @@ import { registerStationTools } from './tools/stations';
 import { registerTrainTools } from './tools/trains';
 import { registerGlobalTools } from './tools/global';
 import { planRequestHash, planState, verifyPlanChoices } from './tools/global/plan';
+import { knownEntity, loadData, validRef } from './tools/global/shared';
 
 /** Public identity reported in initialize/discover results and registry listings. */
 export const SERVER_IDENTITY = Object.freeze({
@@ -115,6 +116,11 @@ function buildMetroMcpServer(context: MetroMcpContext): {
             throw new Error('Transit request state mismatch');
           }
           verifyPlanChoices(checked, context.toolRequest.inputResponses);
+          const candidate = checked.candidates.origin?.[0] ?? checked.candidates.destination?.[0];
+          const coverage = candidate ? validRef(candidate, ['stop']).coverage : undefined;
+          const data = coverage ? await loadData(context, coverage, handler.mcpReq.signal) : null;
+          if (!data || data.version.artifactVersion !== checked.artifactVersion) throw new Error('Stale transit selection state');
+          for (const refs of Object.values(checked.candidates)) for (const ref of refs ?? []) knownEntity(data, ref);
         } else if (state.phase !== 'station-selection' || state.tool !== 'get_station_predictions' ||
           context.toolRequest && context.toolRequest.name !== state.tool) throw new Error('Transit request state mismatch');
         return state;

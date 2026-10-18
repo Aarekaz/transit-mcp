@@ -25,6 +25,7 @@ export const planInput = z.strictObject({ origin: endpointSchema, destination: e
   windowSeconds: z.number().int().min(1).max(604800).default(7200), maxWalkMetres: z.number().min(0).max(800).default(800), maxTransfers: z.number().int().min(0).max(4).default(3),
   accessibility: z.enum(['no_preference', 'step_free']).default('no_preference') });
 export const planState = z.strictObject({ phase: z.literal('transit-selection'), tool: z.literal('plan_trip'), requestHash: z.string().regex(/^[a-f0-9]{64}$/),
+  artifactVersion: z.string().regex(/^[a-f0-9]{64}$/),
   candidates: z.strictObject({ origin: z.array(z.string()).min(2).optional(), destination: z.array(z.string()).min(2).optional() }) });
 export const planRequestHash = async (args: unknown) => sha256(new TextEncoder().encode(canonicalJson(planInput.parse(args))));
 export function verifyPlanChoices(state: z.infer<typeof planState>, inputResponses: unknown): void {
@@ -50,13 +51,18 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     const coverageId = originCoverage ?? destinationCoverage ?? getCoverage(args.coverage ?? '')?.id ?? args.coverage;
     const noData = () => complete({ ...unavailable(coverageId), itineraries: [] });
     if (!coverageId || originCoverage && destinationCoverage && originCoverage !== destinationCoverage) return noData();
-    const data = await loadData(context, coverageId, handler.mcpReq.signal);
+    const data = await loadData(context, coverageId, handler.mcpReq.signal, state?.phase === 'transit-selection' ? state.artifactVersion : undefined);
     if (!data) return noData();
     // This planner has no verified step-free constraints yet; never imply accessibility.
     if (args.accessibility === 'step_free') return complete({ ...unavailable(coverageId, data), itineraries: [] });
     const resolved: Partial<Record<'origin' | 'destination', JourneyEndpoint>> = {};
     const ambiguous: Partial<Record<'origin' | 'destination', Candidate[]>> = {};
+    const accepted = state?.phase === 'transit-selection' ? acceptedContent(handler.mcpReq.inputResponses, 'endpoints', z.strictObject({ origin: z.string().optional(), destination: z.string().optional() })) : undefined;
     for (const endpoint of ['origin', 'destination'] as const) {
+      if (state?.phase === 'transit-selection' && state.candidates[endpoint]) {
+        if (!accepted?.[endpoint]) throw new TransitToolError('SELECTION_DECLINED');
+        knownEntity(data, accepted[endpoint]!); resolved[endpoint] = asTransitRef(accepted[endpoint]!); continue;
+      }
       const value = args[endpoint];
       if ('ref' in value) { knownEntity(data, value.ref); resolved[endpoint] = asTransitRef(value.ref); }
       else if ('latitude' in value) resolved[endpoint] = value;
@@ -70,13 +76,6 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     if (state?.phase === 'transit-selection') {
       const response = inputResponse(handler.mcpReq.inputResponses, 'endpoints');
       if (response.kind === 'elicit' && response.action !== 'accept') throw new TransitToolError('SELECTION_DECLINED');
-      const accepted = acceptedContent(handler.mcpReq.inputResponses, 'endpoints', z.strictObject({ origin: z.string().optional(), destination: z.string().optional() }));
-      for (const endpoint of ['origin', 'destination'] as const) {
-        if (!ambiguous[endpoint]) continue;
-        const chosen = accepted?.[endpoint];
-        if (!chosen || !state.candidates[endpoint]?.includes(chosen) || !ambiguous[endpoint]!.some(candidate => candidate.ref === chosen)) throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Invalid transit entity selection');
-        resolved[endpoint] = asTransitRef(chosen);
-      }
     } else if (Object.keys(ambiguous).length) {
       // SDK 2.3 exposes this runtime envelope but currently types it as {}.
       const declared = (handler.mcpReq.envelope as Record<string, { elicitation?: { form?: unknown; url?: unknown } }> | undefined)?.[CLIENT_CAPABILITIES_META_KEY];
@@ -89,7 +88,7 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
         shape[endpoint] = z.enum(choices[endpoint] as [string, ...string[]]).describe(matches.map(candidate => `${candidate.ref} (${candidate.coverage}/${candidate.feed}): ${candidate.name}`).join('; '));
       }
       return inputRequired({ inputRequests: { endpoints: inputRequired.elicit({ message: 'Choose the transit endpoints for this journey.', requestedSchema: z.object(shape) }) },
-        requestState: await codec.mint({ phase: 'transit-selection', tool: 'plan_trip', requestHash, candidates: choices }, handler) });
+        requestState: await codec.mint({ phase: 'transit-selection', tool: 'plan_trip', requestHash, artifactVersion: data.version.artifactVersion, candidates: choices }, handler) });
     }
     const now = new Date().toISOString(), feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', Date.parse(now) / 1000, handler.mcpReq.signal);
     const sequences = new Map<string, number[]>();

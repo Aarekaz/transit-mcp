@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { MetroMcpContext } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
-import { getScheduledDepartures } from '../../../transit/planner/departures';
+import { getScheduledDeparturePages, type ScheduledDeparture, type ScheduledDepartures } from '../../../transit/planner/departures';
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { formatEntityRef, parseTransitRef } from '../../../transit/core/refs';
 import { decodeScheduleShard } from '../../../transit/gtfs/static/shards';
@@ -34,7 +34,7 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     const now = new Date().toISOString(), nowSeconds = Date.parse(now) / 1000;
     const relevantStops = new Set(data.indexes.flatMap(index => index.stops).filter(stop => stop.ref === args.stopRef || stop.parentStationRef === args.stopRef).map(stop => stop.ref));
     const trips = new Map<string, Pick<ScheduleTrip, 'headsign' | 'directionId' | 'routeRef' | 'stopTimes'>>();
-    const schedule = await getScheduledDepartures({ manifest: data.manifest, readShard: async key => {
+    const pages = getScheduledDeparturePages({ manifest: data.manifest, readShard: async key => {
       const bytes = await data.readObject(key), shard = decodeScheduleShard(bytes);
       for (const trip of shard.trips) {
         const stopTimes = trip.stopTimes.filter(call => relevantStops.has(call.stopRef));
@@ -43,9 +43,13 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
       return bytes;
     }, readDiscovery: data.readObject, stopRef: asTransitRef(args.stopRef),
       instant: args.at ?? now, windowSeconds: args.windowSeconds, selection: args.selection, limit: 100, routeRefs: args.routeRefs?.map(asTransitRef), agencyRefs: args.agencyRefs?.map(asTransitRef) });
+    const scheduled: ScheduledDeparture[] = []; let schedule: ScheduledDepartures | undefined;
+    // Predictions can reorder any scheduled page. Exhaust the bounded window before ranking.
+    for await (const page of pages) { handler.mcpReq.signal.throwIfAborted(); schedule = page; scheduled.push(...page.departures); }
+    if (!schedule) throw new Error('Missing departure scan');
     const feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', nowSeconds, handler.mcpReq.signal);
     const fresh = feed?.status === 'realtime' && feed.producerTimestampSeconds !== undefined && nowSeconds >= feed.producerTimestampSeconds && nowSeconds - feed.producerTimestampSeconds <= data.coverage.thresholds.tripUpdates.realtimeSeconds;
-    let departures: z.infer<typeof departureSchema>[] = schedule.departures.flatMap(departure => {
+    let departures: z.infer<typeof departureSchema>[] = scheduled.flatMap(departure => {
       const update = fresh ? feed.payload?.find(update => update.tripInstanceRef === departure.tripInstanceRef && update.stopSequence === departure.stopSequence && update.stopId === parseTransitRef(departure.stopRef)!.id) : undefined;
       if (update?.status === 'canceled' || update?.status === 'skipped') return [];
       const prediction = update?.status === 'realtime' ? update.departureTimeSeconds ?? update.arrivalTimeSeconds : undefined;
@@ -67,7 +71,7 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     }
     const start = Date.parse(args.at ?? now), end = start + args.windowSeconds * 1000, direction = args.selection === 'last' ? -1 : 1;
     const time = (row: z.infer<typeof departureSchema>) => Date.parse(row.predictedTime ?? row.scheduledTime);
-    departures = departures.filter(row => time(row) >= start && time(row) < end).sort((a, b) => direction * (time(a) - time(b)) || a.tripInstanceRef.localeCompare(b.tripInstanceRef)).slice(0, args.limit);
+    departures = departures.filter(row => time(row) >= start && time(row) < end).sort((a, b) => direction * (time(a) - time(b)) || a.tripInstanceRef.localeCompare(b.tripInstanceRef) || a.stopSequence - b.stopSequence).slice(0, args.limit);
     const meta = metadata(stop.coverage, data, now);
     return complete({ ...meta, sources: [...meta.sources, ...(feed ? realtimeSource(data, feed, 'trip_updates', nowSeconds) : [])],
       status: departures.some(row => row.status === 'realtime') ? 'realtime' as const : schedule.status, reasons: schedule.reasons, departures, frequencyWindows: schedule.frequencyWindows });

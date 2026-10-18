@@ -34,7 +34,7 @@ const messages = {
   ENTITY_NOT_FOUND: 'No matching transit entity was found. Use find_transit to choose a reference.',
   ENTITY_AMBIGUOUS: 'Choose an exact reference from the candidates and retry.',
   INVALID_TRANSIT_REF: 'Use a reference of the kind required by this tool, returned by find_transit or get_departures.',
-  TIME_OUTSIDE_WINDOW: 'Use a search window between one second and seven days.',
+  TIME_OUTSIDE_WINDOW: 'Narrow the search window or filters; the window must be between one second and seven days and within the candidate budget.',
   SELECTION_DECLINED: 'Transit entity selection was declined or cancelled.',
 };
 export function errorResult(error: TransitToolError) {
@@ -90,7 +90,7 @@ export function scheduleSources(data: TransitData): SourceStatus[] {
   return data.manifest.sources.map(source => ({ feedId: source.feedId, kind: 'gtfs_schedule', producerTimestamp: null,
     ingestedAt: source.retrievedAt, ageSeconds: null, scheduleVersion: source.sha256 }));
 }
-export function validRef(value: string, kinds: string[], dated = false) {
+export function validRef(value: string, kinds: string[], dated = false): NonNullable<ReturnType<typeof parseTransitRef>> {
   const parsed = parseTransitRef(value);
   if (!parsed || !kinds.includes(parsed.kind) || (dated && parsed.kind === 'trip' && !('serviceDate' in parsed))) throw new TransitToolError('INVALID_TRANSIT_REF');
   return parsed;
@@ -104,10 +104,16 @@ export function entities(data: TransitData): Candidate[] {
   ].map(entity => ({ ...entity, coverage: index.coverageId, feed: index.feedId })));
 }
 export function candidates(data: TransitData, query: string, kind?: string): Candidate[] {
-  const normalized = query.trim().toLowerCase();
-  return entities(data).filter(entity => (!kind || kind === entity.kind) && (entity.providerId.toLowerCase() === normalized || entity.name.toLowerCase().includes(normalized)))
-    .sort((a, b) => Number(b.providerId.toLowerCase() === normalized) - Number(a.providerId.toLowerCase() === normalized) || a.providerId.localeCompare(b.providerId) || a.ref.localeCompare(b.ref));
+  const normalized = normalizeEntityName(query);
+  return entities(data).filter(entity => (!kind || kind === entity.kind) && entityNames(data, entity).some(name => name.includes(normalized)))
+    .sort((a, b) => Number(exactCandidate(data, b, query)) - Number(exactCandidate(data, a, query)) || a.providerId.localeCompare(b.providerId) || a.ref.localeCompare(b.ref));
 }
+const normalizeEntityName = (value: string) => value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+function entityNames(data: TransitData, entity: Candidate): string[] {
+  const route = entity.kind === 'route' ? data.indexes.find(index => index.feedId === entity.feed)?.routes.find(route => route.ref === entity.ref) : undefined;
+  return [entity.providerId, entity.name, route?.shortName ?? '', route?.longName ?? ''].filter(Boolean).map(normalizeEntityName);
+}
+export const exactCandidate = (data: TransitData, entity: Candidate, query: string) => entityNames(data, entity).includes(normalizeEntityName(query));
 export function knownEntity(data: TransitData, ref: string): Candidate {
   const parsed = validRef(ref, ['agency', 'route', 'stop', 'trip']);
   const base = formatEntityRef(parsed);
@@ -142,7 +148,9 @@ export async function detail(data: TransitData, ref: string) {
     coordinates: stop?.latitude != null && stop.longitude != null ? { latitude: stop.latitude, longitude: stop.longitude } : null,
     routeRefs: stop ? index.stopRoutes[stop.ref] ?? [] : [], agencyRef: route?.agencyRef ?? null, mode: route?.mode ?? null, patterns, calls };
 }
-export async function readFeed<T>(context: MetroMcpContext, data: TransitData, kind: RealtimeFeedKind, now: number, signal: AbortSignal): Promise<FeedRead<T[]> | null> {
+/** This coordinator owns sf511 only; artifact membership does not imply realtime ownership. */
+export type OwnedFeedRead<T> = FeedRead<T> & { feedId: string };
+export async function readFeed<T>(context: MetroMcpContext, data: TransitData, kind: RealtimeFeedKind, now: number, signal: AbortSignal): Promise<OwnedFeedRead<T[]> | null> {
   if (!context.env.REGION_FEED_HUB) return null;
   const url = new URL(`https://region-feed-hub.internal/${kind}`);
   url.searchParams.set('now', String(now)); url.searchParams.set('artifact', data.version.artifactVersion);
@@ -151,10 +159,10 @@ export async function readFeed<T>(context: MetroMcpContext, data: TransitData, k
   signal.throwIfAborted();
   if (!response.ok) return null;
   const feed = await response.json<FeedRead<T[]>>();
-  return feed.version?.artifactVersion === data.version.artifactVersion && !feed.degraded ? feed : null;
+  return feed.version?.artifactVersion === data.version.artifactVersion && !feed.degraded && data.version.sourceVersions.sf511 ? { ...feed, feedId: 'sf511' } : null;
 }
-export function realtimeSource(data: TransitData, feed: FeedRead<unknown>, kind: SourceStatus['kind'], now: number): SourceStatus[] {
-  return data.manifest.sources.map(source => ({ feedId: source.feedId, kind, producerTimestamp: feed.producerTimestampSeconds == null ? null : new Date(feed.producerTimestampSeconds * 1000).toISOString(),
+export function realtimeSource(data: TransitData, feed: OwnedFeedRead<unknown>, kind: SourceStatus['kind'], now: number): SourceStatus[] {
+  return data.manifest.sources.filter(source => source.feedId === feed.feedId).map(source => ({ feedId: source.feedId, kind, producerTimestamp: feed.producerTimestampSeconds == null ? null : new Date(feed.producerTimestampSeconds * 1000).toISOString(),
     ingestedAt: new Date((feed.receivedAtSeconds ?? now) * 1000).toISOString(), ageSeconds: feed.producerTimestampSeconds == null ? null : Math.max(0, now - feed.producerTimestampSeconds), scheduleVersion: source.sha256 }));
 }
 export function inferCoverage(endpoint: z.infer<typeof endpointSchema>): string | undefined {

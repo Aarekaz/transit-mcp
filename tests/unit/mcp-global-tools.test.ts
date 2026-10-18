@@ -1,4 +1,5 @@
 import { CLIENT_CAPABILITIES_META_KEY, PROTOCOL_VERSION_META_KEY, createMcpHandler } from '@modelcontextprotocol/server';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/server/validators/ajv';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMetroMcpServer } from '../../src/mcp/server';
 import { StaticArtifactStore } from '../../src/transit/gtfs/realtime/snapshot-store';
@@ -29,7 +30,7 @@ async function call(env: Env, name: string, args: Record<string, unknown>, elici
 }
 async function fixture(ambiguous = false, input = plannerInput()) {
   if (ambiguous) input.files['stops.txt'] += 'AA,Origin,37,-122\nCC,Destination,37.04,-122\n';
-  input.files['routes.txt'] += '91,A,91,3\n';
+  input.files['routes.txt'] += input.files['routes.txt'].includes('route_long_name') ? '91,A,91,,3\n' : '91,A,91,3\n';
   const compiled = await compileSchedule(input), db = memoryStorage();
   db.objects.set(compiled.manifest.discoveries[0]!.key, compiled.discoveryBytes);
   db.objects.set(compiled.manifest.shards[0]!.key, compiled.shardBytes);
@@ -37,9 +38,112 @@ async function fixture(ambiguous = false, input = plannerInput()) {
   const env = createMockEnv({ SFBAY_MODE: 'on', TRANSIT_ARTIFACTS: db.bucket });
   return { env, db, compiled, version };
 }
+async function addOtherFeed(f: Awaited<ReturnType<typeof fixture>>, input = plannerInput()) {
+  const other = await compileSchedule({ ...input, feedId: 'other', coverage: { ...input.coverage, feeds: [{ id: 'other', realtime: [] }] } });
+  f.db.objects.set(other.manifest.discoveries[0]!.key, other.discoveryBytes); f.db.objects.set(other.manifest.shards[0]!.key, other.shardBytes);
+  // Put the other feed first to catch accidental first-provider-ID joins.
+  const version = await new StaticArtifactStore(f.db.bucket).publish({ ...f.compiled.manifest,
+    sources: [...other.manifest.sources, ...f.compiled.manifest.sources], agencyTimezones: { ...other.manifest.agencyTimezones, ...f.compiled.manifest.agencyTimezones },
+    discoveries: [...other.manifest.discoveries, ...f.compiled.manifest.discoveries], shards: [...other.manifest.shards, ...f.compiled.manifest.shards] });
+  return version;
+}
 afterEach(() => vi.useRealTimers());
 
 describe('global transit MCP boundary', () => {
+  it('pages past 100 canceled departures before limiting and orders shifted predictions in the query window', async () => {
+    const input = plannerInput(), updates: Record<string, unknown>[] = [];
+    input.files['trips.txt'] = 'route_id,service_id,trip_id,trip_headsign,direction_id,block_id\n';
+    input.files['stop_times.txt'] = 'trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type\n';
+    for (let index = 0; index < 103; index++) {
+      const id = `T${String(index).padStart(3, '0')}`, time = `09:${String(Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}`;
+      input.files['trips.txt'] += `R,D,${id},Destination,0,\n`;
+      input.files['stop_times.txt'] += `${id},${time},${time},A,1,0,0\n`;
+      if (index !== 100) updates.push({ entityId: id, tripId: id, stopId: 'A', stopSequence: 1,
+        tripInstanceRef: `${ref('trip', id)}:20261019:${Buffer.from(time).toString('base64url')}`, status: index < 100 ? 'canceled' : 'realtime',
+        scheduledDepartureTimeSeconds: Date.parse(at(time)) / 1000, departureTimeSeconds: Date.parse(at(index === 101 ? '09:01:10' : '10:00:00')) / 1000 });
+    }
+    const f = await fixture(false, input); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
+    const now = Date.now() / 1000;
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload: updates }) }) } as unknown as DurableObjectNamespace;
+    const result = (await call(f.env, 'get_departures', { stopRef: ref('stop', 'A'), at: at('09:00:00'), windowSeconds: 600, limit: 2 })).result.structuredContent;
+    expect(result.departures.map((row: any) => row.tripRef)).toEqual(['tr:sfbay:sf511:trip:VDEwMQ', 'tr:sfbay:sf511:trip:VDEwMA']);
+  });
+  it('keeps observed route identity and realtime sources in the hub-owned feed namespace', async () => {
+    const f = await fixture(), version = await addOtherFeed(f), now = Math.floor(Date.now() / 1000);
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload: [{ entityId: 'sf-only', routeId: 'R', latitude: 37, longitude: -122, timestampSeconds: now }] }) }) } as unknown as DurableObjectNamespace;
+    const sf = (await call(f.env, 'get_vehicle_status', { ref: ref('route', 'R') })).result.structuredContent;
+    expect(sf.vehicles).toMatchObject([{ id: 'sf-only', routeRef: 'tr:sfbay:sf511:route:Ug' }]);
+    expect(sf.sources.filter((source: any) => source.kind === 'vehicle_positions').map((source: any) => source.feedId)).toEqual(['sf511']);
+    const other = (await call(f.env, 'get_vehicle_status', { ref: 'tr:sfbay:other:route:Ug' })).result.structuredContent;
+    expect(other).toMatchObject({ status: 'unavailable', vehicles: [] });
+  });
+  it('preserves exact public route-number alternatives even when provider IDs and long names differ', async () => {
+    const input = plannerInput(); input.files['routes.txt'] = 'route_id,agency_id,route_short_name,route_long_name,route_type\nR,A,91,Night Service,3\n';
+    const f = await fixture(false, input), other = plannerInput();
+    other.files['routes.txt'] = 'route_id,agency_id,route_short_name,route_long_name,route_type\nR,A,91,Crosstown,3\n';
+    await addOtherFeed(f, other);
+    const result = (await call(f.env, 'find_transit', { query: ' 91 ', context: { feed: 'other' }, limit: 1 })).result.structuredContent;
+    expect(result.candidates.map((candidate: any) => candidate.ref)).toEqual(['tr:sfbay:other:route:Ug', 'tr:sfbay:sf511:route:OTE', 'tr:sfbay:sf511:route:Ug']);
+  });
+  it('never substitutes a newly unique endpoint after a signed selection artifact changes', async () => {
+    const f = await fixture(true), args = { coverage: 'sfbay', origin: { query: 'Origin' }, destination: { ref: ref('stop', 'C') }, departAt: at('08:59:00'), maxWalkMetres: 0 };
+    const pending = (await call(f.env, 'plan_trip', args, true)).result;
+    const replacement = await compileSchedule(plannerInput());
+    f.db.objects.set(replacement.manifest.discoveries[0]!.key, replacement.discoveryBytes); f.db.objects.set(replacement.manifest.shards[0]!.key, replacement.shardBytes);
+    await new StaticArtifactStore(f.db.bucket).publish(replacement.manifest);
+    const resumed = await call(f.env, 'plan_trip', args, true, { requestState: pending.requestState,
+      inputResponses: { endpoints: { action: 'accept', content: { origin: ref('stop', 'AA') } } } });
+    expect(resumed).toMatchObject({ error: { code: -32602 } });
+    expect(resumed.result?.structuredContent?.itineraries).toBeUndefined();
+  });
+  it('keeps the verified selection artifact pinned if publication races handler dispatch', async () => {
+    const f = await fixture(true), args = { coverage: 'sfbay', origin: { query: 'Origin' }, destination: { ref: ref('stop', 'C') }, departAt: at('08:59:00'), maxWalkMetres: 0 };
+    const pending = (await call(f.env, 'plan_trip', args, true)).result;
+    const pointer = 'artifacts/sfbay/v2/current.json', originalPointer = f.db.objects.get(pointer)!;
+    const input = plannerInput(); input.files['stop_times.txt'] = input.files['stop_times.txt'].replaceAll('09:00:00', '09:01:00');
+    const replacement = await compileSchedule(input);
+    f.db.objects.set(replacement.manifest.discoveries[0]!.key, replacement.discoveryBytes); f.db.objects.set(replacement.manifest.shards[0]!.key, replacement.shardBytes);
+    await new StaticArtifactStore(f.db.bucket).publish(replacement.manifest);
+    const newPointer = f.db.objects.get(pointer)!; f.db.objects.set(pointer, originalPointer);
+    const get = f.db.bucket.get.bind(f.db.bucket);
+    Object.assign(f.db.bucket, { get: async (key: string) => { const object = await get(key); if (key === pointer) f.db.objects.set(pointer, newPointer); return object; } });
+    const resumed = await call(f.env, 'plan_trip', args, true, { requestState: pending.requestState,
+      inputResponses: { endpoints: { action: 'accept', content: { origin: ref('stop', 'A') } } } });
+    expect(resumed.result.structuredContent.itineraries[0].artifactVersion).toBe(f.version.artifactVersion);
+  });
+  it('advertises selector exclusivity and strict keys in the JSON schemas clients receive', async () => {
+    const { result } = await wire(createMockEnv(), 'tools/list', {}), validator = new AjvJsonSchemaValidator();
+    for (const [name, valid, invalid] of [
+      ['find_transit', [{ query: '91' }, { ref: ref('stop', 'A') }, { latitude: 37, longitude: -122 }], [{}, { ref: 'x', query: '91' }, { latitude: 37 }, { query: '91', extra: true }]],
+      ['get_service_status', [{ ref: ref('route', 'R') }, { coverage: 'sfbay' }], [{}, { ref: 'x', coverage: 'sfbay' }, { coverage: 'sfbay', extra: true }]],
+    ] as const) {
+      const check = validator.getValidator(result.tools.find((tool: any) => tool.name === name).inputSchema);
+      for (const args of valid) expect(check(args).valid, `${name}: ${JSON.stringify(args)}`).toBe(true);
+      for (const args of invalid) expect(check(args).valid, `${name}: ${JSON.stringify(args)}`).toBe(false);
+    }
+  });
+  it.each(['trip', 'itinerary'] as const)('limits %s alerts to authoritative route and stop scope plus network alerts', async selector => {
+    const input = transferInput(); input.files['trips.txt'] = input.files['trips.txt'].replaceAll(',block', ',');
+    const f = await fixture(false, input), now = Math.floor(Date.now() / 1000);
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async (url: string) => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload: url.includes('service_alerts') ? [
+        { id: 'network', header: '', description: '', routeIds: [], stopIds: [] },
+        { id: 'first-route', header: '', description: '', routeIds: ['R'], stopIds: [] },
+        { id: 'second-route', header: '', description: '', routeIds: ['S'], stopIds: [] },
+        { id: 'interchange', header: '', description: '', routeIds: [], stopIds: ['B'] },
+        { id: 'first-trip', header: '', description: '', routeIds: [], stopIds: [], tripIds: ['T'] },
+        { id: 'other-trip', header: '', description: '', routeIds: [], stopIds: [], tripIds: ['unrelated'] },
+        { id: 'other-route', header: '', description: '', routeIds: ['91'], stopIds: [] },
+        { id: 'other-stop', header: '', description: '', routeIds: [], stopIds: ['D'] },
+      ] : [] }) }) } as unknown as DurableObjectNamespace;
+    const itinerary = goldenTransfer(f);
+    const args = selector === 'trip' ? { ref: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDA6MDA' } : { itinerary: { ...itinerary,
+      legs: itinerary.legs.map((leg, index) => ({ ...leg, mode: 'tram', agencyRef: 'tr:sfbay:sf511:agency:QQ', intermediateStopCount: 0, transferRequired: index > 0, sources: [], validatorOutcome: 'valid' })) } };
+    const result = (await call(f.env, 'get_service_status', args)).result.structuredContent;
+    expect(result.alerts.map((alert: any) => alert.id)).toEqual(selector === 'trip' ? ['network', 'first-route', 'interchange', 'first-trip'] : ['network', 'first-route', 'second-route', 'interchange', 'first-trip']);
+  });
   it.each(['canceled', 'skipped', 'transfer'] as const)('revalidates only the affected %s leg or boundary without creating alternatives', async failure => {
     const input = transferInput(); input.files['trips.txt'] = input.files['trips.txt'].replaceAll(',block', ',');
     if (failure === 'transfer') input.files['transfers.txt'] = 'from_stop_id,to_stop_id,transfer_type,min_transfer_time\nB,B,2,180\n';
@@ -64,7 +168,7 @@ describe('global transit MCP boundary', () => {
       expect(tool.title).toBeTruthy(); expect(tool.description.length).toBeGreaterThan(50);
       expect(tool.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false, openWorldHint: true });
       expect(tool._meta).toBeUndefined();
-      expect(tool.inputSchema.additionalProperties).toBe(false);
+      for (const branch of tool.inputSchema.anyOf ?? [tool.inputSchema]) expect(branch.additionalProperties).toBe(false);
       expect(tool.outputSchema.additionalProperties).toBe(false);
     }
   });

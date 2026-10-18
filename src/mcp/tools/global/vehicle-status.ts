@@ -20,11 +20,11 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
     if (!data) return complete({ ...unavailable(parsed.coverage), vehicles: [] });
     knownEntity(data, args.ref);
     const now = Math.floor(Date.now() / 1000), feed = await readFeed<NormalizedVehicle>(context, data, 'vehicle_positions', now, handler.mcpReq.signal);
-    const fresh = feed?.status === 'realtime' && feed.producerTimestampSeconds !== undefined && now >= feed.producerTimestampSeconds && now - feed.producerTimestampSeconds <= data.coverage.thresholds.vehiclePositions.realtimeSeconds;
+    const fresh = feed?.feedId === parsed.feed && feed?.status === 'realtime' && feed.producerTimestampSeconds !== undefined && now >= feed.producerTimestampSeconds && now - feed.producerTimestampSeconds <= data.coverage.thresholds.vehiclePositions.realtimeSeconds;
     const vehicles = (fresh ? feed.payload ?? [] : []).filter(vehicle => (parsed.kind === 'trip' ? vehicle.tripInstanceRef === args.ref : vehicle.routeId === parsed.id) &&
       vehicle.timestampSeconds !== undefined && now >= vehicle.timestampSeconds && now - vehicle.timestampSeconds <= data.coverage.thresholds.vehiclePositions.realtimeSeconds).slice(0, args.limit).map(vehicle => ({
       id: vehicle.vehicleId ?? vehicle.entityId, tripInstanceRef: vehicle.tripInstanceRef ?? null,
-      routeRef: data.indexes.flatMap(index => index.routes).find(route => route.providerId === vehicle.routeId)?.ref ?? null,
+      routeRef: data.indexes.find(index => index.feedId === feed!.feedId)?.routes.find(route => route.providerId === vehicle.routeId)?.ref ?? null,
       coordinates: { latitude: vehicle.latitude, longitude: vehicle.longitude }, bearing: vehicle.bearing ?? null, speedMetersPerSecond: vehicle.speedMetersPerSecond ?? null,
       observedAt: new Date(vehicle.timestampSeconds! * 1000).toISOString(), ageSeconds: now - vehicle.timestampSeconds!,
     }));

@@ -55,6 +55,7 @@ export interface NormalizedAlert {
   description: string;
   routeIds: string[];
   stopIds: string[];
+  tripIds?: string[];
 }
 
 export interface NormalizedRealtimeFeed {
@@ -154,6 +155,7 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
         description: firstTranslation(entity.alert.descriptionText),
         routeIds: [...new Set(informedEntities.flatMap(item => item.routeId ? [item.routeId] : []))],
         stopIds: [...new Set(informedEntities.flatMap(item => item.stopId ? [item.stopId] : []))],
+        tripIds: [...new Set(informedEntities.flatMap(item => item.trip?.tripId ? [item.trip.tripId] : []))],
       });
     }
   }

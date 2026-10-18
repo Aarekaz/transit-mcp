@@ -12,7 +12,10 @@ export interface ScheduledDepartureQuery extends ScheduleWindowQuery {
   selection?: 'first' | 'last';
   /** Limits exact departures only. All overlapping frequency windows are returned, up to 100. */
   limit?: number;
+  /** Exclusive stable position in this manifest/query's scheduled ordering. */
+  cursor?: ScheduledDepartureCursor;
 }
+export type ScheduledDepartureCursor = Pick<ScheduledDeparture, 'scheduledTime' | 'tripInstanceRef' | 'stopSequence'>;
 export interface ScheduledDeparture {
   tripRef: TransitRef; tripInstanceRef: TripInstanceRef; serviceDate: string;
   routeRef: TransitRef; agencyRef: TransitRef; stopRef: TransitRef; stopSequence: number;
@@ -32,8 +35,10 @@ export interface ScheduledDepartures extends Omit<ScheduleWindow, 'shards'> {
   departures: ScheduledDeparture[];
   /** Chronological headway windows, unaffected by first/last selection of exact departures. */
   frequencyWindows: ScheduledFrequencyWindow[];
+  nextCursor: ScheduledDepartureCursor | null;
 }
 const MAX_FREQUENCY_WINDOWS = 100;
+const MAX_DEPARTURE_CANDIDATES = 10_000;
 const discoveryIdentitySchema = z.object({
   schemaVersion: z.literal(2), coverageId: z.string(), feedId: z.string(), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/),
   stops: z.array(z.object({ ref: z.string() })),
@@ -66,7 +71,7 @@ function gtfsTime(seconds: number): string {
 }
 
 /** Schedule-only facts. Non-exact headway templates do not imply a precise departure. */
-export async function getScheduledDepartures(query: ScheduledDepartureQuery): Promise<ScheduledDepartures> {
+async function collectScheduledDepartures(query: ScheduledDepartureQuery): Promise<Omit<ScheduledDepartures, 'nextCursor'>> {
   const stop = parseTransitRef(query.stopRef);
   if (!stop || stop.kind !== 'stop' || stop.coverage !== query.manifest.coverageId || query.stopRef.split(':').length !== 5) throw new Error('INVALID_TRANSIT_REF: expected a stop reference in this coverage');
   for (const [refs, kind] of [[query.routeRefs, 'route'], [query.agencyRefs, 'agency']] as const) {
@@ -113,6 +118,7 @@ export async function getScheduledDepartures(query: ScheduledDepartureQuery): Pr
             const tripInstanceRef = formatTripInstanceRef({ coverage: stop.coverage, feed: shard.feedId, id: trip.providerId, serviceDate: day.serviceDate, startTime: gtfsTime(instanceStart) });
             const key = `${tripInstanceRef}:${call.sequence}`;
             if (seen.has(key)) return;
+            if (departures.length >= MAX_DEPARTURE_CANDIDATES) throw new Error('TIME_OUTSIDE_WINDOW: departure candidate budget exceeded; narrow the window or filters');
             seen.add(key);
             departures.push({ tripRef: trip.ref, tripInstanceRef, serviceDate: day.serviceDate, routeRef: route.ref, agencyRef: route.agencyRef,
               stopRef: call.stopRef, stopSequence: call.sequence, headsign: call.headsign || trip.headsign, directionId: trip.directionId,
@@ -153,5 +159,29 @@ export async function getScheduledDepartures(query: ScheduledDepartureQuery): Pr
   departures.sort((a, b) => direction * (Date.parse(a.scheduledTime) - Date.parse(b.scheduledTime)) || a.tripInstanceRef.localeCompare(b.tripInstanceRef) || a.stopSequence - b.stopSequence);
   frequencyWindows.sort((a, b) => Date.parse(a.startTime) - Date.parse(b.startTime) || a.tripTemplateRef.localeCompare(b.tripTemplateRef) ||
     a.stopSequence - b.stopSequence || Date.parse(a.endTime) - Date.parse(b.endTime) || a.headwaySeconds - b.headwaySeconds);
-  return { ...window, departures: departures.slice(0, limit), frequencyWindows };
+  return { ...window, departures, frequencyWindows };
+}
+
+function departurePage(all: Omit<ScheduledDepartures, 'nextCursor'>, limit: number, cursor?: ScheduledDepartureCursor): ScheduledDepartures {
+  const index = cursor ? all.departures.findIndex(row => row.tripInstanceRef === cursor.tripInstanceRef && row.stopSequence === cursor.stopSequence && row.scheduledTime === cursor.scheduledTime) : -1;
+  if (cursor && index < 0) throw new Error('TIME_OUTSIDE_WINDOW: departure cursor is not in this query');
+  const departures = all.departures.slice(index + 1, index + 1 + limit), last = departures.at(-1);
+  const nextCursor = last && index + 1 + departures.length < all.departures.length
+    ? { scheduledTime: last.scheduledTime, tripInstanceRef: last.tripInstanceRef, stopSequence: last.stopSequence } : null;
+  return { ...all, departures, nextCursor };
+}
+
+export async function getScheduledDepartures(query: ScheduledDepartureQuery): Promise<ScheduledDepartures> {
+  return departurePage(await collectScheduledDepartures(query), query.limit ?? 20, query.cursor);
+}
+
+/** One bounded canonical scan, paged before callers apply realtime filters/limits. */
+export async function* getScheduledDeparturePages(query: ScheduledDepartureQuery): AsyncGenerator<ScheduledDepartures> {
+  const all = await collectScheduledDepartures(query);
+  let cursor = query.cursor;
+  do {
+    const page = departurePage(all, query.limit ?? 20, cursor);
+    yield page;
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
 }
