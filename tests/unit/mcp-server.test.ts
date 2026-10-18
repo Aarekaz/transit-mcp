@@ -33,6 +33,26 @@ describe('createMetroMcpServer', () => {
     expect(a.server).not.toBe(b.server);
   });
 
+  it('keeps dark server metadata limited to the registered DC and NYC surface', () => {
+    const dark = createMetroMcpServer(testContext()).server as unknown as {
+      _instructions: string;
+      _serverInfo: { description: string };
+    };
+    const enabled = createMetroMcpServer(testContext({
+      env: createMockEnv({ SFBAY_MODE: 'on' }),
+    })).server as unknown as {
+      _instructions: string;
+      _serverInfo: { description: string };
+    };
+
+    expect(dark._serverInfo.description).toBe(
+      'Real-time DC Metro and NYC Subway arrivals, service alerts, stations, and DC buses.',
+    );
+    expect(dark._instructions).not.toMatch(/San Francisco|SF Bay|sfbay|511/);
+    expect(enabled._serverInfo.description).toMatch(/San Francisco Bay Area/);
+    expect(enabled._instructions).toMatch(/SF Bay|sfbay|511/);
+  });
+
   it('fails construction when the request-state key is too short', () => {
     expect(() => createMetroMcpServer(testContext({
       env: createMockEnv({ MCP_REQUEST_STATE_KEY: 'short' }),

@@ -1,12 +1,12 @@
 # SF Bay regional transit rollout
 
-SF Bay support is live with `SFBAY_MODE=on`, which registers the Bay Area MCP tools and keeps regional feeds current. `dark` ingests and validates data without registering tools, `off` disables ingestion, and `suspended` stops polling while retaining the last snapshots.
+SF Bay support is in development. Production and preview use `SFBAY_MODE=dark`, which ingests and validates data without registering public tools. `off` disables ingestion, `on` registers tools only after a separately approved rollout, and `suspended` stops polling while retaining the last snapshots.
 
 ## Data path
 
 The offline compiler converts the consolidated 511 Regional GTFS tables into deterministic, versioned artifacts. Realtime Trip Updates, Vehicle Positions, and Service Alerts are polled by one `RegionFeedHub` Durable Object on a fixed budget. MCP requests read cached snapshots only and never call 511 directly.
 
-Build and upload the current static artifact before enabling the region:
+Build and upload the current static artifact for dark-mode validation before enabling the region:
 
 ```bash
 SF511_API_KEY=... bun run build:sfbay-artifact
@@ -20,7 +20,7 @@ The default 511 limit is 60 requests per hour. The scheduler reserves capacity a
 
 ## Activation and rollback gates
 
-The live configuration depends on all of these remaining true:
+Any future public activation depends on all of these remaining true:
 
 - The 511 data agreement has been reviewed and attribution wording accepted.
 - `SF511_API_KEY` is present as a Worker secret; never commit it or log it.
@@ -31,6 +31,6 @@ The live configuration depends on all of these remaining true:
 
 ## Current MCP surface
 
-`search_sfbay_stations`, `get_sfbay_station_predictions`, `get_sfbay_routes`, `get_sfbay_incidents`, and `get_vehicle_positions` expose the live regional network with explicit freshness and 511 SF Bay attribution. Existing DC and NYC tool schemas remain unchanged.
+No SF-specific tools are registered while `SFBAY_MODE=dark`, and `/info` continues to advertise the existing 13 DC and NYC tools only. The development implementation retains explicit freshness and 511 SF Bay attribution for rollout verification. Existing DC and NYC tool schemas remain unchanged.
 
 Authoritative source: [511 SF Bay Transit Data](https://511.org/open-data/transit).
