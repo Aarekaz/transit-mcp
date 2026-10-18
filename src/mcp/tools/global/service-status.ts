@@ -43,6 +43,7 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
     const scopeUnavailable = (reasons: VerificationReason[] = ['SCOPE_LIMIT_EXCEEDED']) => complete({ ...unavailable(id, data, reasons), sources, alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] });
     if (args.coverage && feed?.payload?.some(alert => alert.selectors?.some(selector => selector.trip && selector.trip.tripId === undefined))) {
       const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant: now, windowSeconds: 86400, feedIds: [feed.feedId] });
+      if (schedule.status === 'unavailable') return scopeUnavailable(schedule.reasons);
       canonicalShards.push(...schedule.shards.map(item => item.shard));
     }
     // Alert provider IDs are meaningful only inside the authoritative snapshot feed.
