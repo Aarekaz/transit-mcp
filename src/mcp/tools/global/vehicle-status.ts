@@ -31,6 +31,6 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
     const meta = metadata(parsed.coverage, data, new Date(now * 1000).toISOString());
     const available = fresh && (parsed.kind === 'route' || vehicles.length > 0);
     return complete({ ...meta, sources: [...meta.sources, ...(feed ? realtimeSource(data, feed, 'vehicle_positions', now) : [])],
-      status: available ? 'realtime' as const : 'unavailable' as const, reasons: available ? [] : ['REALTIME_UNAVAILABLE' as const], vehicles });
+      status: available ? 'realtime' as const : 'unavailable' as const, reasons: feed.reasons.length ? feed.reasons : available ? [] : ['REALTIME_UNAVAILABLE' as const], vehicles });
   }, () => complete({ ...unavailable(parseTransitRef(args.ref)?.coverage, undefined, ['REALTIME_UNAVAILABLE']), vehicles: [] })));
 }

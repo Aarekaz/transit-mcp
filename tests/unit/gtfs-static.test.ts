@@ -305,6 +305,7 @@ describe('MobilityData publication gate', () => {
       [JSON.stringify(report('WARNING')), { coverageId: 'sfbay', warnings: [{ code: 'some_warning', reason: '', expires: '2026-11-01' }] }, '2026-10-17', /allowlist/],
       ['not JSON', allowlist, '2026-10-17', /report/],
       ['{}', allowlist, '2026-10-17', /report/],
+      [JSON.stringify({ summary: { ...summary, validatedAt: '2026-10-17' }, notices: [] }), allowlist, '2026-10-17', /report/],
       [JSON.stringify({ summary, notices: [{ code: 'bad', severity: 'UNKNOWN', totalNotices: 1 }] }), allowlist, '2026-10-17', /report/],
       [JSON.stringify({ summary, notices: [{ code: 'bad', severity: 'WARNING', totalNotices: -1 }] }), allowlist, '2026-10-17', /report/],
     ] as const) {
@@ -332,6 +333,11 @@ describe('MobilityData publication gate', () => {
       const manifest = JSON.parse(readFileSync(join(first, 'manifest.json'), 'utf8'));
       expect(manifest).toMatchObject({ discoveries: [{ feedId: 'sf511', key: expect.any(String), sha256: expect.stringMatching(/^[a-f0-9]{64}$/), byteLength: expect.any(Number) }] });
       expect(manifest.validator).toMatchObject({ version: '8.0.1', reportSha256: expect.stringMatching(/^[a-f0-9]{64}$/), systemErrorsSha256: expect.stringMatching(/^[a-f0-9]{64}$/), systemErrorsFormat: 'MobilityData notices' });
+      const oldReportOutput = join(directory, 'old-report');
+      const oldReport = run(oldReportOutput, { SFBAY_SOURCE_RETRIEVED_AT: '2026-10-17T00:00:01Z' });
+      expect(oldReport.status).not.toBe(0);
+      expect(oldReport.stderr).toContain('Validator report predates source retrieval');
+      expect(existsSync(join(oldReportOutput, 'manifest.json'))).toBe(false);
       for (const artifact of [...manifest.discoveries, ...manifest.shards]) {
         expect(readFileSync(join(first, artifact.key))).toEqual(readFileSync(join(second, artifact.key)));
       }

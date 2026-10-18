@@ -4,6 +4,30 @@ import { at, entranceInput, golden, goldenTransfer, pathwayInput, plannerFixture
 import type { Itinerary, TransitLeg } from '../../src/transit/planner/types';
 
 describe('independent itinerary validation against canonical stop-times', () => {
+  it('keeps initial validation strict and rejects recheck tampering while allowing an older matching observation', async () => {
+    const f = await plannerFixture(), candidate = golden(f), leg = candidate.legs[0] as TransitLeg;
+    const now = Date.parse(f.query.now) / 1000;
+    leg.status = candidate.status = 'realtime'; leg.realtimeTimestampSeconds = now - 30;
+    const source = { ...f.source, realtime: { version: f.version, producerTimestampSeconds: now, receivedAtSeconds: now,
+      payload: [{ entityId: 'first', tripInstanceRef: leg.tripInstanceRef, stopId: 'A', stopSequence: 1, status: 'realtime' as const, departureTimeSeconds: Date.parse(at('09:00:00')) / 1000 }] } };
+    expect((await validateItinerary(candidate, source)).reasons).toContain('REALTIME_PROVENANCE');
+    expect((await validateItinerary(candidate, { ...source, recheck: true })).valid).toBe(true);
+    leg.realtimeTimestampSeconds = now + 1;
+    expect((await validateItinerary(candidate, { ...source, recheck: true })).reasons).toContain('REALTIME_PROVENANCE');
+    leg.realtimeTimestampSeconds = now - 30; leg.scheduledDepartureTime = at('09:01:00');
+    expect((await validateItinerary(candidate, { ...source, recheck: true })).reasons).toContain('SCHEDULED_TIME');
+  });
+  it('requires the least authoritative transit leg for a mixed journey', async () => {
+    const input = transferInput(); input.files['trips.txt'] = input.files['trips.txt'].replaceAll(',block', ',');
+    const f = await plannerFixture(input), candidate = goldenTransfer(f), now = Date.parse(f.query.now) / 1000;
+    const first = candidate.legs[0] as TransitLeg;
+    first.status = 'realtime'; first.realtimeTimestampSeconds = now;
+    const source = { ...f.source, realtime: { version: f.version, producerTimestampSeconds: now, receivedAtSeconds: now,
+      payload: [{ entityId: 'first', tripInstanceRef: first.tripInstanceRef, stopId: 'A', stopSequence: 1, status: 'realtime' as const, departureTimeSeconds: Date.parse(at('09:00:00')) / 1000 }] } };
+    expect(await validateItinerary(candidate, source)).toMatchObject({ valid: true });
+    candidate.status = 'realtime';
+    expect(await validateItinerary(candidate, source)).toMatchObject({ valid: false, reasons: ['STATUS'] });
+  });
   it.each(['canceled', 'skipped'] as const)('localizes a %s second ride without invalidating the first', async status => {
     const input = transferInput(); input.files['trips.txt'] = input.files['trips.txt'].replaceAll(',block', ',');
     const f = await plannerFixture(input), candidate = goldenTransfer(f), now = Date.parse(f.query.now) / 1000;

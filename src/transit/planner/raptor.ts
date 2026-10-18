@@ -349,7 +349,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     coverageId: query.manifest.coverageId, artifactVersion, origin: query.origin, destination: query.destination, departAt: query.departAt,
     windowSeconds: query.windowSeconds ?? 7200, maxWalkMetres: maxWalk, maxTransfers, departureTime: label.legs[0]!.departureTime,
     arrivalTime: label.legs.at(-1)!.arrivalTime, walkingMetres: label.walking, transfers: label.boardings - 1,
-    status: label.legs.some(leg => leg.kind === 'transit' && leg.status === 'realtime') ? 'realtime' as const : 'scheduled_only' as const, legs: label.legs,
+    status: label.legs.filter(leg => leg.kind === 'transit').every(leg => leg.status === 'realtime') ? 'realtime' as const : 'scheduled_only' as const, legs: label.legs,
   }));
   return { candidates, reasons: [...reasons], rounds, estimatedWorkingSetBytes: estimatedBytes() };
 }

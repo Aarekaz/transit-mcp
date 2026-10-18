@@ -32,7 +32,7 @@ export function registerPrompts(server: McpServer): void {
     'commute-planner',
     {
       title: 'Commute planner',
-      description: 'Build a step-by-step real-time commute plan between two stations.',
+      description: 'Check planning availability for a commute; return a verified journey where supported or scoped station and service lookups.',
       argsSchema: z.object({
         city: z.enum(['dc', 'nyc']),
         fromStation: z.string().describe('Origin station name'),
@@ -44,7 +44,7 @@ export function registerPrompts(server: McpServer): void {
         role: 'user',
         content: {
           type: 'text',
-          text: `Use plan_trip with coverage "${city}", origin {query: "${fromStation}"} and destination {query: "${toStation}"}. Resolve both endpoints in that call. Report the verified itinerary and its status, or explain unavailable coverage. Never construct, extend or repair journeys from departures or station predictions.`,
+          text: `Use find_transit with query "${city}" to inspect coverage. Only if coverage is available and its planning capability is true, use plan_trip with coverage "${city}", origin {query: "${fromStation}"} and destination {query: "${toStation}"}. Report the verified itinerary and its status. Otherwise explain that journey planning is unavailable; use search_stations, get_station_predictions and get_incidents for station departures and service questions. These legacy tools do not provide a full journey planner. Never construct, extend or repair journeys from departures or station predictions.`,
         },
       }],
     }),

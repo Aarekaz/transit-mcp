@@ -40,6 +40,12 @@ const forbiddenSfLiveClaimPatterns = [
 ] as const;
 
 describe('release operator documentation', () => {
+  it('routes public LLM guidance by runtime planning capability and retains legacy lookup limits', () => {
+    expect(llmsText).toMatch(/find_transit.*availability.*planning/);
+    expect(llmsText).toMatch(/plan_trip.*only when/);
+    expect(llmsText).toContain('do not provide a full journey planner');
+    expect(llmsText).toContain('minutesAway');
+  });
   it('keeps SF Bay dark while documenting the in-development rollout', () => {
     for (const [name, document] of [
       ['README', readme],

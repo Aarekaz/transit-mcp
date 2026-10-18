@@ -6,7 +6,7 @@ import type { ValidatorEvidence } from './schema';
 export type { ArtifactManifestV2, ScheduleShard, DiscoveryIndex } from './schema';
 
 const validatorReportSchema = z.object({
-  summary: z.object({ validatorVersion: z.string().trim().min(1), validatedAt: z.string().min(1) }),
+  summary: z.object({ validatorVersion: z.string().trim().min(1), validatedAt: z.iso.datetime({ offset: true }) }),
   notices: z.array(z.object({ code: z.string().trim().min(1), severity: z.enum(['ERROR', 'WARNING', 'INFO']), totalNotices: z.number().int().nonnegative() })),
 });
 const warningAllowlistSchema = z.object({

@@ -4,7 +4,7 @@ import type { MetroMcpContext } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
 import { getCoverage } from '../../../transit/core/coverage';
 import type { VerificationReason } from '../../../transit/core/results';
-import type { NormalizedAlert, NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
+import { safeAlertIdentifier, safeAlertSelector, type NormalizedAlert, type NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import { validateItinerary } from '../../../transit/planner/validator';
 import { loadScheduleWindow } from '../../../transit/planner/schedule-index';
@@ -13,7 +13,7 @@ import { matchTripInstance } from '../../../transit/gtfs/realtime/trip-match';
 import type { ScheduleShard } from '../../../transit/gtfs/static/schema';
 import { AlertScopeLimitError, expandAlertScopes, matchesAlertSelector, resolveAlertSelector, type AlertScope } from '../../../transit/gtfs/realtime/alert-match';
 import { itinerarySchema } from './plan';
-import { TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, unavailable, validRef } from './shared';
+import { TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, unavailable, validRef } from './shared';
 
 export function registerServiceStatusTool(server: McpServer, context: MetroMcpContext): void {
   const absent = { coverage: z.never().optional(), ref: z.never().optional(), itinerary: z.never().optional() };
@@ -24,7 +24,8 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
     annotations: readOnlyLive('Transit service status'),
     inputSchema: z.union([z.strictObject({ ...absent, coverage: coverageSchema }), z.strictObject({ ...absent, ref: boundedText }), z.strictObject({ ...absent, itinerary: itinerarySchema })]),
     outputSchema: z.strictObject({ ...resultShape, alerts: z.array(z.strictObject({ id: z.string(), agencyText: z.strictObject({ title: z.string(), description: z.string(), label: z.literal('agency_supplied') }),
-      routeIds: z.array(z.string()), stopIds: z.array(z.string()), selectors: z.array(selectorSchema), stale: z.boolean() })),
+      routeIds: z.array(z.string()), stopIds: z.array(z.string()), selectors: z.array(selectorSchema), stale: z.boolean(),
+      activePeriods: z.array(z.strictObject({ start: instantSchema.nullable(), end: instantSchema.nullable() })).max(32) })),
       journeyValid: z.boolean().nullable(), journeyReasons: z.array(z.string()),
       legChecks: z.array(z.strictObject({ index: z.number().int(), valid: z.boolean(), reasons: z.array(z.string()) })),
       transferChecks: z.array(z.strictObject({ fromLegIndex: z.number().int(), toLegIndex: z.number().int(), valid: z.literal(false), reasons: z.array(z.string()) })) }),
@@ -37,6 +38,7 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
     if (args.ref) knownEntity(data, args.ref);
     const now = new Date().toISOString(), nowSeconds = Date.parse(now) / 1000;
     const feed = await readFeed<NormalizedAlert>(context, data, 'service_alerts', nowSeconds, handler.mcpReq.signal);
+    const resultReasons = new Set(feed.reasons);
     const meta = metadata(id, data, now);
     const sources = [...meta.sources, ...(feed ? realtimeSource(data, feed, 'alerts', nowSeconds) : [])];
     const canonicalShards: ScheduleShard[] = [];
@@ -47,8 +49,8 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       canonicalShards.push(...schedule.shards.map(item => item.shard));
     }
     // Alert provider IDs are meaningful only inside the authoritative snapshot feed.
-    const scopes: AlertScope[] = [], feeds = new Set<string>();
-    const addTrip = (ref: string, shards: ScheduleShard[], board?: number, alight?: number) => {
+    const scopes: (AlertScope & { window?: { start: number; end: number } })[] = [], feeds = new Set<string>();
+    const addTrip = (ref: string, shards: ScheduleShard[], board?: number, alight?: number, window?: { start: number; end: number }) => {
       const instance = parseTransitRef(ref);
       if (!instance || instance.kind !== 'trip' || !('serviceDate' in instance)) return false;
       const match = matchTripInstance({ entityId: 'scope', tripId: instance.id, startDate: instance.serviceDate, startTime: instance.startTime,
@@ -56,7 +58,9 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       if (!match || match.tripInstanceRef !== ref) return false;
       const route = match.shard.routes.find(route => route.ref === match.trip.routeRef)!;
       feeds.add(instance.feed);
-      scopes.push({ feedId: instance.feed, agencyId: parseTransitRef(route.agencyRef)!.id, routeId: route.providerId, routeType: route.routeType, directionId: match.trip.directionId,
+      const calls = match.trip.stopTimes.filter(call => (board === undefined || call.sequence >= board) && (alight === undefined || call.sequence <= alight));
+      scopes.push({ feedId: instance.feed, window: window ?? { start: match.originSeconds + (calls[0]?.departureSeconds ?? match.startSeconds) + match.shiftSeconds,
+        end: match.originSeconds + (calls.at(-1)?.arrivalSeconds ?? match.startSeconds) + match.shiftSeconds }, agencyId: parseTransitRef(route.agencyRef)!.id, routeId: route.providerId, routeType: route.routeType, directionId: match.trip.directionId,
         tripId: instance.id, serviceDate: instance.serviceDate, startTime: instance.startTime, frequency: match.shard.frequencies.some(row => row.tripRef === match.trip.ref),
         stopIds: new Set(match.trip.stopTimes.filter(call => (board === undefined || call.sequence >= board) && (alight === undefined || call.sequence <= alight)).map(call => parseTransitRef(call.stopRef)!.id)) });
       return true;
@@ -87,13 +91,17 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       const itinerary = args.itinerary;
       const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant: itinerary.departAt, windowSeconds: itinerary.windowSeconds });
       canonicalShards.push(...schedule.shards.map(item => item.shard));
-      for (const leg of itinerary.legs) if (leg.kind === 'transit') addTrip(leg.tripInstanceRef, schedule.shards.map(item => item.shard), leg.boardSequence, leg.alightSequence);
+      for (const leg of itinerary.legs) if (leg.kind === 'transit') addTrip(leg.tripInstanceRef, schedule.shards.map(item => item.shard), leg.boardSequence, leg.alightSequence,
+        { start: Date.parse(leg.departureTime) / 1000, end: Date.parse(leg.arrivalTime) / 1000 });
       const realtime = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', nowSeconds, handler.mcpReq.signal);
+      realtime.reasons.forEach(reason => resultReasons.add(reason));
       if (realtime) sources.push(...realtimeSource(data, realtime, 'trip_updates', nowSeconds));
       const validation = await validateItinerary(itinerary as Parameters<typeof validateItinerary>[0], { manifest: data.manifest, shards: schedule.shards.map(item => item.shard), now,
+        recheck: true, realtimeReasons: realtime.reasons,
         realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds,
         realtime: realtime?.version && realtime.receivedAtSeconds !== undefined ? { ...realtime, version: realtime.version, receivedAtSeconds: realtime.receivedAtSeconds } : undefined }, handler.mcpReq.signal);
       journeyValid = validation.valid; journeyReasons = validation.reasons;
+      if (!journeyValid) resultReasons.add('VALIDATOR_REJECTED');
       itinerary.legs.forEach((_leg, index) => {
         const reasons = validation.legFailures.find(failure => failure.index === index)?.reasons ?? [];
         legChecks.push({ index, valid: reasons.length === 0, reasons });
@@ -104,18 +112,23 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
     // Older persisted snapshots lack selector groups; never reconstruct their
     // conjunctions from lossy arrays or advertise a false empty service state.
     const usable = inFeed && feed?.payload !== null && feed?.payload !== undefined && feed.payload.every(alert => Array.isArray(alert.selectors));
-    let alerts: { id: string; agencyText: { title: string; description: string; label: 'agency_supplied' }; selectors: NormalizedAlert['selectors']; routeIds: string[]; stopIds: string[]; stale: boolean }[];
+    const active = (alert: NormalizedAlert, start: number, end: number) => !alert.activePeriods?.length || alert.activePeriods.some(period => (period.start ?? -Infinity) < end && (period.end ?? Infinity) > start);
+    let alerts: { id: string; agencyText: { title: string; description: string; label: 'agency_supplied' }; selectors: NormalizedAlert['selectors']; routeIds: string[]; stopIds: string[]; stale: boolean; activePeriods: { start: string | null; end: string | null }[] }[];
     try { alerts = (usable ? feed.payload! : []).flatMap(alert => {
+      if (!safeAlertIdentifier(alert.id) || alert.selectors.some(selector => !safeAlertSelector(selector)) || (alert.activePeriods?.length ?? 0) > 32) return [];
+      const inWindow = (scope: typeof scopes[number]) => active(alert, scope.window?.start ?? nowSeconds, scope.window?.end ?? nowSeconds + 86400);
+      if (args.coverage ? !active(alert, nowSeconds, nowSeconds + 86400) : !scopes.some(inWindow)) return [];
       const selectors = alert.selectors.filter(selector => {
         const resolved = resolveAlertSelector(selector, { manifest: data.manifest, version: data.version, shards: canonicalShards, feedId: feed!.feedId });
-        return resolved && (args.coverage || scopes.some(scope => scope.feedId === feed!.feedId && matchesAlertSelector(resolved, scope)));
+        return resolved && (args.coverage || scopes.some(scope => scope.feedId === feed!.feedId && inWindow(scope) && matchesAlertSelector(resolved, scope)));
       });
       if (alert.selectors.length && !selectors.length) return [];
       return [{ id: alert.id, agencyText: { title: sanitizeTransitText(alert.header), description: sanitizeTransitText(alert.description), label: 'agency_supplied' as const }, selectors,
         routeIds: [...new Set(selectors.flatMap(selector => selector.routeId === undefined ? [] : [selector.routeId]))],
-        stopIds: [...new Set(selectors.flatMap(selector => selector.stopId === undefined ? [] : [selector.stopId]))], stale: feed?.freshness !== 'fresh' }];
+        stopIds: [...new Set(selectors.flatMap(selector => selector.stopId === undefined ? [] : [selector.stopId]))], stale: feed?.freshness !== 'fresh',
+        activePeriods: (alert.activePeriods ?? []).map(period => ({ start: period.start === undefined ? null : new Date(period.start * 1000).toISOString(), end: period.end === undefined ? null : new Date(period.end * 1000).toISOString() })) }];
     }); } catch (error) { if (error instanceof AlertScopeLimitError) return scopeUnavailable(); throw error; }
     return complete({ ...meta, sources,
-      status: usable ? 'realtime' as const : 'unavailable' as const, reasons: usable ? [] : ['REALTIME_UNAVAILABLE' as const], alerts, journeyValid, journeyReasons, legChecks, transferChecks });
+      status: usable && journeyValid !== false ? 'realtime' as const : 'unavailable' as const, reasons: resultReasons.size ? [...resultReasons] : usable ? [] : ['REALTIME_UNAVAILABLE' as const], alerts, journeyValid, journeyReasons, legChecks, transferChecks });
   }, () => complete({ ...unavailable(args.coverage), alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] })));
 }

@@ -176,7 +176,7 @@ export const EXPECTED_PROMPT_CONTRACTS = {
   },
   'commute-planner': {
     title: 'Commute planner',
-    description: 'Build a step-by-step real-time commute plan between two stations.',
+    description: 'Check planning availability for a commute; return a verified journey where supported or scoped station and service lookups.',
     arguments: [
       { name: 'city', required: true },
       { name: 'fromStation', description: 'Origin station name', required: true },
@@ -188,7 +188,7 @@ export const EXPECTED_PROMPT_CONTRACTS = {
         fromStation: 'Times Square',
         toStation: 'Jay St',
       },
-      text: 'Use plan_trip with coverage "nyc", origin {query: "Times Square"} and destination {query: "Jay St"}. Resolve both endpoints in that call. Report the verified itinerary and its status, or explain unavailable coverage. Never construct, extend or repair journeys from departures or station predictions.',
+      text: 'Use find_transit with query "nyc" to inspect coverage. Only if coverage is available and its planning capability is true, use plan_trip with coverage "nyc", origin {query: "Times Square"} and destination {query: "Jay St"}. Report the verified itinerary and its status. Otherwise explain that journey planning is unavailable; use search_stations, get_station_predictions and get_incidents for station departures and service questions. These legacy tools do not provide a full journey planner. Never construct, extend or repair journeys from departures or station predictions.',
     }],
   },
   'accessibility-check': {

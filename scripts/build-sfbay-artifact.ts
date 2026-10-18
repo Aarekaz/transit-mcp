@@ -34,6 +34,9 @@ const result = await compileSchedule({ coverage: SFBAY_COVERAGE, feedId: 'sf511'
   source: { url: 'https://api.511.org/transit/datafeeds', retrievedAt: required('SFBAY_SOURCE_RETRIEVED_AT') },
 });
 result.manifest.validator = { ...validator, ...systemErrors };
+if (Date.parse(validator.validatedAt) < Date.parse(result.manifest.sources[0]!.retrievedAt)) {
+  throw new Error('Validator report predates source retrieval');
+}
 // Optional provenance bindings supplied by a validation pipeline fail closed.
 const report = JSON.parse(reportJson);
 if ((report.sourceSha256 !== undefined && report.sourceSha256 !== result.manifest.sources[0]!.sha256) ||

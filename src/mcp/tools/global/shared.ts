@@ -6,12 +6,12 @@ import { getCoverage, getCoverages, type CoverageManifest } from '../../../trans
 import { getCoverageMode } from '../../../regions/manifest';
 import { formatEntityRef, parseTransitRef, type TransitRef } from '../../../transit/core/refs';
 import { VERIFICATION_REASONS, type SourceStatus, type VerificationReason } from '../../../transit/core/results';
-import { StaticArtifactStore, readBoundedObject, SF511_QUOTA_NAMESPACE, type StaticVersion } from '../../../transit/gtfs/realtime/snapshot-store';
+import { StaticArtifactStore, readBoundedObject, sameStaticVersion, SF511_QUOTA_NAMESPACE, type StaticVersion } from '../../../transit/gtfs/realtime/snapshot-store';
 import { decodeDiscoveryIndex, decodeScheduleShard, sha256 } from '../../../transit/gtfs/static/shards';
 import type { ArtifactManifestV2, DiscoveryIndex } from '../../../transit/gtfs/static/schema';
 import type { FeedRead } from '../../../transit/gtfs/realtime/hub-core';
 import type { RealtimeFeedKind } from '../../../regions/types';
-import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
+import { classifyManifestFreshness, sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 
 export const boundedText = z.string().trim().min(1).max(256);
 export const coverageSchema = boundedText.describe('Runtime coverage name or identifier; use find_transit to inspect availability.');
@@ -26,8 +26,10 @@ export const resultShape = { status: z.enum(['realtime', 'scheduled_only', 'unav
 export const candidateSchema = z.strictObject({ ref: z.string(), kind: z.enum(['agency', 'route', 'stop', 'trip']),
   name: z.string(), coverage: z.string(), feed: z.string(), providerId: z.string(), endpoint: z.enum(['origin', 'destination']).optional() });
 export type Candidate = z.infer<typeof candidateSchema>;
+/** Per endpoint/query; two-endpoint elicitation is therefore at most 100 choices. */
+export const MAX_DISCOVERY_CANDIDATES = 50;
 export const errorSchema = z.strictObject({ code: z.enum(['ENTITY_NOT_FOUND', 'ENTITY_AMBIGUOUS', 'INVALID_TRANSIT_REF', 'TIME_OUTSIDE_WINDOW', 'SELECTION_DECLINED']),
-  message: z.string(), candidates: z.array(candidateSchema) });
+  message: z.string(), candidates: z.array(candidateSchema).max(2 * MAX_DISCOVERY_CANDIDATES) });
 export class TransitToolError extends Error {
   constructor(readonly code: z.infer<typeof errorSchema>['code'], readonly candidates: Candidate[] = []) { super(code); }
 }
@@ -163,21 +165,39 @@ export async function detail(data: TransitData, ref: string) {
     routeRefs: stop ? index.stopRoutes[stop.ref] ?? [] : [], agencyRef: route?.agencyRef ?? null, mode: route?.mode ?? null, patterns, calls };
 }
 /** This coordinator owns sf511 only; artifact membership does not imply realtime ownership. */
-export type OwnedFeedRead<T> = FeedRead<T> & { feedId: string };
-export async function readFeed<T>(context: MetroMcpContext, data: TransitData, kind: RealtimeFeedKind, now: number, signal: AbortSignal): Promise<OwnedFeedRead<T[]> | null> {
-  if (data.coverage.id !== 'sfbay' || !context.env.REGION_FEED_HUB) return null;
+export type OwnedFeedRead<T> = FeedRead<T> & { feedId: string; reasons: VerificationReason[] };
+export async function readFeed<T>(context: MetroMcpContext, data: TransitData, kind: RealtimeFeedKind, now: number, signal: AbortSignal): Promise<OwnedFeedRead<T[]>> {
+  const missing = (): OwnedFeedRead<T[]> => ({ feedId: 'sf511', freshness: 'unavailable', status: kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: null, warnings: [], reasons: ['REALTIME_UNAVAILABLE'] });
+  if (data.coverage.id !== 'sfbay' || !context.env.REGION_FEED_HUB) return missing();
   const url = new URL(`https://region-feed-hub.internal/${kind}`);
   url.searchParams.set('now', String(now)); url.searchParams.set('artifact', data.version.artifactVersion);
   signal.throwIfAborted();
-  const response = await context.env.REGION_FEED_HUB.get(context.env.REGION_FEED_HUB.idFromName(SF511_QUOTA_NAMESPACE)).fetch(url.href, { signal });
-  signal.throwIfAborted();
-  if (!response.ok) return null;
-  const feed = await response.json<FeedRead<T[]>>();
-  return feed.version?.artifactVersion === data.version.artifactVersion && !feed.degraded && data.version.sourceVersions.sf511 ? { ...feed, feedId: 'sf511' } : null;
+  try {
+    const response = await context.env.REGION_FEED_HUB.get(context.env.REGION_FEED_HUB.idFromName(SF511_QUOTA_NAMESPACE)).fetch(url.href, { signal });
+    signal.throwIfAborted();
+    if (!response.ok) return missing();
+    const feed = await response.json<FeedRead<T[]>>();
+    const policy = data.coverage.thresholds;
+    const threshold = kind === 'trip_updates' ? policy.tripUpdates.realtimeSeconds : kind === 'vehicle_positions' ? policy.vehiclePositions.realtimeSeconds : policy.alerts.currentSeconds;
+    const expiry = kind === 'trip_updates' ? policy.tripUpdates.staleSeconds : kind === 'vehicle_positions' ? policy.vehiclePositions.unavailableSeconds : Infinity;
+    const validStamp = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= now;
+    const producerTimestampSeconds = validStamp(feed.producerTimestampSeconds) ? feed.producerTimestampSeconds : undefined;
+    const receivedAtSeconds = validStamp(feed.receivedAtSeconds) ? feed.receivedAtSeconds : undefined;
+    const freshness = classifyManifestFreshness(producerTimestampSeconds, now, threshold, expiry);
+    const mismatch = !!feed.version && (!sameStaticVersion(feed.version, data.version) || !data.version.sourceVersions.sf511);
+    const reasons: VerificationReason[] = mismatch || feed.warnings?.includes('SCHEDULE_REALTIME_MISMATCH') ? ['SCHEDULE_REALTIME_MISMATCH'] :
+      feed.degraded || !feed.version || freshness === 'expired' || freshness === 'unavailable' || receivedAtSeconds === undefined || receivedAtSeconds < (producerTimestampSeconds ?? Infinity) || !Array.isArray(feed.payload) ? ['REALTIME_UNAVAILABLE'] :
+      freshness === 'stale' ? ['REALTIME_STALE'] : [];
+    const usable = reasons.length === 0 || kind === 'service_alerts' && reasons[0] === 'REALTIME_STALE';
+    return { ...feed, feedId: 'sf511', reasons, warnings: [], producerTimestampSeconds, receivedAtSeconds, freshness,
+      status: usable ? 'realtime' : kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: usable ? feed.payload : null };
+  } catch (error) { signal.throwIfAborted(); if (error instanceof Error && error.name === 'AbortError') throw error; return missing(); }
 }
-export function realtimeSource(data: TransitData, feed: OwnedFeedRead<unknown>, kind: SourceStatus['kind'], now: number): SourceStatus[] {
-  return data.manifest.sources.filter(source => source.feedId === feed.feedId).map(source => ({ feedId: source.feedId, kind, producerTimestamp: feed.producerTimestampSeconds == null ? null : new Date(feed.producerTimestampSeconds * 1000).toISOString(),
-    ingestedAt: new Date((feed.receivedAtSeconds ?? now) * 1000).toISOString(), ageSeconds: feed.producerTimestampSeconds == null ? null : Math.max(0, now - feed.producerTimestampSeconds), scheduleVersion: source.sha256 }));
+export function realtimeSource(_data: TransitData, feed: OwnedFeedRead<unknown>, kind: SourceStatus['kind'], now: number): SourceStatus[] {
+  const scheduleVersion = feed.version?.sourceVersions[feed.feedId];
+  if (!scheduleVersion || feed.receivedAtSeconds === undefined) return [];
+  return [{ feedId: feed.feedId, kind, producerTimestamp: feed.producerTimestampSeconds == null ? null : new Date(feed.producerTimestampSeconds * 1000).toISOString(),
+    ingestedAt: new Date(feed.receivedAtSeconds * 1000).toISOString(), ageSeconds: feed.producerTimestampSeconds == null ? null : Math.max(0, now - feed.producerTimestampSeconds), scheduleVersion }];
 }
 export function inferCoverage(endpoint: z.infer<typeof endpointSchema>): string | undefined {
   if ('ref' in endpoint) return validRef(endpoint.ref, ['stop']).coverage;

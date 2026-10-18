@@ -7,7 +7,7 @@ import { planJourney } from '../../../transit/planner/plan';
 import type { JourneyEndpoint } from '../../../transit/planner/types';
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { canonicalJson, decodeScheduleShard, sha256 } from '../../../transit/gtfs/static/shards';
-import { TransitToolError, asTransitRef, candidates, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, sourceSchema, unavailable, type Candidate } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, candidates, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, sourceSchema, unavailable, type Candidate } from './shared';
 
 const journeyEndpoint = z.union([z.string(), coordinatesSchema]);
 const transitLeg = z.strictObject({ kind: z.literal('transit'), from: z.string(), to: z.string(), tripRef: z.string(), tripInstanceRef: z.string(), serviceDate: z.string(), instanceStartSeconds: z.number(),
@@ -26,7 +26,7 @@ export const planInput = z.strictObject({ origin: endpointSchema, destination: e
   accessibility: z.enum(['no_preference', 'step_free']).default('no_preference') });
 export const planState = z.strictObject({ phase: z.literal('transit-selection'), tool: z.literal('plan_trip'), requestHash: z.string().regex(/^[a-f0-9]{64}$/),
   artifactVersion: z.string().regex(/^[a-f0-9]{64}$/),
-  candidates: z.strictObject({ origin: z.array(z.string()).min(2).optional(), destination: z.array(z.string()).min(2).optional() }) });
+  candidates: z.strictObject({ origin: z.array(z.string()).min(2).max(MAX_DISCOVERY_CANDIDATES).optional(), destination: z.array(z.string()).min(2).max(MAX_DISCOVERY_CANDIDATES).optional() }) });
 export const planRequestHash = async (args: unknown) => sha256(new TextEncoder().encode(canonicalJson(planInput.parse(args))));
 export function verifyPlanChoices(state: z.infer<typeof planState>, inputResponses: unknown): void {
   const response = z.object({ endpoints: z.object({ action: z.enum(['accept', 'decline', 'cancel']), content: z.strictObject({ origin: z.string().optional(), destination: z.string().optional() }).optional() }) }).parse(inputResponses).endpoints;
@@ -39,7 +39,7 @@ export function verifyPlanChoices(state: z.infer<typeof planState>, inputRespons
 
 export function registerPlanTool(server: McpServer, context: MetroMcpContext, codec: RequestStateCodec<TransitRequestState>): void {
   server.registerTool('plan_trip', {
-    title: 'Plan a transit journey', description: 'Answer every origin-to-destination journey question in one call with up to three independently validated itineraries. Resolve named endpoints together; departure defaults to now. Never assemble or repair journeys from get_departures.',
+    title: 'Plan a transit journey', description: 'Plan an origin-to-destination journey when find_transit reports available coverage with planning enabled. Returns up to three independently validated itineraries and resolves named endpoints together; departure defaults to now. Never assemble or repair journeys from get_departures.',
     annotations: readOnlyLive('Plan a transit journey'),
     inputSchema: planInput,
     outputSchema: z.strictObject({ ...resultShape, itineraries: z.array(itinerarySchema).max(3) }),
@@ -68,6 +68,7 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       else if ('latitude' in value) resolved[endpoint] = value;
       else {
         const matches = candidates(data, value.query, 'stop');
+        if (matches.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...unavailable(coverageId, data, ['SCOPE_LIMIT_EXCEEDED']), itineraries: [] });
         if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND');
         if (matches.length === 1) resolved[endpoint] = asTransitRef(matches[0]!.ref);
         else ambiguous[endpoint] = matches.map(candidate => ({ ...candidate, endpoint }));
@@ -91,6 +92,9 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
         requestState: await codec.mint({ phase: 'transit-selection', tool: 'plan_trip', requestHash, artifactVersion: data.version.artifactVersion, candidates: choices }, handler) });
     }
     const now = new Date().toISOString(), feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', Date.parse(now) / 1000, handler.mcpReq.signal);
+    if (feed.payload?.some(update => ['ADDED', 'DUPLICATED', 'REPLACEMENT'].includes(update.scheduleRelationship ?? ''))) {
+      return complete({ ...unavailable(coverageId, data, ['REALTIME_UNAVAILABLE']), sources: [...metadata(coverageId, data).sources, ...realtimeSource(data, feed, 'trip_updates', Date.parse(now) / 1000)], itineraries: [] });
+    }
     const sequences = new Map<string, number[]>();
     const result = await planJourney({ manifest: data.manifest, readShard: async key => {
       const bytes = await data.readObject(key), shard = decodeScheduleShard(bytes);
@@ -98,11 +102,11 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       return bytes;
     }, origin: resolved.origin!, destination: resolved.destination!, departAt: args.departAt ?? now, now,
       windowSeconds: args.windowSeconds, maxWalkMetres: args.maxWalkMetres, maxTransfers: args.maxTransfers, realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds,
-      realtime: feed?.version && feed.receivedAtSeconds !== undefined ? { ...feed, version: feed.version, receivedAtSeconds: feed.receivedAtSeconds } : undefined }, handler.mcpReq.signal);
+      realtime: feed.payload !== null && feed.version && feed.receivedAtSeconds !== undefined ? { ...feed, version: feed.version, receivedAtSeconds: feed.receivedAtSeconds } : undefined }, handler.mcpReq.signal);
     const meta = metadata(coverageId, data, now);
     if (feed) meta.sources.push(...realtimeSource(data, feed, 'trip_updates', Date.parse(now) / 1000));
     const routes = data.indexes.flatMap(index => index.routes);
-    return complete({ ...meta, status: result.status, reasons: result.reasons, itineraries: result.candidates.map(candidate => ({ ...candidate, legs: candidate.legs.map((leg, index) => {
+    return complete({ ...meta, status: result.status, reasons: [...new Set([...result.reasons, ...feed.reasons])], itineraries: result.candidates.map(candidate => ({ ...candidate, legs: candidate.legs.map((leg, index) => {
       if (leg.kind === 'walk') return { ...leg, validatorOutcome: 'valid' as const };
       const route = routes.find(route => route.ref === leg.routeRef)!;
       return { ...leg, mode: route.mode, agencyRef: route.agencyRef, intermediateStopCount: (sequences.get(leg.tripRef) ?? []).filter(sequence => sequence > leg.boardSequence && sequence < leg.alightSequence).length,
