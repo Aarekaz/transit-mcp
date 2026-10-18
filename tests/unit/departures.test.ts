@@ -28,7 +28,10 @@ async function fixture(data = input(), windows = [data.window]) {
   const manifest: ArtifactManifestV2 = { ...compiled[0]!.manifest, shards: compiled.flatMap(c => c.manifest.shards) };
   const objects = new Map(compiled.map(c => [c.manifest.shards[0]!.key, c.shardBytes]));
   const reads: string[] = [];
-  return { manifest, compiled, reads, readShard: async (key: string) => {
+  return { manifest, compiled, reads, readDiscovery: async (key: string) => {
+    if (key !== manifest.discovery.key) throw new Error('Unexpected discovery read');
+    return compiled[0]!.discoveryBytes;
+  }, readShard: async (key: string) => {
     reads.push(key);
     const bytes = objects.get(key);
     if (!bytes) throw new Error('Unexpected shard read');
@@ -37,6 +40,10 @@ async function fixture(data = input(), windows = [data.window]) {
 }
 
 describe('schedule-window metadata', () => {
+  it('pins discovery to the same source version as the timetable', async () => {
+    const result = await compileSchedule(input());
+    expect(result.discovery).toMatchObject({ sourceSha256: result.manifest.sources[0]!.sha256 });
+  });
   // Catch a loader lookback bound that silently drops legal trips after 48:00.
   it('publishes a feed-wide maximum even in a shard excluding the long trip', async () => {
     const data = input();
@@ -183,6 +190,137 @@ describe('scheduled departures', () => {
     const data = input(); data.files['calendar.txt'] = data.files['calendar.txt']!.replace('D,1,1,1,1,1,1,1,', 'D,1,1,1,1,1,0,0,');
     const f = await fixture(data);
     expect((await getScheduledDepartures({ ...f, stopRef: STOP, instant: '2026-10-18T00:00:00-07:00', windowSeconds: 86400 })).departures).toEqual([]);
+  });
+});
+
+describe('frequency service windows', () => {
+  function frequencyInput() {
+    const data = input();
+    data.files['stops.txt'] += 'O,Origin,37,-122,0,\n';
+    data.files['stop_times.txt'] = 'trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type\nT,09:00:00,09:00:00,O,1,0\nT,09:05:00,09:05:00,P,2,0\n';
+    data.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\nT,09:00:00,10:00:00,600,0\n';
+    return data;
+  }
+
+  it('preserves frequency-only service as offset-adjusted windows with dated template identity', async () => {
+    const f = await fixture(frequencyInput());
+    const result = await getScheduledDepartures({ ...f, stopRef: STOP, instant: '2026-10-19T09:10:00-07:00', windowSeconds: 600 });
+    expect(result.departures).toEqual([]);
+    expect(result.frequencyWindows).toEqual([{
+      tripRef: 'tr:sfbay:sf511:trip:VA', tripTemplateRef: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDA6MDA',
+      serviceDate: '20261019', routeRef: ROUTE, agencyRef: 'tr:sfbay:sf511:agency:X19hbm9ueW1vdXNfYWdlbmN5X18',
+      stopRef: 'tr:sfbay:sf511:stop:UA', stopSequence: 2, headsign: 'Ocean Beach', directionId: 0, pickupType: 0,
+      startTime: '2026-10-19T09:05:00-07:00', endTime: '2026-10-19T10:05:00-07:00',
+      overlapStartTime: '2026-10-19T09:10:00-07:00', overlapEndTime: '2026-10-19T09:20:00-07:00',
+      headwaySeconds: 600, exactTimes: false, status: 'scheduled_only', feedId: 'sf511',
+      scheduleVersion: f.manifest.sources[0]!.sha256, agencyTimezone: 'America/Los_Angeles',
+    }]);
+  });
+
+  it.each([
+    ['2026-10-19T09:04:00-07:00', 60, 0],
+    ['2026-10-19T09:05:00-07:00', 1, 1],
+    ['2026-10-19T10:04:59-07:00', 1, 1],
+    ['2026-10-19T10:05:00-07:00', 60, 0],
+  ])('uses half-open frequency and query windows at %s', async (instant, windowSeconds, count) => {
+    const f = await fixture(frequencyInput());
+    const result = await getScheduledDepartures({ ...f, stopRef: STOP, instant, windowSeconds });
+    expect(result.frequencyWindows).toHaveLength(count);
+    expect(result.departures).toEqual([]);
+  });
+
+  it('keeps approximate windows separate from first/last exact departures without duplicating service', async () => {
+    const data = frequencyInput();
+    data.files['trips.txt'] += 'R,D,U,Downtown,0\n';
+    data.files['stop_times.txt'] += 'U,09:15:00,09:15:00,P,1,0\n';
+    data.files['frequencies.txt'] += 'T,10:00:00,11:00:00,900,0\nU,09:15:00,10:00:00,600,1\n';
+    const f = await fixture(data);
+    const q = { ...f, stopRef: STOP, instant: '2026-10-19T09:00:00-07:00', windowSeconds: 3 * 3600, limit: 1 };
+    const first = await getScheduledDepartures({ ...q, selection: 'first' });
+    const last = await getScheduledDepartures({ ...q, selection: 'last' });
+    expect(first.departures.map(d => d.scheduledTime)).toEqual(['2026-10-19T09:15:00-07:00']);
+    expect(last.departures.map(d => d.scheduledTime)).toEqual(['2026-10-19T09:55:00-07:00']);
+    expect(first.frequencyWindows).toHaveLength(2);
+    expect(last.frequencyWindows).toEqual(first.frequencyWindows);
+    expect(first.frequencyWindows.every(w => w.exactTimes === false && !('scheduledTime' in w))).toBe(true);
+  });
+
+  it('retains the final fractional second of an overnight frequency service window', async () => {
+    const data = frequencyInput();
+    data.files['calendar.txt'] = data.files['calendar.txt']!.split('\n')[0]! + '\n';
+    data.files['calendar_dates.txt'] = 'service_id,date,exception_type\nD,20261018,1\n';
+    data.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\nT,24:00:00,25:00:00,600,0\n';
+    const f = await fixture(data);
+    const result = await getScheduledDepartures({ ...f, stopRef: STOP, instant: '2026-10-19T01:04:59.500-07:00', windowSeconds: 1 });
+    expect(result.frequencyWindows).toEqual([expect.objectContaining({ serviceDate: '20261018',
+      startTime: '2026-10-19T00:05:00-07:00', endTime: '2026-10-19T01:05:00-07:00',
+      overlapStartTime: '2026-10-19T01:04:59.500-07:00', overlapEndTime: '2026-10-19T01:05:00-07:00' })]);
+  });
+
+  it('rejects discovery of a frequency window beyond its declared timetable bound', async () => {
+    const f = await fixture(frequencyInput());
+    expect(() => decodeScheduleShard(encodeScheduleShard({ ...f.compiled[0]!.shard, maxStopTimeSeconds: 36299 })))
+      .toThrow(/shard/i);
+  });
+
+  it('deduplicates identical frequency evidence before enforcing the result bound', async () => {
+    const data = frequencyInput();
+    data.files['frequencies.txt'] += 'T,09:00:00,10:00:00,600,0\n'.repeat(101);
+    const f = await fixture(data);
+    const result = await getScheduledDepartures({ ...f, stopRef: STOP, instant: '2026-10-19T09:00:00-07:00', windowSeconds: 3600 });
+    expect(result.frequencyWindows).toHaveLength(1);
+  });
+
+  it('refuses more than 100 unique overlapping windows rather than silently truncating', async () => {
+    const data = frequencyInput();
+    const time = (minute: number) => `${String(9 + Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}:00`;
+    data.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\n' +
+      Array.from({ length: 101 }, (_, i) => `T,${time(i)},${time(i + 1)},60,0\n`).join('');
+    const f = await fixture(data);
+    await expect(getScheduledDepartures({ ...f, stopRef: STOP, instant: '2026-10-19T09:00:00-07:00', windowSeconds: 7200 }))
+      .rejects.toThrow('TIME_OUTSIDE_WINDOW: more than 100 frequency windows; narrow the search window or filters');
+  });
+});
+
+describe('stop identity independent of agency filters', () => {
+  it.each([undefined, [], ['tr:sfbay:sf511:agency:X19hbm9ueW1vdXNfYWdlbmN5X18'], ['tr:sfbay:sf511:agency:WA']] as const)
+    ('rejects an unknown stop for agency filters %j', async agencyRefs => {
+      const f = await fixture();
+      await expect(getScheduledDepartures({ ...f, stopRef: 'tr:sfbay:sf511:stop:WA',
+        agencyRefs: agencyRefs ? [...agencyRefs] : undefined, instant: '2026-10-19T09:00:00-07:00', windowSeconds: 60 }))
+        .rejects.toThrow(/ENTITY_NOT_FOUND/);
+    });
+
+  it('returns empty service for a valid stop with no matching agency even outside timetable coverage', async () => {
+    const f = await fixture();
+    const result = await getScheduledDepartures({ ...f, stopRef: STOP, agencyRefs: ['tr:sfbay:sf511:agency:WA'],
+      instant: '2027-01-01T09:00:00-08:00', windowSeconds: 60 });
+    expect(result).toMatchObject({ status: 'scheduled_only', departures: [], frequencyWindows: [] });
+    expect(f.reads).toEqual([]);
+  });
+
+  it('rejects unknown stops before an uncovered timetable can mask identity failure', async () => {
+    const f = await fixture();
+    await expect(getScheduledDepartures({ ...f, stopRef: 'tr:sfbay:sf511:stop:WA',
+      instant: '2027-01-01T09:00:00-08:00', windowSeconds: 60 })).rejects.toThrow(/ENTITY_NOT_FOUND/);
+  });
+
+  it('rejects corrupt or incorrectly sized discovery bytes before reading any timetable', async () => {
+    const f = await fixture();
+    const q = { ...f, stopRef: STOP, instant: '2026-10-19T09:00:00-07:00', windowSeconds: 60 };
+    const corrupt = f.compiled[0]!.discoveryBytes.slice(); corrupt[0] = 0;
+    await expect(getScheduledDepartures({ ...q, readDiscovery: async () => corrupt })).rejects.toThrow(/discovery integrity/i);
+    await expect(getScheduledDepartures({ ...q, readDiscovery: async () => corrupt.slice(1) })).rejects.toThrow(/discovery integrity/i);
+    expect(f.reads).toEqual([]);
+  });
+
+  it.each(['coverageId', 'feedId', 'sourceSha256'])('rejects a discovery %s identity mismatch with valid bytes/hash', async field => {
+    const f = await fixture();
+    const bytes = new TextEncoder().encode(JSON.stringify({ ...f.compiled[0]!.discovery, [field]: field === 'sourceSha256' ? 'a'.repeat(64) : 'other' }));
+    const manifest = { ...f.manifest, discovery: { ...f.manifest.discovery, byteLength: bytes.length, sha256: await sha256(bytes) } };
+    await expect(getScheduledDepartures({ ...f, manifest, readDiscovery: async () => bytes, stopRef: STOP,
+      instant: '2026-10-19T09:00:00-07:00', windowSeconds: 60 })).rejects.toThrow(/discovery identity/i);
+    expect(f.reads).toEqual([]);
   });
 });
 

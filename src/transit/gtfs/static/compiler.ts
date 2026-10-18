@@ -214,13 +214,14 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     const trip = tripsByRef.get(frequency.tripRef)!;
     const first = trip.stopTimes[0]!.departureSeconds;
     const last = trip.stopTimes.at(-1)!.departureSeconds;
-    if (first !== null && last !== null) maxStopTimeSeconds = Math.max(maxStopTimeSeconds, frequency.endSeconds - 1 + last - first);
+    // Non-exact service covers the entire half-open interval, including its final fractional second.
+    if (first !== null && last !== null) maxStopTimeSeconds = Math.max(maxStopTimeSeconds, frequency.endSeconds - (frequency.exactTimes === 1 ? 1 : 0) + last - first);
   }
   const shard: ScheduleShard = { schemaVersion: 2, coverageId: coverage.id, feedId, window: { ...window }, maxStopTimeSeconds, source, agencyTimezones,
     stops, routes, trips: activeTrips, patterns: [...patterns.values()].filter(p => activePatterns.has(p.id)).sort((a, b) => a.id < b.id ? -1 : 1),
     calendars, frequencies: frequencies.filter(f => activeRefs.has(f.tripRef)), blocks,
     transfers, transferBoundaryTrips, pathways };
-  const discovery = { schemaVersion: 2 as const, coverageId: coverage.id, feedId, stops: stops.filter(s => s.locationType !== 3), routes,
+  const discovery = { schemaVersion: 2 as const, coverageId: coverage.id, feedId, sourceSha256: source.sha256, stops: stops.filter(s => s.locationType !== 3), routes,
     stopRoutes: Object.fromEntries(Object.entries(stopRoutes).map(([key, values]) => [key, [...new Set(values)].sort()])) };
   const shardBytes = encodeScheduleShard(shard);
   const discoveryBytes = new TextEncoder().encode(canonicalJson(discovery));

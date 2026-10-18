@@ -74,6 +74,7 @@ export interface ScheduleShard {
 }
 export interface DiscoveryIndex {
   schemaVersion: 2; coverageId: string; feedId: string;
+  sourceSha256: string;
   stops: ScheduleStop[]; routes: ScheduleRoute[]; stopRoutes: Record<TransitRef, TransitRef[]>;
 }
 export interface ArtifactObject { key: string; sha256: string; byteLength: number }
