@@ -93,16 +93,28 @@ export class RegionFeedHub implements DurableObject {
   async alarm(): Promise<void> {
     if (!this.#coordinator) return;
     const nowSeconds = Math.floor(Date.now() / 1_000);
-    if (this.#env.SFBAY_MODE !== 'off' && this.#env.SFBAY_MODE !== 'suspended' && this.#env.SF511_API_KEY) {
+    const active = this.#env.SFBAY_MODE !== 'off' && this.#env.SFBAY_MODE !== 'suspended' && this.#env.SF511_API_KEY;
+    if (active) {
       for (const feed of SFBAY_REGION.realtime.feeds) {
         const lastPolled = await this.#state.storage.get<number>(polledKey(feed.kind)) ?? 0;
-        if (nowSeconds - lastPolled >= this.#intervals[feed.kind]) {
-          await this.#poll(feed, nowSeconds);
+        const attemptSeconds = Math.floor(Date.now() / 1000);
+        if (attemptSeconds - lastPolled >= this.#intervals[feed.kind]) {
+          await this.#poll(feed, attemptSeconds);
         }
       }
     }
     const nextInterval = Math.min(...Object.values(this.#intervals));
-    await this.#state.storage.setAlarm(Date.now() + nextInterval * 1_000);
+    let next = (nowSeconds + nextInterval) * 1000;
+    if (active) {
+      const deadlines = await Promise.all(SFBAY_REGION.realtime.feeds.map(async feed => {
+        const last = await this.#state.storage.get<number>(polledKey(feed.kind));
+        // Missing artifacts/quota or an overrun back off; never catch up with a burst.
+        const deadline = last === undefined ? 0 : (last + this.#intervals[feed.kind]) * 1000;
+        return deadline > Date.now() ? deadline : Date.now() + 30_000;
+      }));
+      next = Math.min(...deadlines);
+    }
+    await this.#state.storage.setAlarm(Math.max(Date.now() + 1000, next));
   }
 
   async #poll(spec: RealtimeFeedSpec, nowSeconds: number): Promise<void> {
@@ -155,7 +167,7 @@ export class RegionFeedHub implements DurableObject {
       await this.#snapshots.publish(spec.kind, {
           version: current.version,
           producerTimestampSeconds: decoded.producerTimestampSeconds,
-          receivedAtSeconds: nowSeconds,
+          receivedAtSeconds: Math.floor(Date.now() / 1000),
           payload, warnings, degraded,
       });
     } catch (error) {

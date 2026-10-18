@@ -82,7 +82,7 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
     if (!validEndpoint(itinerary.origin) || !validEndpoint(itinerary.destination)) reject('ENDPOINT');
     if (!itinerary.legs.length || itinerary.legs.length > 100) return { valid: false, reasons: ['LEG_COUNT'], legFailures: [], transferFailures: [] };
     if (!endpointEqual(itinerary.legs[0]!.from, itinerary.origin) || !endpointEqual(itinerary.legs.at(-1)!.to, itinerary.destination)) reject('ENDPOINT');
-    let previousTime = requested, walked = 0, changes = -1, realtime = false;
+    let previousTime = requested, walked = 0, changes = -1, realtime = true;
     let previousRide: CheckedRide | undefined;
     const checked: CheckedRide[] = [];
     for (let index = 0; index < itinerary.legs.length; index++) {
@@ -161,9 +161,15 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
       const departurePrediction = boardUpdate?.status === 'realtime' ? boardUpdate.departureTimeSeconds : undefined;
       const arrivalPrediction = alightUpdate?.status === 'realtime' ? alightUpdate.arrivalTimeSeconds : undefined;
       const predicted = departurePrediction !== undefined || arrivalPrediction !== undefined;
-      if (depart !== (departurePrediction === undefined ? scheduledDeparture : departurePrediction * 1000) || arrive !== (arrivalPrediction === undefined ? scheduledArrival : arrivalPrediction * 1000)) reject('ADJUSTED_TIME');
-      if (leg.status !== (predicted ? 'realtime' : 'scheduled_only') || (predicted ? leg.realtimeTimestampSeconds !== stamp : leg.realtimeTimestampSeconds !== undefined)) reject('REALTIME_PROVENANCE');
-      realtime ||= predicted;
+      if (source.recheck && leg.status === 'realtime' && !fresh) {
+        for (const reason of source.realtimeReasons?.length ? source.realtimeReasons : ['REALTIME_UNAVAILABLE']) reject(reason);
+      } else {
+        if (depart !== (departurePrediction === undefined ? scheduledDeparture : departurePrediction * 1000) || arrive !== (arrivalPrediction === undefined ? scheduledArrival : arrivalPrediction * 1000)) reject('ADJUSTED_TIME');
+        const observationValid = source.recheck ? leg.realtimeTimestampSeconds !== undefined && Number.isFinite(leg.realtimeTimestampSeconds) &&
+          leg.realtimeTimestampSeconds > 0 && leg.realtimeTimestampSeconds <= stamp! : leg.realtimeTimestampSeconds === stamp;
+        if (leg.status !== (predicted ? 'realtime' : 'scheduled_only') || (predicted ? !observationValid : leg.realtimeTimestampSeconds !== undefined)) reject('REALTIME_PROVENANCE');
+      }
+      realtime &&= source.recheck && !fresh ? leg.status === 'realtime' : predicted;
       let lastScheduled = -Infinity, lastAdjusted = -Infinity;
       for (const call of trip.stopTimes.slice(board, alight + 1)) {
         const row = tripRows.find(row => row.stopSequence === call.sequence);

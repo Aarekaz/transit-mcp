@@ -1288,10 +1288,13 @@ describe('SDK v2 prompt contracts', () => {
       }
     }
     expect([...referencedTools].sort()).toEqual([
+      'find_transit',
       'get_elevator_incidents',
       'get_incidents',
+      'get_station_predictions',
       'get_stations_by_line',
       'plan_trip',
+      'search_stations',
     ]);
 
     const invalid = await requestOverSdkWire(

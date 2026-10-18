@@ -34,6 +34,9 @@ export interface ValidationSource {
   /** Explicit observation time, independent of future requested departure. */
   now: string;
   realtimeMaxAgeSeconds?: number;
+  /** Rechecks allow an older observation only if current predictions still agree. */
+  recheck?: boolean;
+  realtimeReasons?: VerificationReason[];
 }
 export interface JourneyQuery extends Omit<ValidationSource, 'shards'> {
   readShard: (key: string) => Promise<Uint8Array>;

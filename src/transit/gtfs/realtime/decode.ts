@@ -58,6 +58,8 @@ export interface NormalizedAlert {
   tripIds?: string[];
   /** Conjunction within one selector; alternatives between selectors. */
   selectors: NormalizedAlertSelector[];
+  /** Empty means always active; otherwise alternatives with open interval ends. */
+  activePeriods?: { start?: number; end?: number }[];
 }
 export interface NormalizedAlertSelector {
   agencyId?: string; routeId?: string; routeType?: number; stopId?: string; directionId?: number;
@@ -87,6 +89,15 @@ function ownNumber(object: object | null | undefined, key: string): number | und
 function identifier(value: string | null | undefined): string | undefined {
   // IDs are never rewritten: doing so could alias two provider entities.
   return value && value.length <= 512 && !/[\u0000-\u001f\u007f]/.test(value) ? value : undefined;
+}
+
+export function safeAlertIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[<>\u0000-\u001f\u007f]/.test(value);
+}
+export function safeAlertSelector(selector: NormalizedAlertSelector): boolean {
+  return [selector.agencyId, selector.routeId, selector.stopId, selector.trip?.tripId, selector.trip?.routeId,
+    selector.trip?.startDate, selector.trip?.startTime].every(value => value === undefined || safeAlertIdentifier(value)) &&
+    [selector.routeType, selector.directionId, selector.trip?.directionId].every(value => value === undefined || Number.isSafeInteger(value) && value >= 0);
 }
 
 function alertSelector(value: transit_realtime.IEntitySelector): NormalizedAlertSelector {
@@ -170,6 +181,16 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
 
     if (entity.alert) {
       const informedEntities = entity.alert.informedEntity ?? [];
+      const selectors = informedEntities.map(alertSelector);
+      const activePeriods = (entity.alert.activePeriod ?? []).map(period => ({
+        ...(Object.hasOwn(period, 'start') ? { start: ownNumber(period, 'start') } : {}),
+        ...(Object.hasOwn(period, 'end') ? { end: ownNumber(period, 'end') } : {}),
+      }));
+      if (!safeAlertIdentifier(entity.id) || selectors.length > 100 || selectors.some(selector => !safeAlertSelector(selector)) || activePeriods.length > 32 ||
+        activePeriods.some(period => Object.values(period).some(value => value === undefined || !Number.isSafeInteger(value) || value < 0 || value > 253402300799) ||
+          period.start !== undefined && period.end !== undefined && period.end <= period.start)) {
+        feed.warnings.push('invalid_alert'); continue;
+      }
       feed.alerts.push({
         id: entity.id,
         header: firstTranslation(entity.alert.headerText),
@@ -177,7 +198,7 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
         routeIds: [...new Set(informedEntities.flatMap(item => item.routeId ? [item.routeId] : []))],
         stopIds: [...new Set(informedEntities.flatMap(item => item.stopId ? [item.stopId] : []))],
         tripIds: [...new Set(informedEntities.flatMap(item => item.trip?.tripId ? [item.trip.tripId] : []))],
-        selectors: informedEntities.map(alertSelector),
+        selectors, activePeriods,
       });
     }
   }

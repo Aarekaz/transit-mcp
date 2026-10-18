@@ -16,7 +16,7 @@ const frequencySchema = z.strictObject({ ...departureShape, tripTemplateRef: z.s
   headwaySeconds: z.number().int(), exactTimes: z.literal(false) });
 export function registerDeparturesTool(server: McpServer, context: MetroMcpContext): void {
   server.registerTool('get_departures', {
-    title: 'Departures at a stop', description: 'Find what leaves a stop next, the first service or last service in a bounded window. Returns dated trip references for get_vehicle_status. Use plan_trip for every journey; departures cannot establish a route or connection.',
+    title: 'Departures at a stop', description: 'Find what leaves a stop next, the first service or last service in a bounded window. Returns dated trip references for get_vehicle_status. Use plan_trip where planning is available; departures cannot establish a route or connection.',
     annotations: readOnlyLive('Departures at a stop'),
     inputSchema: z.strictObject({ stopRef: boundedText, at: instantSchema.optional(), windowSeconds: z.number().int().default(7200).describe('Search window in seconds, 1 through 604800 (seven days).'),
       routeRefs: z.array(boundedText).max(20).optional(), agencyRefs: z.array(boundedText).max(20).optional(), selection: z.enum(['first', 'last']).default('first'), limit: z.number().int().min(1).max(100).default(20) }),
@@ -48,6 +48,14 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     for await (const page of pages) { handler.mcpReq.signal.throwIfAborted(); schedule = page; scheduled.push(...page.departures); }
     if (!schedule) throw new Error('Missing departure scan');
     const feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', nowSeconds, handler.mcpReq.signal);
+    const meta = metadata(stop.coverage, data, now);
+    const sources = [...meta.sources, ...realtimeSource(data, feed, 'trip_updates', nowSeconds)];
+    // These accepted relationships can introduce calls without a canonical static
+    // departure. The current schema requires one: refuse the whole board until
+    // that proof is available rather than hide service or resurrect replaced calls.
+    if (feed.payload?.some(update => ['ADDED', 'DUPLICATED', 'REPLACEMENT'].includes(update.scheduleRelationship ?? ''))) {
+      return complete({ ...meta, sources, status: 'unavailable' as const, reasons: ['REALTIME_UNAVAILABLE' as const], departures: [], frequencyWindows: [] });
+    }
     const fresh = feed?.status === 'realtime' && feed.producerTimestampSeconds !== undefined && nowSeconds >= feed.producerTimestampSeconds && nowSeconds - feed.producerTimestampSeconds <= data.coverage.thresholds.tripUpdates.realtimeSeconds;
     let departures: z.infer<typeof departureSchema>[] = scheduled.flatMap(departure => {
       const update = fresh ? feed.payload?.find(update => update.tripInstanceRef === departure.tripInstanceRef && update.stopSequence === departure.stopSequence && update.stopId === parseTransitRef(departure.stopRef)!.id) : undefined;
@@ -72,8 +80,7 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     const start = Date.parse(args.at ?? now), end = start + args.windowSeconds * 1000, direction = args.selection === 'last' ? -1 : 1;
     const time = (row: z.infer<typeof departureSchema>) => Date.parse(row.predictedTime ?? row.scheduledTime);
     departures = departures.filter(row => time(row) >= start && time(row) < end).sort((a, b) => direction * (time(a) - time(b)) || a.tripInstanceRef.localeCompare(b.tripInstanceRef) || a.stopSequence - b.stopSequence).slice(0, args.limit);
-    const meta = metadata(stop.coverage, data, now);
-    return complete({ ...meta, sources: [...meta.sources, ...(feed ? realtimeSource(data, feed, 'trip_updates', nowSeconds) : [])],
-      status: departures.some(row => row.status === 'realtime') ? 'realtime' as const : schedule.status, reasons: schedule.reasons, departures, frequencyWindows: schedule.frequencyWindows });
+    return complete({ ...meta, sources,
+      status: departures.some(row => row.status === 'realtime') ? 'realtime' as const : schedule.status, reasons: [...new Set([...schedule.reasons, ...feed.reasons])], departures, frequencyWindows: schedule.frequencyWindows });
   }, () => complete({ ...unavailable(parseTransitRef(args.stopRef)?.coverage), departures: [], frequencyWindows: [] })));
 }

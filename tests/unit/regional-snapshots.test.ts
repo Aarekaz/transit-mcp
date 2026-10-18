@@ -32,6 +32,30 @@ async function publishTrip(f: Awaited<ReturnType<typeof setup>>, ...tripUpdates:
 }
 
 describe('regional v2 snapshot service', () => {
+  it('schedules each feed by its attempt deadline so request duration cannot extend the cadence', async () => {
+    const f = await setup(); vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
+    let nextAlarm = 0;
+    const alarms = vi.spyOn(f.db.storage, 'setAlarm').mockImplementation(async value => { nextAlarm = Number(value); });
+    const attempts: { path: string; time: number }[] = [];
+    const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async request => {
+      attempts.push({ path: new URL((request as Request).url).pathname, time: Date.now() });
+      vi.setSystemTime(Date.now() + 1000);
+      return new Response(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: Math.floor(Date.now() / 1000) }, entity: [] }).finish());
+    });
+    try {
+      for (let cycle = 0; cycle < 8; cycle++) {
+        await f.hub.alarm();
+        expect(nextAlarm).toBeGreaterThan(Date.now());
+        if (cycle === 0) expect(nextAlarm).toBe((NOW + 120) * 1000);
+        vi.setSystemTime(nextAlarm);
+      }
+      const positions = attempts.filter(attempt => attempt.path.endsWith('vehiclepositions'));
+      expect(positions.length).toBeGreaterThanOrEqual(2);
+      expect(positions[1]!.time - positions[0]!.time).toBe(300000);
+      const updates = attempts.filter(attempt => attempt.path.endsWith('tripupdates'));
+      expect(updates[1]!.time - updates[0]!.time).toBe(120000);
+    } finally { upstream.mockRestore(); alarms.mockRestore(); vi.useRealTimers(); }
+  });
   it('advertises only observed absolute calls for an off-headway non-exact frequency instance', async () => {
     const f = await setup(await realtimeFixture('trip_id,start_time,end_time,headway_secs,exact_times\nT,08:00:00,10:00:00,600,0\n'));
     const applied = await publishTrip(f, {

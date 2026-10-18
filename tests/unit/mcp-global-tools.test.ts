@@ -2,6 +2,7 @@ import { CLIENT_CAPABILITIES_META_KEY, PROTOCOL_VERSION_META_KEY, createMcpHandl
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/server/validators/ajv';
 import { transit_realtime } from 'gtfs-realtime-bindings';
 import { decodeRealtimeFeed } from '../../src/transit/gtfs/realtime/decode';
+import { applyTripUpdates } from '../../src/transit/gtfs/realtime/trip-match';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMetroMcpServer } from '../../src/mcp/server';
 import { StaticArtifactStore } from '../../src/transit/gtfs/realtime/snapshot-store';
@@ -52,6 +53,159 @@ async function addOtherFeed(f: Awaited<ReturnType<typeof fixture>>, input = plan
 afterEach(() => vi.useRealTimers());
 
 describe('global transit MCP boundary', () => {
+  it.each([[180, 'realtime', null], [181, 'scheduled_only', 'REALTIME_STALE'], [600, 'scheduled_only', 'REALTIME_STALE'], [601, 'scheduled_only', 'REALTIME_UNAVAILABLE']] as const)('honors the Trip Update boundary at %s seconds without inventing predictions', async (age, status, reason) => {
+    const f = await fixture(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
+    const stamp = Date.now() / 1000 - age;
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: stamp, receivedAtSeconds: stamp, warnings: [], payload: [{ entityId: 'first', tripId: 'T', stopId: 'A', stopSequence: 1,
+        tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDA6MDA', status: 'realtime', departureTimeSeconds: Date.parse(at('09:01:00')) / 1000 }] }) }) } as unknown as DurableObjectNamespace;
+    const result = (await call(f.env, 'get_departures', { stopRef: ref('stop', 'A') })).result.structuredContent;
+    expect(result.status).toBe(status); expect(result.departures[0].status).toBe(status);
+    expect(result.reasons).toEqual(reason ? [reason] : []);
+    expect(result.departures[0].predictedTime).toBe(age <= 180 ? '2026-10-19T16:01:00.000Z' : null);
+  });
+
+  it('does not downgrade realtime transit authority for an access walking leg', async () => {
+    const f = await fixture(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
+    const now = Date.now() / 1000;
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload: [{ entityId: 'first', tripId: 'T', stopId: 'A', stopSequence: 1,
+        tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDA6MDA', status: 'realtime', departureTimeSeconds: Date.parse(at('09:00:00')) / 1000 }] }) }) } as unknown as DurableObjectNamespace;
+    const result = (await call(f.env, 'plan_trip', { origin: { latitude: 36.9999, longitude: -122 }, destination: { ref: ref('stop', 'C') }, maxWalkMetres: 100 })).result.structuredContent;
+    expect(result).toMatchObject({ status: 'realtime', itineraries: [{ status: 'realtime', legs: [{ kind: 'walk' }, { kind: 'transit', status: 'realtime' }] }] });
+  });
+  it('bounds discovery and endpoint ambiguity without silently losing exact alternatives', async () => {
+    const input = plannerInput();
+    for (let index = 0; index < 200; index++) input.files['stops.txt'] += `Large${index},Crowded,37,-122\nFuzzy${index},Fuzzy station ${index},37,-122\n`;
+    const f = await fixture(false, input);
+    const exact = (await call(f.env, 'find_transit', { query: 'Crowded', limit: 3 })).result.structuredContent;
+    expect(exact).toMatchObject({ status: 'unavailable', reasons: ['SCOPE_LIMIT_EXCEEDED'], candidates: [] });
+    const fuzzy = (await call(f.env, 'find_transit', { query: 'Fuzzy', limit: 3 })).result.structuredContent;
+    expect(fuzzy.candidates).toHaveLength(3);
+    for (const elicitation of [false, true]) {
+      const result = (await call(f.env, 'plan_trip', { coverage: 'sfbay', origin: { query: 'Crowded' }, destination: { query: 'Destination' } }, elicitation)).result;
+      expect(result.structuredContent).toMatchObject({ status: 'unavailable', reasons: ['SCOPE_LIMIT_EXCEEDED'], itineraries: [] });
+      expect(result.requestState).toBeUndefined();
+    }
+  });
+
+  it('makes public instructions and the commute prompt capability-driven with honest legacy lookups', async () => {
+    const env = createMockEnv();
+    const instructions = (await wire(env, 'server/discover', {})).result.instructions;
+    expect(instructions).toMatch(/plan_trip only when.*available.*planning/i);
+    expect(instructions).toContain('get_station_predictions'); expect(instructions).toContain('get_incidents');
+    expect(instructions).toContain('DC-only'); expect(instructions).toContain('NYC-only'); expect(instructions).toContain('minutesAway');
+    const prompt = (await wire(env, 'prompts/get', { name: 'commute-planner', arguments: { city: 'dc', fromStation: 'Dupont', toStation: 'DCA' } })).result.messages[0].content.text;
+    expect(prompt).toMatch(/find_transit.*dc/);
+    expect(prompt).toMatch(/only if.*available.*planning/i);
+    expect(prompt).toContain('get_station_predictions'); expect(prompt).toContain('get_incidents');
+    expect(prompt).toContain('do not provide a full journey planner');
+    const catalog = (await wire(env, 'tools/list', {})).result.tools;
+    expect(catalog.find((tool: any) => tool.name === 'plan_trip').description).toMatch(/available.*planning/i);
+  });
+  it('filters bounded alert periods by the explicit 24-hour scope and itinerary times, with safe identifiers', async () => {
+    const f = await fixture(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
+    const now = Date.now() / 1000;
+    const definitions: [string, { start?: number; end?: number }[]][] = [
+      ['current', [{ start: now - 60, end: now + 60 }]], ['future', [{ start: now + 3600, end: now + 7200 }]],
+      ['expired', [{ end: now - 1 }]], ['later', [{ start: now + 86401 }]], ['open-start', [{ end: now + 1800 }]],
+      ['open-end', [{ start: now - 60 }]], ['multiple', [{ end: now - 1 }, { start: now + 300, end: now + 1200 }]],
+      ['<script>unsafe</script>', []], ['unsafe-selector', []],
+    ];
+    const payload = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: now },
+      entity: definitions.map(([id, activePeriod]) => ({ id, alert: { activePeriod, informedEntity: [{ routeId: id === 'unsafe-selector' ? '<script>R</script>' : 'R' }] } })) }).finish()).alerts;
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async (url: string) => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload: url.includes('service_alerts') ? payload : [] }) }) } as unknown as DurableObjectNamespace;
+    const general = (await call(f.env, 'get_service_status', { coverage: 'sfbay' })).result.structuredContent;
+    expect(general.alerts.map((alert: any) => alert.id)).toEqual(['current', 'future', 'open-start', 'open-end', 'multiple']);
+    expect(general.alerts.find((alert: any) => alert.id === 'future').activePeriods).toEqual([{ start: new Date((now + 3600) * 1000).toISOString(), end: new Date((now + 7200) * 1000).toISOString() }]);
+    expect(general.alerts.find((alert: any) => alert.id === 'open-start').activePeriods[0].start).toBeNull();
+    const itinerary = (await call(f.env, 'plan_trip', { origin: { ref: ref('stop', 'A') }, destination: { ref: ref('stop', 'C') }, maxWalkMetres: 0 })).result.structuredContent.itineraries[0];
+    const recheck = (await call(f.env, 'get_service_status', { itinerary })).result.structuredContent;
+    expect(recheck.alerts.map((alert: any) => alert.id)).toEqual(['open-start', 'open-end', 'multiple']);
+    expect(JSON.stringify(general)).not.toContain('<script>');
+  });
+
+  it.each(['same', 'changed', 'stale', 'mismatch'] as const)('rechecks a realtime journey against the next %s snapshot', async variant => {
+    const f = await fixture(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
+    let stamp = Date.now() / 1000, delay = 0, version = f.version;
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async (url: string) => Response.json({ freshness: 'fresh', status: 'realtime', version,
+      producerTimestampSeconds: stamp, receivedAtSeconds: stamp, warnings: [], payload: url.includes('service_alerts') ? [] : [{ entityId: 'first', tripId: 'T', stopId: 'A', stopSequence: 1,
+        tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDA6MDA', status: 'realtime', departureTimeSeconds: Date.parse(at('09:00:00')) / 1000 + delay }] }) }) } as unknown as DurableObjectNamespace;
+    const itinerary = (await call(f.env, 'plan_trip', { origin: { ref: ref('stop', 'A') }, destination: { ref: ref('stop', 'C') }, maxWalkMetres: 0 })).result.structuredContent.itineraries[0];
+    vi.setSystemTime(new Date(at('08:59:30')));
+    stamp = variant === 'stale' ? Date.now() / 1000 - 181 : Date.now() / 1000;
+    if (variant === 'changed') delay = 300;
+    if (variant === 'mismatch') version = { ...f.version, artifactVersion: 'a'.repeat(64) };
+    const result = (await call(f.env, 'get_service_status', { itinerary })).result.structuredContent;
+    expect(result.journeyValid).toBe(variant === 'same');
+    if (variant === 'same') expect(result.journeyReasons).toEqual([]);
+    else expect(result.journeyReasons).toContain(variant === 'changed' ? 'ADJUSTED_TIME' : variant === 'stale' ? 'REALTIME_STALE' : 'SCHEDULE_REALTIME_MISMATCH');
+    expect(result.journeyReasons).not.toContain('REALTIME_PROVENANCE');
+    if (variant !== 'same') {
+      expect(result.status).toBe('unavailable');
+      expect(result.reasons).toContain(variant === 'changed' ? 'VALIDATOR_REJECTED' : variant === 'stale' ? 'REALTIME_STALE' : 'SCHEDULE_REALTIME_MISMATCH');
+    }
+  });
+  it.each(['stale', 'expired', 'missing', 'mismatch', 'degraded'] as const)('preserves %s realtime diagnostics through departures and planning', async variant => {
+    const f = await fixture(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
+    const now = Date.now() / 1000, stamp = now - (variant === 'stale' ? 181 : variant === 'expired' ? 601 : 0);
+    const version = variant === 'mismatch' ? { ...f.version, artifactVersion: 'a'.repeat(64), sourceVersions: { sf511: 'b'.repeat(64) } } : f.version;
+    if (variant !== 'missing') f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: variant === 'stale' ? 'stale' : variant === 'expired' ? 'expired' : 'fresh',
+      status: variant === 'stale' || variant === 'expired' ? 'scheduled_only' : 'realtime', version, degraded: variant === 'degraded',
+      producerTimestampSeconds: stamp, receivedAtSeconds: stamp, warnings: [], payload: [] }) }) } as unknown as DurableObjectNamespace;
+    const reason = variant === 'stale' ? 'REALTIME_STALE' : variant === 'mismatch' ? 'SCHEDULE_REALTIME_MISMATCH' : 'REALTIME_UNAVAILABLE';
+    for (const [name, args] of [['get_departures', { stopRef: ref('stop', 'A') }], ['plan_trip', { origin: { ref: ref('stop', 'A') }, destination: { ref: ref('stop', 'C') }, maxWalkMetres: 0 }]] as const) {
+      const result = (await call(f.env, name, args)).result.structuredContent;
+      expect(result).toMatchObject({ status: 'scheduled_only', reasons: expect.arrayContaining([reason]) });
+      if (variant !== 'missing') expect(result.sources).toContainEqual(expect.objectContaining({ kind: 'trip_updates', producerTimestamp: new Date(stamp * 1000).toISOString(), scheduleVersion: version.sourceVersions.sf511 }));
+      expect(result.reasons).not.toContain('COVERAGE_UNAVAILABLE');
+    }
+  });
+
+  it.each(['ADDED', 'DUPLICATED', 'REPLACEMENT', 'REPLACEMENT_NO_DATA'] as const)('explicitly refuses an incomplete departure board for accepted %s service', async relationship => {
+    const f = await fixture(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
+    const now = Date.now() / 1000, added = relationship === 'ADDED', duplicated = relationship === 'DUPLICATED';
+    const decoded = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: now }, entity: [{ id: 'extra', tripUpdate: {
+      trip: { tripId: added ? 'extra' : 'T', routeId: 'R', startDate: '20261019', startTime: '09:00:00', scheduleRelationship: added ? 1 : duplicated ? 6 : 5 },
+      ...(duplicated ? { tripProperties: { tripId: 'duplicate', startDate: '20261019', startTime: '09:05:00' } } : {}),
+      stopTimeUpdate: [{ stopId: 'A', stopSequence: 1, arrival: { time: Date.parse(at('09:05:00')) / 1000 }, departure: { time: Date.parse(at('09:05:00')) / 1000 }, scheduleRelationship: relationship === 'REPLACEMENT_NO_DATA' ? 2 : 0 }],
+    } }] }).finish());
+    const normalized = await applyTripUpdates(decoded, { manifest: f.compiled.manifest, version: f.version, shards: [f.compiled.shard], discoveries: [f.compiled.discovery], feedId: 'sf511' });
+    expect(normalized.degraded).toBe(false); expect(normalized.stopUpdates.length).toBeGreaterThan(0);
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload: normalized.stopUpdates }) }) } as unknown as DurableObjectNamespace;
+    const result = (await call(f.env, 'get_departures', { stopRef: ref('stop', 'A') })).result.structuredContent;
+    expect(result).toMatchObject({ status: 'unavailable', reasons: ['REALTIME_UNAVAILABLE'], departures: [], frequencyWindows: [] });
+    expect(result.sources).toContainEqual(expect.objectContaining({ kind: 'trip_updates', scheduleVersion: f.version.sourceVersions.sf511 }));
+    const plan = (await call(f.env, 'plan_trip', { origin: { ref: ref('stop', 'A') }, destination: { ref: ref('stop', 'C') }, maxWalkMetres: 0 })).result.structuredContent;
+    expect(plan).toMatchObject({ status: 'unavailable', reasons: ['REALTIME_UNAVAILABLE'], itineraries: [] });
+  });
+
+  it.each(['NO_DATA', 'CANCELED', 'SKIPPED'] as const)('keeps provable %s static-instance departure semantics', async relationship => {
+    const f = await fixture(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
+    const now = Date.now() / 1000;
+    const decoded = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: now }, entity: [{ id: 'update', tripUpdate: {
+      trip: { tripId: 'T', startDate: '20261019', scheduleRelationship: relationship === 'CANCELED' ? 3 : 0 }, stopTimeUpdate: [{ stopId: 'A', stopSequence: 1, scheduleRelationship: relationship === 'NO_DATA' ? 2 : 1 }],
+    } }] }).finish());
+    const normalized = await applyTripUpdates(decoded, { manifest: f.compiled.manifest, version: f.version, shards: [f.compiled.shard], feedId: 'sf511' });
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload: normalized.stopUpdates }) }) } as unknown as DurableObjectNamespace;
+    const result = (await call(f.env, 'get_departures', { stopRef: ref('stop', 'A') })).result.structuredContent;
+    expect(result.status).toBe('scheduled_only');
+    expect(result.departures).toHaveLength(relationship === 'NO_DATA' ? 1 : 0);
+    if (relationship === 'NO_DATA') expect(result.departures[0]).toMatchObject({ predictedTime: null, status: 'scheduled_only' });
+  });
+  it('returns scheduled-only for mixed-authority transit legs through plan_trip', async () => {
+    const input = transferInput(); input.files['trips.txt'] = input.files['trips.txt'].replaceAll(',block', ',');
+    const f = await fixture(false, input); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
+    const now = Date.now() / 1000;
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload: [{ entityId: 'first', tripId: 'T', stopId: 'A', stopSequence: 1,
+        tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDA6MDA', status: 'realtime', departureTimeSeconds: Date.parse(at('09:00:00')) / 1000 }] }) }) } as unknown as DurableObjectNamespace;
+    const result = (await call(f.env, 'plan_trip', { origin: { ref: ref('stop', 'A') }, destination: { ref: ref('stop', 'C') }, maxWalkMetres: 0 })).result.structuredContent;
+    expect(result).toMatchObject({ status: 'scheduled_only', itineraries: [{ status: 'scheduled_only', legs: [{ status: 'realtime' }, { status: 'scheduled_only' }] }] });
+  });
   it.each((['missing-date', 'ambiguous', 'unique'] as const).flatMap(variant => (['trip', 'coverage'] as const).map(target => ({ variant, target }))))('resolves trip-ID-less alert identity only when canonical and unique: $variant / $target', async ({ variant, target }) => {
     const input = plannerInput();
     if (variant === 'ambiguous') {
