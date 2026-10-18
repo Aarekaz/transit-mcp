@@ -35,6 +35,11 @@ describe('regional transit manifests', () => {
     expect(JSON.stringify(coverage)).not.toMatch(/api_key|SF511_API_KEY/);
   });
 
+  it('does not interpret public places or client-owned personal meanings as coverage names', () => {
+    for (const query of ['Pier 39', 'SFO', 'home', 'work']) expect(getCoverage(query)).toBeUndefined();
+    expect(getPublicCities('dark')).toEqual(['dc', 'nyc']);
+  });
+
   it('does not fabricate agency IDs from the consolidated feed namespace', () => {
     expect(getCoverage('sfbay')?.agencyTimezones).toEqual({});
   });

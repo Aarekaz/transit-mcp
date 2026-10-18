@@ -7,6 +7,7 @@ import worker from '../../src/index';
 import { compileSchedule } from '../../src/transit/gtfs/static/compiler';
 import { StaticArtifactStore } from '../../src/transit/gtfs/realtime/snapshot-store';
 import { SFBAY_COVERAGE } from '../../src/regions/sfbay';
+import { corpus, corpusRef, sfBayCorpusFixture } from '../helpers/sfbay-corpus';
 
 import {
   legacyMcpRequest,
@@ -119,9 +120,51 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe('assembled MCP Worker', () => {
+  it('resolves reviewed SF names and validates a synthetic airport journey through the assembled Worker', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(corpus.now));
+    const fixture = await sfBayCorpusFixture('scheduled', env.TRANSIT_ARTIFACTS);
+    const sfEnv = { ...env, SFBAY_MODE: 'on' as const, REGION_FEED_HUB: fixture.hub };
+    const request = async (name: string, args: Record<string, unknown>, mode: 'on' | 'dark' = 'on') => {
+      const response = await worker.fetch(await modernMcpRequest('tools/call', { name, arguments: args }, {
+        headers: { 'CF-Connecting-IP': `203.0.113.${nextTestClient++}` },
+      }), { ...sfEnv, SFBAY_MODE: mode }, createExecutionContext());
+      expect(response.status).toBe(200);
+      return onlyResult(await readMcpResponse(response));
+    };
+    for (const query of ['SF', 'San Francisco', 'Bay Area']) {
+      const found = await request('find_transit', { query });
+      expect(record(found.structuredContent).coverages).toMatchObject([{ id: 'sfbay', available: true }]);
+    }
+    expect(record((await request('find_transit', { query: 'SFO' })).structuredContent).candidates)
+      .toMatchObject([{ providerId: 'syn_airport_rail', name: 'San Francisco International Airport' }]);
+    const planArgs = { coverage: 'SF', origin: { query: 'Pier 39' }, destination: { query: 'SFO' }, departAt: corpus.now, maxWalkMetres: 100 };
+    const planned = await request('plan_trip', planArgs);
+    expect(record(planned.structuredContent).itineraries).toMatchObject([{
+      arrivalTime: '2026-10-19T09:45:00-07:00', transfers: 1,
+      legs: [
+        { kind: 'transit', tripRef: corpusRef('trip', 'syn_muni_trip'), mode: 'tram', validatorOutcome: 'valid' },
+        { kind: 'walk', pathwayId: 'syn_emb_path', validatorOutcome: 'valid' },
+        { kind: 'transit', tripRef: corpusRef('trip', 'syn_bart_air_trip'), mode: 'subway', validatorOutcome: 'valid' },
+      ],
+    }]);
+    // The same populated artifact must remain inaccessible with production's dark mode.
+    for (const [name, args, collection] of [
+      ['find_transit', { query: 'SFO' }, 'candidates'],
+      ['plan_trip', planArgs, 'itineraries'],
+      ['get_departures', { stopRef: corpusRef('stop', 'syn_pier') }, 'departures'],
+      ['get_service_status', { coverage: 'SF' }, 'alerts'],
+      ['get_vehicle_status', { ref: corpusRef('route', 'syn_muni_route') }, 'vehicles'],
+    ] as const) {
+      const hidden = record((await request(name, args, 'dark')).structuredContent);
+      expect(hidden.status).toBe('unavailable');
+      expect(hidden[collection]).toEqual([]);
+    }
+  });
+
   it('simulates Bay Area tool discovery and a station search through the MCP wire', async () => {
     const artifact = await compileSchedule({ coverage: SFBAY_COVERAGE, feedId: 'sf511',
       window: { startDate: '20260101', endDate: '20261231' }, source: { url: 'https://511.org/open-data/transit', retrievedAt: '2026-10-18T00:00:00Z' },

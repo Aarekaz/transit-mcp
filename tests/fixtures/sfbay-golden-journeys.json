@@ -1,0 +1,50 @@
+{
+  "provenance": {
+    "classification": "synthetic_topology",
+    "reviewedAt": "2026-10-18",
+    "scope": "Acceptance fixtures only. All syn_ agency, route, trip and stop IDs, coordinates, times, pathways and realtime events are invented. No live feed IDs or operating-service claims. sf511 is the production feed namespace being exercised, not evidence that this fixture came from 511.",
+    "sourceUrl": "https://example.invalid/transit-mcp/fixtures/sfbay-golden-journeys",
+    "sources": [
+      { "url": "https://www.sfmta.com/stops/embarcadero-stockton-st-pier-39-14530", "supports": "Public Pier 39 stop name only; fixture does not use stop ID 14530." },
+      { "url": "https://www.bart.gov/stations/sfia", "supports": "SFO is San Francisco International Airport, served by BART." },
+      { "url": "https://www.bart.gov/guide/transit/transfers", "supports": "BART and Caltrain interchange at Millbrae; fixture transfer duration is synthetic." },
+      { "url": "https://www.caltrain.com/stations-zones", "supports": "Caltrain station names San Francisco, Millbrae and Palo Alto." },
+      { "url": "https://www.samtrans.com/samtrans-airport-service", "supports": "SamTrans serves SFO International Terminal Courtyard A; fixture route is synthetic." },
+      { "url": "https://511.org/open-data/transit", "supports": "Regional GTFS and GTFS-RT formats and provider attribution only." }
+    ]
+  },
+  "now": "2026-10-19T08:59:00-07:00",
+  "files": {
+    "agency.txt": "agency_id,agency_name,agency_url,agency_timezone\nsyn_muni,Muni,https://www.sfmta.com,America/Los_Angeles\nsyn_bart,BART,https://www.bart.gov,America/Los_Angeles\nsyn_caltrain,Caltrain,https://www.caltrain.com,America/Los_Angeles\nsyn_samtrans,SamTrans,https://www.samtrans.com,America/Los_Angeles\n",
+    "stops.txt": "stop_id,stop_name,stop_lat,stop_lon\nsyn_pier,The Embarcadero & Stockton St (Pier 39),37.8087,-122.4098\nsyn_muni_emb,Embarcadero Muni,37.793,-122.396\nsyn_bart_emb,Embarcadero BART,37.7929,-122.3968\nsyn_airport_rail,San Francisco International Airport,37.6159,-122.3922\nsyn_mill_bart,Millbrae BART,37.599,-122.386\nsyn_mill_cal,Millbrae Caltrain,37.599,-122.3862\nsyn_sf_cal,San Francisco Caltrain,37.776,-122.394\nsyn_palo,Palo Alto Caltrain,37.443,-122.165\nsyn_sam_city,San Mateo SamTrans,37.565,-122.322\nsyn_sam_airport,International Terminal Courtyard A,37.615,-122.3915\nsyn_closed,Closed stop,37.9,-122.2\nsyn_central_a,Central,37.7,-122.5\nsyn_central_b,Central,37.8,-122.5\n",
+    "routes.txt": "route_id,agency_id,route_short_name,route_long_name,route_type\nsyn_muni_route,syn_muni,MUNI_TEST,Synthetic waterfront,0\nsyn_bart_air_route,syn_bart,BART_AIR_TEST,Synthetic airport,1\nsyn_bart_mill_route,syn_bart,BART_MILL_TEST,Synthetic Millbrae,1\nsyn_cal_route,syn_caltrain,CALTRAIN_TEST,Synthetic peninsula,2\nsyn_sam_route,syn_samtrans,SAMTRANS_TEST,Synthetic airport bus,3\n",
+    "trips.txt": "route_id,service_id,trip_id,trip_headsign,direction_id\nsyn_muni_route,D,syn_muni_trip,Embarcadero,0\nsyn_bart_air_route,D,syn_bart_air_trip,Airport,0\nsyn_bart_mill_route,D,syn_bart_mill_trip,Millbrae,0\nsyn_cal_route,D,syn_cal_trip,Palo Alto,0\nsyn_sam_route,D,syn_sam_trip,Airport terminal,0\n",
+    "stop_times.txt": "trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type\nsyn_muni_trip,09:00:00,09:00:00,syn_pier,1,0,0\nsyn_muni_trip,09:12:00,09:12:00,syn_muni_emb,2,0,0\nsyn_bart_air_trip,09:15:00,09:15:00,syn_bart_emb,1,0,0\nsyn_bart_air_trip,09:45:00,09:45:00,syn_airport_rail,2,0,0\nsyn_bart_mill_trip,09:20:00,09:20:00,syn_bart_emb,1,0,0\nsyn_bart_mill_trip,09:50:00,09:50:00,syn_mill_bart,2,0,0\nsyn_cal_trip,09:25:00,09:25:00,syn_sf_cal,1,0,0\nsyn_cal_trip,09:55:00,09:55:00,syn_mill_cal,2,0,0\nsyn_cal_trip,10:25:00,10:25:00,syn_palo,3,0,0\nsyn_sam_trip,09:10:00,09:10:00,syn_sam_city,1,0,0\nsyn_sam_trip,09:40:00,09:40:00,syn_sam_airport,2,0,0\n",
+    "calendar.txt": "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nD,1,1,1,1,1,1,1,20261019,20261019\n",
+    "pathways.txt": "pathway_id,from_stop_id,to_stop_id,pathway_mode,is_bidirectional,length,traversal_time\nsyn_emb_path,syn_muni_emb,syn_bart_emb,1,1,80,120\nsyn_mill_path,syn_mill_bart,syn_mill_cal,1,1,60,120\n"
+  },
+  "realtime": {
+    "scheduled": { "ageSeconds": 0, "entities": [] },
+    "delayed": { "ageSeconds": 0, "entities": [{ "id": "syn_delay", "tripUpdate": { "trip": { "tripId": "syn_muni_trip", "routeId": "syn_muni_route", "startDate": "20261019", "startTime": "09:00:00", "scheduleRelationship": 0 }, "delay": 120 } }] },
+    "stale": { "ageSeconds": 240, "entities": [{ "id": "syn_stale_delay", "tripUpdate": { "trip": { "tripId": "syn_muni_trip", "startDate": "20261019", "startTime": "09:00:00", "scheduleRelationship": 0 }, "delay": 600 } }] },
+    "canceled": { "ageSeconds": 0, "entities": [{ "id": "syn_cancel", "tripUpdate": { "trip": { "tripId": "syn_muni_trip", "startDate": "20261019", "startTime": "09:00:00", "scheduleRelationship": 3 } } }] },
+    "alert": { "ageSeconds": 0, "entities": [{ "id": "syn_muni_alert", "alert": { "informedEntity": [{ "routeId": "syn_muni_route" }], "headerText": { "translation": [{ "language": "en", "text": "<b>Fixture service advisory</b>" }] }, "descriptionText": { "translation": [{ "language": "en", "text": "Synthetic advisory for acceptance testing." }] } } }, { "id": "syn_other_alert", "alert": { "informedEntity": [{ "routeId": "syn_sam_route" }], "headerText": { "translation": [{ "language": "en", "text": "Unrelated synthetic bus advisory" }] } } }] }
+  },
+  "journeys": [
+    { "name": "Pier 39 to SFO", "origin": "Pier 39", "destination": "SFO", "realtime": "scheduled", "departAt": "2026-10-19T08:59:00-07:00", "want": { "status": "scheduled_only", "trips": ["syn_muni_trip", "syn_bart_air_trip"], "agencies": ["syn_muni", "syn_bart"], "modes": ["tram", "subway"], "arrivalTime": "2026-10-19T16:45:00.000Z", "transfers": 1, "pathways": ["syn_emb_path"] } },
+    { "name": "BART to Caltrain at Millbrae", "origin": "Embarcadero BART", "destination": "Palo Alto Caltrain", "realtime": "scheduled", "departAt": "2026-10-19T09:19:00-07:00", "want": { "status": "scheduled_only", "trips": ["syn_bart_mill_trip", "syn_cal_trip"], "agencies": ["syn_bart", "syn_caltrain"], "modes": ["subway", "rail"], "arrivalTime": "2026-10-19T17:25:00.000Z", "transfers": 1, "pathways": ["syn_mill_path"] } },
+    { "name": "Muni only", "origin": "Pier 39", "destination": "Embarcadero Muni", "realtime": "scheduled", "departAt": "2026-10-19T08:59:00-07:00", "want": { "status": "scheduled_only", "trips": ["syn_muni_trip"], "agencies": ["syn_muni"], "modes": ["tram"], "arrivalTime": "2026-10-19T16:12:00.000Z", "transfers": 0, "pathways": [] } },
+    { "name": "Caltrain only", "origin": "San Francisco Caltrain", "destination": "Palo Alto Caltrain", "realtime": "scheduled", "departAt": "2026-10-19T09:24:00-07:00", "want": { "status": "scheduled_only", "trips": ["syn_cal_trip"], "agencies": ["syn_caltrain"], "modes": ["rail"], "arrivalTime": "2026-10-19T17:25:00.000Z", "transfers": 0, "pathways": [] } },
+    { "name": "SamTrans airport", "origin": "San Mateo SamTrans", "destination": "International Terminal Courtyard A", "realtime": "scheduled", "departAt": "2026-10-19T09:09:00-07:00", "want": { "status": "scheduled_only", "trips": ["syn_sam_trip"], "agencies": ["syn_samtrans"], "modes": ["bus"], "arrivalTime": "2026-10-19T16:40:00.000Z", "transfers": 0, "pathways": [] } },
+    { "name": "fresh Muni delay", "origin": "Pier 39", "destination": "Embarcadero Muni", "realtime": "delayed", "departAt": "2026-10-19T08:59:00-07:00", "want": { "status": "realtime", "trips": ["syn_muni_trip"], "agencies": ["syn_muni"], "modes": ["tram"], "arrivalTime": "2026-10-19T16:14:00.000Z", "transfers": 0, "pathways": [] } },
+    { "name": "stale realtime falls back to schedule", "origin": "Pier 39", "destination": "Embarcadero Muni", "realtime": "stale", "departAt": "2026-10-19T08:59:00-07:00", "want": { "status": "scheduled_only", "reason": "REALTIME_STALE", "trips": ["syn_muni_trip"], "agencies": ["syn_muni"], "modes": ["tram"], "arrivalTime": "2026-10-19T16:12:00.000Z", "transfers": 0, "pathways": [] } },
+    { "name": "canceled Muni trip cannot form a journey", "origin": "Pier 39", "destination": "Embarcadero Muni", "realtime": "canceled", "departAt": "2026-10-19T08:59:00-07:00", "want": { "status": "unavailable", "trips": [] } },
+    { "name": "late Muni arrival cannot catch BART", "origin": "Pier 39", "destination": "SFO", "realtime": "delayed", "departAt": "2026-10-19T08:59:00-07:00", "want": { "status": "unavailable", "trips": [] } },
+    { "name": "no service to an isolated stop", "origin": "Pier 39", "destination": "Closed stop", "realtime": "scheduled", "departAt": "2026-10-19T08:59:00-07:00", "want": { "status": "unavailable", "trips": [] } }
+  ],
+  "queries": {
+    "ambiguous": { "origin": "Central", "destination": "SFO", "candidates": ["syn_central_a", "syn_central_b"] },
+    "alert": { "route": "syn_muni_route", "ids": ["syn_muni_alert"], "title": "Fixture service advisory" },
+    "departures": { "stop": "syn_pier", "trip": "syn_muni_trip", "scheduledTime": "2026-10-19T16:00:00.000Z", "predictedTime": "2026-10-19T16:02:00.000Z" }
+  }
+}
