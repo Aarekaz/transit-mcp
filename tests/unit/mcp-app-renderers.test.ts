@@ -67,6 +67,16 @@ afterEach(() => {
 });
 
 describe('Transit Board arrival renderers', () => {
+  it('shows an overdue retained call as delayed rather than an immediate zero-minute arrival', () => {
+    const representative = EXPECTED_TOOL_CONTRACTS.get_station_predictions.structuredContent;
+    const container = mountResult('get_station_predictions', {
+      ...representative,
+      predictions: [{ ...representative.predictions[0], arrivalStatus: 'DELAYED', minutesAway: 0, arrivalTime: '2026-10-18T15:59:30.000Z' }],
+    });
+    expect(queryRequired(container, '.arrival-due').textContent).toBe('Delayed');
+    expect(container.textContent).not.toContain('0 min');
+  });
+
   it('shows a numeric realtime countdown and provider group without claiming a physical track', () => {
     const representative = EXPECTED_TOOL_CONTRACTS.get_station_predictions.structuredContent;
     const container = mountResult('get_station_predictions', {

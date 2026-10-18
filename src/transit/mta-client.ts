@@ -32,23 +32,12 @@ const MTA_FEEDS = {
   'SIR': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-si',
 } as const;
 
-/**
- * Map subway lines to their corresponding feeds
- */
-const LINE_TO_FEED: Record<string, keyof typeof MTA_FEEDS> = {
-  A: 'ACE', C: 'ACE', E: 'ACE', H: 'ACE',
-  B: 'BDFM', D: 'BDFM', F: 'BDFM', FX: 'BDFM', M: 'BDFM', FS: 'BDFM',
-  G: 'G', J: 'JZ', Z: 'JZ', N: 'NQRW', Q: 'NQRW', R: 'NQRW', W: 'NQRW', L: 'L',
-  '1': '1234567', '2': '1234567', '3': '1234567', GS: '1234567',
-  '4': '1234567', '5': '1234567', '6': '1234567', '6X': '1234567', '7': '1234567', '7X': '1234567', SI: 'SIR',
-};
-
-// Static stations use the display label S for three different GTFS routes.
-const SHUTTLE_FEED_BY_STATION: Record<string, keyof typeof MTA_FEEDS> = {
-  '901': '1234567', '902': '1234567',
-  S01: 'BDFM', S03: 'BDFM', S04: 'BDFM', D26: 'BDFM',
-  H04: 'ACE', H12: 'ACE', H13: 'ACE', H14: 'ACE', H15: 'ACE',
-};
+function eventTimestamp(event: GtfsRealtimeBindings.transit_realtime.TripUpdate.IStopTimeEvent | null | undefined): number | undefined {
+  // protobufjs exposes an inherited zero even when the optional field is absent.
+  if (!event || !Object.prototype.hasOwnProperty.call(event, 'time')) return undefined;
+  const seconds = Number(event.time);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
+}
 
 interface CachedFeed {
   data: GtfsRealtimeBindings.transit_realtime.FeedMessage;
@@ -119,13 +108,10 @@ export class MTAClient extends TransitAPIClient {
   ): Promise<TransitPrediction[]> {
     const predictions: TransitPrediction[] = [];
 
-    const station = NYC_STATIONS.find(candidate => candidate.id === stationId.replace(/[NS]$/, ''));
-    const stationFeeds = station?.lines.map(line => line === 'S'
-      ? SHUTTLE_FEED_BY_STATION[station.id] : LINE_TO_FEED[line]);
-    if (!stationFeeds?.length || stationFeeds.some(feed => !feed)) {
-      throw new Error('MTA predictions unavailable: station feed coverage is unknown');
-    }
-    const feedsToCheck = [...new Set(stationFeeds)] as (keyof typeof MTA_FEEDS)[];
+    // A realtime reroute can serve a platform outside its static route membership.
+    // No current authoritative evidence rules any feed out for this station.
+    // The route IDs (including GS, FS and H shuttles) come from each trip update.
+    const feedsToCheck = Object.keys(MTA_FEEDS) as (keyof typeof MTA_FEEDS)[];
     const now = Date.now();
 
     for (const feedKey of feedsToCheck) {
@@ -155,14 +141,14 @@ export class MTAClient extends TransitAPIClient {
 
             if (baseStopId === stationId || stopId === stationId) {
               if (stopTimeUpdate.scheduleRelationship === 1 || stopTimeUpdate.scheduleRelationship === 2) continue;
-              const arrival = stopTimeUpdate.arrival?.time;
-              const departure = stopTimeUpdate.departure?.time;
-              const arrivalSeconds = arrival == null ? undefined : Number(arrival);
-              const departureSeconds = departure == null ? undefined : Number(departure);
+              const arrivalSeconds = eventTimestamp(stopTimeUpdate.arrival);
+              const departureSeconds = eventTimestamp(stopTimeUpdate.departure);
               const eventSeconds = arrivalSeconds ?? departureSeconds;
-              if (eventSeconds === undefined || !Number.isFinite(eventSeconds) || eventSeconds <= 0) continue;
+              if (eventSeconds === undefined) continue;
               const lastEventSeconds = departureSeconds ?? arrivalSeconds!;
-              if (!Number.isFinite(lastEventSeconds) || lastEventSeconds * 1000 < now) continue;
+              // NYCT removes a stop only after departure. A retained past-due
+              // estimate is uncertain/delayed, not proof that the train has left.
+              const delayed = lastEventSeconds * 1000 < now;
 
               // Calculate minutes away
               const arrivalDate = new Date(eventSeconds * 1000);
@@ -179,7 +165,8 @@ export class MTAClient extends TransitAPIClient {
                 destination: terminal?.name ?? 'Unknown',
                 destinationCode: terminal?.id,
                 arrivalTime: arrivalDate.toISOString(),
-                minutesAway: boarding ? 'BRD' : minutesAway <= 0 ? 'ARR' : minutesAway,
+                minutesAway: delayed ? 0 : boarding ? 'BRD' : minutesAway <= 0 ? 'ARR' : minutesAway,
+                arrivalStatus: delayed ? 'DELAYED' : undefined,
                 direction,
               });
             }
