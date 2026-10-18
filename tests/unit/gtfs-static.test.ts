@@ -37,7 +37,67 @@ function scheduleInput() {
   };
 }
 
+function mutateShardMetadata(bytes: Uint8Array, mutate: (metadata: Record<string, unknown>) => void): Uint8Array {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const oldLength = view.getUint32(4, true), oldOffset = Math.ceil((16 + oldLength) / 4) * 4;
+  const metadata = JSON.parse(new TextDecoder().decode(bytes.subarray(16, 16 + oldLength)));
+  mutate(metadata);
+  const encoded = new TextEncoder().encode(JSON.stringify(metadata)), offset = Math.ceil((16 + encoded.length) / 4) * 4;
+  const result = new Uint8Array(offset + bytes.length - oldOffset);
+  result.set(bytes.subarray(0, 16));
+  new DataView(result.buffer).setUint32(4, encoded.length, true);
+  result.set(encoded, 16); result.set(bytes.subarray(oldOffset), offset);
+  return result;
+}
+
 describe('coverage-neutral schedule compilation', () => {
+  it.each(['absent', 'blank'])('normalizes a single anonymous agency with %s agency_id columns', async variant => {
+    const input = scheduleInput();
+    input.files['agency.txt'] = variant === 'absent'
+      ? 'agency_name,agency_url,agency_timezone\nMuni,https://sfmta.com,America/Los_Angeles\n'
+      : 'agency_id,agency_name,agency_url,agency_timezone\n,Muni,https://sfmta.com,America/Los_Angeles\n';
+    input.files['routes.txt'] = variant === 'absent'
+      ? 'route_id,route_short_name,route_long_name,route_type\nR,N,Judah,0\n'
+      : 'route_id,agency_id,route_short_name,route_long_name,route_type\nR,,N,Judah,0\n';
+    const first = await compiler.compileSchedule(input);
+    const normalizedRef = 'tr:sfbay:sf511:agency:X19hbm9ueW1vdXNfYWdlbmN5X18';
+    expect(first.shard.agencyTimezones).toEqual({ [normalizedRef]: 'America/Los_Angeles' });
+    expect(first.shard.routes[0]!.agencyRef).toBe(normalizedRef);
+    expect(first.shard.source.anonymousAgencyRef).toBe(normalizedRef);
+    expect((await compiler.compileSchedule(input)).shardBytes).toEqual(first.shardBytes);
+    // The same omission becomes ambiguous as soon as a second agency exists.
+    input.files['agency.txt'] += variant === 'absent'
+      ? 'Other,https://other.example,America/Los_Angeles\n'
+      : 'B,Other,https://other.example,America/Los_Angeles\n';
+    await expect(compiler.compileSchedule(input)).rejects.toThrow(/agency_id/);
+  });
+
+  it('requires route agency_id when multiple named agencies exist', async () => {
+    const input = scheduleInput();
+    input.files['agency.txt'] += 'B,Other,https://other.example,America/Los_Angeles\n';
+    input.files['routes.txt'] = 'route_id,route_short_name,route_long_name,route_type\nR,N,Judah,0\n';
+    await expect(compiler.compileSchedule(input)).rejects.toThrow(/agency_id/);
+  });
+
+  it.each([2, 3, 4, 5])('preserves type %i trip transfers across adjacent service days after midnight', async transferType => {
+    const input = scheduleInput();
+    input.files['calendar.txt'] = input.files['calendar.txt'].split('\n')[0]! + '\n';
+    input.files['calendar_dates.txt'] = 'service_id,date,exception_type\nWK,20261018,1\nEX,20261019,1\n';
+    input.files['stop_times.txt'] = input.files['stop_times.txt'].replace('X,12:00:00,12:00:00', 'X,01:15:00,01:15:00');
+    input.files['transfers.txt'] = `from_stop_id,to_stop_id,from_trip_id,to_trip_id,transfer_type,min_transfer_time\nP2,P2,T,X,${transferType},120\n`;
+    const previous = await compiler.compileSchedule({ ...input, window: { startDate: '20261018', endDate: '20261018' } });
+    const next = await compiler.compileSchedule({ ...input, window: { startDate: '20261019', endDate: '20261019' } });
+    expect(previous.shard.trips.map(t => t.providerId)).toEqual(['T']);
+    expect(next.shard.trips.map(t => t.providerId)).toEqual(['X']);
+    for (const result of [previous, next]) {
+      expect(result.shard.transfers).toEqual([expect.objectContaining({ fromTripRef: 'tr:sfbay:sf511:trip:VA', toTripRef: 'tr:sfbay:sf511:trip:WA', transferType })]);
+      expect(shards.decodeScheduleShard(result.shardBytes)).toEqual(result.shard);
+    }
+    expect(previous.shard.transferBoundaryTrips).toEqual([{ ref: 'tr:sfbay:sf511:trip:WA', providerId: 'X', routeRef: 'tr:sfbay:sf511:route:Ug', serviceId: 'EX', firstDepartureSeconds: 4500, lastArrivalSeconds: 4500 }]);
+    expect(next.shard.transferBoundaryTrips).toEqual([{ ref: 'tr:sfbay:sf511:trip:VA', providerId: 'T', routeRef: 'tr:sfbay:sf511:route:Ug', serviceId: 'WK', firstDepartureSeconds: 90030, lastArrivalSeconds: 90600 }]);
+    expect(previous.shard.source.sha256).toBe(next.shard.source.sha256);
+    expect(next.shard.calendars.WK!.exceptions).toEqual({ '20261018': 1 });
+  });
   it('round-trips numeric timetable rows without serializing them as JSON', async () => {
     expect(shards.decodeScheduleShard).toBeTypeOf('function');
     const { shard, shardBytes } = await compiler.compileSchedule(scheduleInput());
@@ -64,6 +124,40 @@ describe('coverage-neutral schedule compilation', () => {
     const offset = (16 + view.getUint32(4, true) + 3) & ~3;
     view.setUint32(offset + 4, 999999, true);
     expect(() => shards.decodeScheduleShard(corrupt)).toThrow(/shard/);
+  });
+
+  it.each(['coverageId', 'feedId', 'window', 'source', 'agencyTimezones', 'routes', 'patterns', 'calendars', 'frequencies', 'blocks', 'transfers', 'pathways', 'transferBoundaryTrips'])('rejects missing %s binary metadata', async key => {
+    const { shardBytes } = await compiler.compileSchedule(scheduleInput());
+    expect(() => shards.decodeScheduleShard(mutateShardMetadata(shardBytes, metadata => { delete metadata[key]; }))).toThrow(/shard/);
+  });
+
+  it('rejects invalid trip metadata and trips without timetable rows', async () => {
+    const { shard, shardBytes } = await compiler.compileSchedule(scheduleInput());
+    expect(() => shards.decodeScheduleShard(mutateShardMetadata(shardBytes, metadata => {
+      delete (metadata.trips as Record<string, unknown>[])[0]!.routeRef;
+    }))).toThrow(/shard/);
+    shard.trips[0]!.stopTimes = [];
+    expect(() => shards.decodeScheduleShard(shards.encodeScheduleShard(shard))).toThrow(/shard/);
+  });
+
+  it.each([
+    ['unknown trip index', 0, 0, 999], ['unknown headsign index', 0, 8, 999],
+    ['repeated sequence', 1, 2, 10], ['arrival before previous departure', 1, 3, 89999],
+    ['missing arrival only', 0, 3, 0xffffffff], ['departure before arrival', 0, 4, 89999],
+  ])('rejects corrupt binary %s', async (_name, row, column, value) => {
+    const { shardBytes } = await compiler.compileSchedule(scheduleInput());
+    const view = new DataView(shardBytes.buffer), offset = Math.ceil((16 + view.getUint32(4, true)) / 4) * 4;
+    view.setUint32(offset + (row * 9 + column) * 4, value, true);
+    expect(() => shards.decodeScheduleShard(shardBytes)).toThrow(/shard/);
+  });
+
+  it('checks ordering across untimed intermediate rows', async () => {
+    const input = scheduleInput();
+    input.files['stop_times.txt'] += 'T,,,P1,15,0,0\n';
+    const { shardBytes } = await compiler.compileSchedule(input);
+    const view = new DataView(shardBytes.buffer), offset = Math.ceil((16 + view.getUint32(4, true)) / 4) * 4;
+    view.setUint32(offset + (2 * 9 + 3) * 4, 89999, true);
+    expect(() => shards.decodeScheduleShard(shardBytes)).toThrow(/shard/);
   });
   it('compiles ordered patterns, source agency timezones and times beyond midnight', async () => {
     expect(compiler.compileSchedule).toBeTypeOf('function');
@@ -175,6 +269,26 @@ describe('MobilityData publication gate', () => {
   const allowlist = { coverageId: 'sfbay', warnings: [{ code: 'some_warning', reason: 'Fixture exception for a documented operator issue.', expires: '2026-11-01' }] };
   const report = (severity: string) => ({ summary, notices: [{ code: 'some_warning', severity, totalNotices: 1, sampleNotices: [] }] });
 
+  it.each([
+    ['missing-env', undefined], ['missing-file', null], ['malformed', '{'], ['wrong-shape', '{}'],
+    ['empty-file', ''], ['execution-errors', '{"notices":[{"code":"thread_execution_error","severity":"ERROR","totalNotices":1,"sampleNotices":[{"exception":"java.lang.OutOfMemoryError","message":"Java heap space"}]}]}'],
+    ['wrong-empty-wrapper', '[]'], ['extra-error-field', '{"notices":[],"errors":["failed"]}'],
+  ])('publishes no manifest for %s system-error evidence', (name, content) => {
+    const directory = mkdtempSync(join(tmpdir(), 'gtfs-system-gate-'));
+    try {
+      const reportPath = join(directory, 'report.json'), systemPath = join(directory, 'system_errors.json'), output = join(directory, 'output');
+      writeFileSync(reportPath, JSON.stringify({ summary, notices: [] }));
+      if (typeof content === 'string') writeFileSync(systemPath, content);
+      const result = spawnSync('bun', ['scripts/build-sfbay-artifact.ts', output], { encoding: 'utf8', env: {
+        ...process.env, SFBAY_GTFS_DIRECTORY: resolve('tests/fixtures/sfbay-gtfs'), SFBAY_VALIDATOR_REPORT: reportPath,
+        SFBAY_VALIDATOR_SYSTEM_ERRORS: name === 'missing-env' ? '' : systemPath,
+        SFBAY_SOURCE_RETRIEVED_AT: '2026-10-17T00:00:00Z', SFBAY_WINDOW_START: '20261018', SFBAY_WINDOW_END: '20261020',
+      } });
+      expect(result.status).not.toBe(0);
+      expect(existsSync(join(output, 'manifest.json'))).toBe(false);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
   it('records validator provenance while allowing only documented unexpired warnings', async () => {
     expect(artifacts.validateMobilityDataReport).toBeTypeOf('function');
     expect(await artifacts.validateMobilityDataReport(JSON.stringify(report('WARNING')), allowlist, 'sfbay', '2026-10-17')).toMatchObject({
@@ -202,8 +316,11 @@ describe('MobilityData publication gate', () => {
     const directory = mkdtempSync(join(tmpdir(), 'gtfs-build-test-'));
     try {
       const reportPath = join(directory, 'report.json');
+      const systemErrorsPath = join(directory, 'system_errors.json');
       writeFileSync(reportPath, JSON.stringify({ summary, notices: [] }));
+      writeFileSync(systemErrorsPath, '{"notices":[]}');
       const env = { ...process.env, SFBAY_GTFS_DIRECTORY: resolve('tests/fixtures/sfbay-gtfs'),
+        SFBAY_VALIDATOR_SYSTEM_ERRORS: systemErrorsPath,
         SFBAY_VALIDATOR_REPORT: reportPath, SFBAY_SOURCE_RETRIEVED_AT: '2026-10-17T00:00:00Z',
         SFBAY_WINDOW_START: '20261018', SFBAY_WINDOW_END: '20261020' };
       const run = (output: string, overrides = {}) => spawnSync('bun', ['scripts/build-sfbay-artifact.ts', output], { env: { ...env, ...overrides }, encoding: 'utf8' });
@@ -213,7 +330,7 @@ describe('MobilityData publication gate', () => {
       expect(run(second).status).toBe(0);
       expect(readFileSync(join(first, 'manifest.json'))).toEqual(readFileSync(join(second, 'manifest.json')));
       const manifest = JSON.parse(readFileSync(join(first, 'manifest.json'), 'utf8'));
-      expect(manifest.validator).toMatchObject({ version: '8.0.1', reportSha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
+      expect(manifest.validator).toMatchObject({ version: '8.0.1', reportSha256: expect.stringMatching(/^[a-f0-9]{64}$/), systemErrorsSha256: expect.stringMatching(/^[a-f0-9]{64}$/), systemErrorsFormat: 'MobilityData notices' });
       for (const artifact of [manifest.discovery, ...manifest.shards]) {
         expect(readFileSync(join(first, artifact.key))).toEqual(readFileSync(join(second, artifact.key)));
       }

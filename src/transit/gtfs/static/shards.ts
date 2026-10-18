@@ -1,4 +1,50 @@
 import type { ScheduleShard } from './schema';
+import { z } from 'zod';
+import { parseTransitRef, type TransitRef } from '../../core/refs';
+import { parseServiceDate } from './time';
+
+const id = z.string().min(1);
+const uint = z.number().int().min(0).max(0xfffffffe);
+const time = z.number().int().min(0).max(999 * 3600 + 3599).nullable();
+const reference = (kind: 'agency' | 'stop' | 'route' | 'trip') => z.custom<TransitRef>(value => typeof value === 'string' && parseTransitRef(value)?.kind === kind && value.split(':').length === 5);
+const agencyRef = reference('agency'), stopRef = reference('stop'), routeRef = reference('route'), tripRef = reference('trip');
+const direction = z.number().int().min(0).max(1).nullable();
+const date = z.string().refine(value => { try { parseServiceDate(value); return true; } catch { return false; } });
+const timezone = id.refine(value => { try { new Intl.DateTimeFormat('en-US', { timeZone: value }); return true; } catch { return false; } });
+const hash = z.string().regex(/^[a-f0-9]{64}$/);
+const calendar = z.object({
+  monday: z.boolean(), tuesday: z.boolean(), wednesday: z.boolean(), thursday: z.boolean(),
+  friday: z.boolean(), saturday: z.boolean(), sunday: z.boolean(),
+  startDate: z.union([date, z.literal('00000000')]), endDate: z.union([date, z.literal('99999999')]),
+  exceptions: z.record(date, z.union([z.literal(1), z.literal(2)])),
+});
+const tripIdentity = { ref: tripRef, providerId: id, routeRef, serviceId: id };
+const metadataSchema = z.object({
+  schemaVersion: z.literal(2), coverageId: id, feedId: id,
+  window: z.object({ startDate: date, endDate: date }).refine(value => value.startDate <= value.endDate),
+  source: z.object({ feedId: id, url: z.url(), retrievedAt: id.refine(value => Number.isFinite(Date.parse(value))), sha256: hash,
+    feedInfo: z.array(z.record(z.string(), z.string())), anonymousAgencyRef: agencyRef.optional() }),
+  agencyTimezones: z.record(agencyRef, timezone),
+  stops: z.array(z.object({ ref: stopRef, providerId: id, name: z.string(), latitude: z.number().nullable(), longitude: z.number().nullable(),
+    locationType: uint.max(4), parentStationRef: stopRef.optional(), wheelchairBoarding: uint.max(2) })),
+  routes: z.array(z.object({ ref: routeRef, providerId: id, agencyRef, shortName: z.string(), longName: z.string(),
+    mode: z.enum(['tram', 'subway', 'rail', 'bus', 'ferry', 'cable_tram', 'aerial', 'funicular', 'trolleybus', 'monorail']),
+    routeType: uint, color: z.string(), textColor: z.string() })),
+  trips: z.array(z.object({ ...tripIdentity, patternId: hash, headsign: z.string(), directionId: direction,
+    blockId: z.string(), wheelchairAccessible: uint.max(2), bikesAllowed: uint.max(2) })),
+  patterns: z.array(z.object({ id: hash, routeRef, directionId: direction, stopRefs: z.array(stopRef).min(1),
+    pickupTypes: z.array(uint.max(3)), dropOffTypes: z.array(uint.max(3)) })),
+  calendars: z.record(id, calendar),
+  frequencies: z.array(z.object({ tripRef, startSeconds: time, endSeconds: time, headwaySeconds: uint.min(1), exactTimes: uint.max(1) })),
+  blocks: z.record(id, z.array(tripRef)),
+  transfers: z.array(z.object({ fromStopRef: stopRef.optional(), toStopRef: stopRef.optional(), fromRouteRef: routeRef.optional(), toRouteRef: routeRef.optional(),
+    fromTripRef: tripRef.optional(), toTripRef: tripRef.optional(), transferType: uint.max(5), minTransferSeconds: uint.nullable() })),
+  pathways: z.array(z.object({ id, fromStopRef: stopRef, toStopRef: stopRef, mode: uint.max(7), bidirectional: z.boolean(),
+    lengthMetres: z.number().nullable(), traversalSeconds: uint.nullable(), stairCount: z.number().nullable(), maxSlope: z.number().nullable(),
+    minWidthMetres: z.number().nullable(), signpostedAs: z.string(), reversedSignpostedAs: z.string() })),
+  transferBoundaryTrips: z.array(z.object({ ...tripIdentity, firstDepartureSeconds: time, lastArrivalSeconds: time })),
+  headsigns: z.array(z.string()),
+});
 
 /** Locale-independent canonical JSON is used only for the metadata section. */
 export function canonicalJson(value: unknown): string {
@@ -51,7 +97,9 @@ export function encodeScheduleShard(shard: ScheduleShard): Uint8Array {
   return bytes;
 }
 
-/** Decode only after the manifest's SHA-256 has been verified by the loader. */
+/** Checks metadata shape, local references, patterns and timetable invariants.
+ * The loader must first verify the manifest hash and byte budget. Source truth,
+ * GTFS semantic validation and report authenticity remain producer boundaries. */
 export function decodeScheduleShard(bytes: Uint8Array): ScheduleShard {
   try {
     if (bytes.length < HEADER_BYTES || bytes[0] !== 77 || bytes[1] !== 84 || bytes[2] !== 83 || bytes[3] !== 50) throw new Error();
@@ -59,10 +107,45 @@ export function decodeScheduleShard(bytes: Uint8Array): ScheduleShard {
     const metadataLength = view.getUint32(4, true), rowCount = view.getUint32(8, true);
     const offset = Math.ceil((HEADER_BYTES + metadataLength) / 4) * 4;
     if (view.getUint32(12, true) !== ROW_WORDS || offset + rowCount * ROW_WORDS * 4 !== bytes.length) throw new Error();
-    const metadata = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(HEADER_BYTES, HEADER_BYTES + metadataLength))) as ScheduleShard & { headsigns: string[] };
-    if (metadata.schemaVersion !== 2 || !Array.isArray(metadata.trips) || !Array.isArray(metadata.stops) || !Array.isArray(metadata.headsigns)) throw new Error();
-    const { headsigns, ...shard } = metadata;
-    for (const trip of shard.trips) trip.stopTimes = [];
+    const metadata = metadataSchema.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(HEADER_BYTES, HEADER_BYTES + metadataLength))));
+    const { headsigns, ...rest } = metadata;
+    const shard: ScheduleShard = { ...rest, trips: rest.trips.map(trip => ({ ...trip, stopTimes: [] })),
+      frequencies: rest.frequencies.map(frequency => {
+        if (frequency.startSeconds === null || frequency.endSeconds === null || frequency.endSeconds <= frequency.startSeconds) throw new Error();
+        return { ...frequency, startSeconds: frequency.startSeconds, endSeconds: frequency.endSeconds };
+      }) };
+    if (shard.source.feedId !== shard.feedId) throw new Error();
+    const indexed = <T extends { ref: TransitRef }>(values: T[]) => {
+      const map = new Map(values.map(value => [value.ref, value]));
+      if (map.size !== values.length) throw new Error();
+      for (const value of values) {
+        const parsed = parseTransitRef(value.ref)!;
+        if (parsed.coverage !== shard.coverageId || parsed.feed !== shard.feedId) throw new Error();
+      }
+      return map;
+    };
+    const stops = indexed(shard.stops), routes = indexed(shard.routes), trips = indexed(shard.trips);
+    const boundaries = indexed(shard.transferBoundaryTrips);
+    for (const boundary of boundaries.values()) if (trips.has(boundary.ref) || !routes.has(boundary.routeRef) || !Object.hasOwn(shard.calendars, boundary.serviceId)) throw new Error();
+    for (const stop of stops.values()) if (stop.parentStationRef && !stops.has(stop.parentStationRef)) throw new Error();
+    for (const route of routes.values()) if (!Object.hasOwn(shard.agencyTimezones, route.agencyRef)) throw new Error();
+    const patterns = new Map(shard.patterns.map(pattern => [pattern.id, pattern]));
+    if (patterns.size !== shard.patterns.length) throw new Error();
+    for (const pattern of patterns.values()) {
+      if (!routes.has(pattern.routeRef) || pattern.stopRefs.some(ref => !stops.has(ref)) ||
+        pattern.pickupTypes.length !== pattern.stopRefs.length || pattern.dropOffTypes.length !== pattern.stopRefs.length) throw new Error();
+    }
+    for (const trip of trips.values()) if (!routes.has(trip.routeRef) || !patterns.has(trip.patternId) || !Object.hasOwn(shard.calendars, trip.serviceId)) throw new Error();
+    for (const frequency of shard.frequencies) if (!trips.has(frequency.tripRef)) throw new Error();
+    for (const block of Object.values(shard.blocks)) if (block.some(ref => !trips.has(ref))) throw new Error();
+    for (const transfer of shard.transfers) {
+      if ([transfer.fromStopRef, transfer.toStopRef].some(ref => ref && !stops.has(ref)) ||
+        [transfer.fromRouteRef, transfer.toRouteRef].some(ref => ref && !routes.has(ref)) ||
+        [transfer.fromTripRef, transfer.toTripRef].some(ref => ref && !trips.has(ref) && !boundaries.has(ref))) throw new Error();
+    }
+    for (const pathway of shard.pathways) if (!stops.has(pathway.fromStopRef) || !stops.has(pathway.toStopRef)) throw new Error();
+    const lastDepartures = new Map<TransitRef, number>();
+    let lastTripIndex = -1;
     for (let row = 0; row < rowCount; row++) {
       const word = (column: number) => view.getUint32(offset + (row * ROW_WORDS + column) * 4, true);
       const trip = shard.trips[word(0)], stop = shard.stops[word(1)], headsign = headsigns[word(8)];
@@ -70,11 +153,19 @@ export function decodeScheduleShard(bytes: Uint8Array): ScheduleShard {
       const arrivalSeconds = word(3) === UNKNOWN_TIME ? null : word(3);
       const departureSeconds = word(4) === UNKNOWN_TIME ? null : word(4);
       const previous = trip.stopTimes.at(-1);
+      if (word(0) < lastTripIndex) throw new Error();
+      lastTripIndex = word(0);
       if (previous && previous.sequence >= word(2)) throw new Error();
       if ((arrivalSeconds === null) !== (departureSeconds === null) ||
-        (arrivalSeconds !== null && departureSeconds !== null && departureSeconds < arrivalSeconds)) throw new Error();
+        (arrivalSeconds !== null && departureSeconds !== null && (departureSeconds < arrivalSeconds || arrivalSeconds < (lastDepartures.get(trip.ref) ?? 0) || departureSeconds > 999 * 3600 + 3599))) throw new Error();
+      if (departureSeconds !== null) lastDepartures.set(trip.ref, departureSeconds);
       trip.stopTimes.push({ stopRef: stop.ref, sequence: word(2), arrivalSeconds, departureSeconds,
         pickupType: word(5), dropOffType: word(6), timepoint: word(7), headsign });
+    }
+    for (const trip of shard.trips) {
+      const pattern = patterns.get(trip.patternId)!;
+      if (!trip.stopTimes.length || trip.stopTimes.length !== pattern.stopRefs.length || pattern.routeRef !== trip.routeRef || pattern.directionId !== trip.directionId ||
+        trip.stopTimes.some((time, index) => time.stopRef !== pattern.stopRefs[index] || time.pickupType !== pattern.pickupTypes[index] || time.dropOffType !== pattern.dropOffTypes[index])) throw new Error();
     }
     return shard;
   } catch {

@@ -14,10 +14,21 @@ const warningAllowlistSchema = z.object({
   warnings: z.array(z.object({ code: z.string().trim().min(1), reason: z.string().trim().min(1), expires: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })),
 });
 
+/** NoticeContainer.exportSystemErrors -> ValidationReportDeserializer.serialize.
+ * The canonical empty report is exactly an object containing an empty notices
+ * array. Unknown shapes and every nonempty list fail closed, regardless of count. */
+export async function validateMobilityDataSystemErrors(systemErrorsJson: string): Promise<Pick<ValidatorEvidence, 'systemErrorsSha256' | 'systemErrorsFormat'>> {
+  let errors;
+  try { errors = z.object({ notices: z.array(z.unknown()) }).strict().parse(JSON.parse(systemErrorsJson)); }
+  catch { throw new Error('Invalid MobilityData system errors report'); }
+  if (errors.notices.length !== 0) throw new Error('MobilityData system errors block publication');
+  return { systemErrorsSha256: await sha256(new TextEncoder().encode(systemErrorsJson)), systemErrorsFormat: 'MobilityData notices' };
+}
+
 /** Validate a caller-supplied canonical MobilityData report before any publication. */
 export async function validateMobilityDataReport(
   reportJson: string, allowlistInput: unknown, coverageId: string, today: string,
-): Promise<ValidatorEvidence> {
+): Promise<Omit<ValidatorEvidence, 'systemErrorsSha256' | 'systemErrorsFormat'>> {
   let report;
   try { report = validatorReportSchema.parse(JSON.parse(reportJson)); }
   catch { throw new Error('Invalid MobilityData validator report'); }
