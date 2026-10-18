@@ -52,6 +52,79 @@ async function addOtherFeed(f: Awaited<ReturnType<typeof fixture>>, input = plan
 afterEach(() => vi.useRealTimers());
 
 describe('global transit MCP boundary', () => {
+  it.each((['missing-date', 'ambiguous', 'unique'] as const).flatMap(variant => (['trip', 'coverage'] as const).map(target => ({ variant, target }))))('resolves trip-ID-less alert identity only when canonical and unique: $variant / $target', async ({ variant, target }) => {
+    const input = plannerInput();
+    if (variant === 'ambiguous') {
+      input.files['trips.txt'] += 'R,D,U,Destination,0,\n';
+      input.files['stop_times.txt'] += 'U,09:00:00,09:00:00,A,1,0,0\nU,09:20:00,09:20:00,C,2,0,0\n';
+    }
+    const f = await fixture(false, input); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
+    const now = Math.floor(Date.now() / 1000);
+    const selector = { trip: { routeId: 'R', directionId: 0, startTime: '09:00:00', ...(variant === 'missing-date' ? {} : { startDate: '20261019' }) } };
+    const payload = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: now },
+      entity: [{ id: 'idless', alert: { informedEntity: [selector] } }] }).finish()).alerts;
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload }) }) } as unknown as DurableObjectNamespace;
+    const result = (await call(f.env, 'get_service_status', target === 'coverage' ? { coverage: 'sfbay' } : { ref: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDA6MDA' })).result.structuredContent;
+    expect(result.alerts.map((alert: any) => alert.id)).toEqual(variant === 'unique' ? ['idless'] : []);
+    if (variant === 'unique') expect(result.alerts[0].selectors).toEqual([selector]);
+  });
+  it.each(['route', 'agency', 'stop'] as const)('expands %s status into canonical dated subentities without cross-entity or cross-date matches', async kind => {
+    const input = plannerInput();
+    input.files['agency.txt'] += 'B,Other,https://example.test,America/Los_Angeles\n';
+    input.files['routes.txt'] = input.files['routes.txt'].replace('S,A,S,0', 'S,B,S,0');
+    input.files['trips.txt'] += 'S,D,U,Other,1,\n';
+    input.files['stop_times.txt'] += 'U,09:00:00,09:00:00,D,1,0,0\nU,09:20:00,09:20:00,C,2,0,0\n';
+    const f = await fixture(false, input); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
+    const now = Date.now() / 1000;
+    const cases = [
+      { id: 'direction', selector: { routeId: 'R', directionId: 0 } },
+      { id: 'trip', selector: { trip: { tripId: 'T', startDate: '20261019', startTime: '09:00:00' } } },
+      { id: 'other-direction', selector: { routeId: 'R', directionId: 1 } },
+      { id: 'other-entity', selector: { trip: { tripId: 'U', startDate: '20261019', startTime: '09:00:00' } } },
+      { id: 'other-date', selector: { trip: { tripId: 'T', startDate: '20261020', startTime: '09:00:00' } } },
+      { id: 'mixed-fields', selector: { routeId: 'R', trip: { tripId: 'U', startDate: '20261019' } } },
+    ];
+    const payload = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: now },
+      entity: cases.map(item => ({ id: item.id, alert: { informedEntity: [item.selector] } })) }).finish()).alerts;
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload }) }) } as unknown as DurableObjectNamespace;
+    const entityRef = kind === 'agency' ? 'tr:sfbay:sf511:agency:QQ' : ref(kind, kind === 'route' ? 'R' : 'B');
+    const result = (await call(f.env, 'get_service_status', { ref: entityRef })).result.structuredContent;
+    expect(result.alerts.map((alert: any) => alert.id)).toEqual(['direction', 'trip']);
+  });
+  it('fails closed explicitly when aggregate alert subentity expansion exceeds its bound', async () => {
+    const input = plannerInput(); input.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\nT,09:00:00,12:00:00,1,1\n';
+    const f = await fixture(false, input); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
+    const now = Date.now() / 1000;
+    const payload = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: now },
+      entity: [{ id: 'direction', alert: { informedEntity: [{ routeId: 'R', directionId: 0 }] } }] }).finish()).alerts;
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload }) }) } as unknown as DurableObjectNamespace;
+    expect((await call(f.env, 'get_service_status', { ref: ref('route', 'R') })).result.structuredContent).toMatchObject({ status: 'unavailable', reasons: ['SCOPE_LIMIT_EXCEEDED'], alerts: [] });
+  });
+  it('retains direction alerts for canonical headway windows without inventing an exact trip instance', async () => {
+    const input = plannerInput(); input.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\nT,08:00:00,10:00:00,600,0\n';
+    const f = await fixture(false, input); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
+    const now = Date.now() / 1000;
+    const payload = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: now }, entity: [
+      { id: 'direction', alert: { informedEntity: [{ routeId: 'R', directionId: 0 }] } },
+      { id: 'unproven-instance', alert: { informedEntity: [{ trip: { tripId: 'T', startDate: '20261019', startTime: '09:00:00' } }] } },
+    ] }).finish()).alerts;
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload }) }) } as unknown as DurableObjectNamespace;
+    const result = (await call(f.env, 'get_service_status', { ref: ref('route', 'R') })).result.structuredContent;
+    expect(result.alerts.map((alert: any) => alert.id)).toEqual(['direction']);
+  });
+  it('fails closed when the canonical aggregate window is unavailable', async () => {
+    const f = await fixture(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2027-10-19T08:59:00-07:00'));
+    const now = Date.now() / 1000;
+    const payload = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: now },
+      entity: [{ id: 'direction', alert: { informedEntity: [{ routeId: 'R', directionId: 0 }] } }] }).finish()).alerts;
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload }) }) } as unknown as DurableObjectNamespace;
+    expect((await call(f.env, 'get_service_status', { ref: ref('route', 'R') })).result.structuredContent).toMatchObject({ status: 'unavailable', reasons: ['SCHEDULE_EXPIRED'], alerts: [] });
+  });
   it.each([
     { name: 'route and wrong trip are a conjunction', selectors: [{ routeId: 'R', trip: { tripId: 'U' } }], wanted: false },
     { name: 'another service date is not the same trip', selectors: [{ trip: { tripId: 'T', startDate: '20261020' } }], wanted: false },

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { MetroMcpContext } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
 import { getCoverage } from '../../../transit/core/coverage';
+import type { VerificationReason } from '../../../transit/core/results';
 import type { NormalizedAlert, NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import { validateItinerary } from '../../../transit/planner/validator';
@@ -10,7 +11,7 @@ import { loadScheduleWindow } from '../../../transit/planner/schedule-index';
 import { parseTransitRef } from '../../../transit/core/refs';
 import { matchTripInstance } from '../../../transit/gtfs/realtime/trip-match';
 import type { ScheduleShard } from '../../../transit/gtfs/static/schema';
-import { matchesAlertSelector, type AlertScope } from '../../../transit/gtfs/realtime/alert-match';
+import { AlertScopeLimitError, expandAlertScopes, matchesAlertSelector, resolveAlertSelector, type AlertScope } from '../../../transit/gtfs/realtime/alert-match';
 import { itinerarySchema } from './plan';
 import { TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, unavailable, validRef } from './shared';
 
@@ -19,7 +20,7 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
   const selectorSchema = z.strictObject({ agencyId: z.string().optional(), routeId: z.string().optional(), routeType: z.number().int().optional(), stopId: z.string().optional(), directionId: z.number().int().optional(),
     trip: z.strictObject({ tripId: z.string().optional(), startDate: z.string().optional(), startTime: z.string().optional(), routeId: z.string().optional(), directionId: z.number().int().optional() }).optional() });
   server.registerTool('get_service_status', {
-    title: 'Transit service status', description: 'Check disruptions, delays, closures, accessibility alerts or revalidate a chosen itinerary without replacing it. Scope by coverage or an agency, route, stop or dated trip reference. Use get_vehicle_status for an observed vehicle location.',
+    title: 'Transit service status', description: 'Check disruptions, delays, closures, accessibility alerts or revalidate a chosen itinerary without replacing it. Scope by coverage or an agency, route, stop or dated trip reference. Aggregate scopes include canonical service in the next 24 hours. Use get_vehicle_status for an observed vehicle location.',
     annotations: readOnlyLive('Transit service status'),
     inputSchema: z.union([z.strictObject({ ...absent, coverage: coverageSchema }), z.strictObject({ ...absent, ref: boundedText }), z.strictObject({ ...absent, itinerary: itinerarySchema })]),
     outputSchema: z.strictObject({ ...resultShape, alerts: z.array(z.strictObject({ id: z.string(), agencyText: z.strictObject({ title: z.string(), description: z.string(), label: z.literal('agency_supplied') }),
@@ -38,6 +39,12 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
     const feed = await readFeed<NormalizedAlert>(context, data, 'service_alerts', nowSeconds, handler.mcpReq.signal);
     const meta = metadata(id, data, now);
     const sources = [...meta.sources, ...(feed ? realtimeSource(data, feed, 'alerts', nowSeconds) : [])];
+    const canonicalShards: ScheduleShard[] = [];
+    const scopeUnavailable = (reasons: VerificationReason[] = ['SCOPE_LIMIT_EXCEEDED']) => complete({ ...unavailable(id, data, reasons), sources, alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] });
+    if (args.coverage && feed?.payload?.some(alert => alert.selectors?.some(selector => selector.trip && selector.trip.tripId === undefined))) {
+      const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant: now, windowSeconds: 86400, feedIds: [feed.feedId] });
+      canonicalShards.push(...schedule.shards.map(item => item.shard));
+    }
     // Alert provider IDs are meaningful only inside the authoritative snapshot feed.
     const scopes: AlertScope[] = [], feeds = new Set<string>();
     const addTrip = (ref: string, shards: ScheduleShard[], board?: number, alight?: number) => {
@@ -60,10 +67,16 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       const routes = index?.routes.filter(route => parsed.kind === 'route' ? route.ref === args.ref : parsed.kind === 'agency' ? route.agencyRef === args.ref : index.stopRoutes[asTransitRef(args.ref!)]?.includes(route.ref)) ?? [];
       for (const route of routes) scopes.push({ feedId: parsed.feed, agencyId: parseTransitRef(route.agencyRef)!.id, routeId: route.providerId, routeType: route.routeType,
         stopIds: new Set(parsed.kind === 'stop' ? [parsed.id] : Object.entries(index?.stopRoutes ?? {}).filter(([, refs]) => refs.includes(route.ref)).map(([ref]) => parseTransitRef(ref)!.id)) });
+      const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant: now, windowSeconds: 86400, feedIds: [parsed.feed] });
+      if (schedule.status === 'unavailable') return scopeUnavailable(schedule.reasons);
+      canonicalShards.push(...schedule.shards.map(item => item.shard));
+      try { scopes.push(...expandAlertScopes(schedule.shards, parsed, Date.parse(now), Date.parse(now) + 86400_000)); }
+      catch (error) { if (error instanceof AlertScopeLimitError) return scopeUnavailable(); throw error; }
     }
     if (parsed?.kind === 'trip' && 'serviceDate' in parsed && typeof parsed.serviceDate === 'string') {
       const day = parsed.serviceDate, instant = `${day.slice(0, 4)}-${day.slice(4, 6)}-${day.slice(6, 8)}T12:00:00Z`;
       const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant, windowSeconds: 86400, feedIds: [parsed.feed] });
+      canonicalShards.push(...schedule.shards.map(item => item.shard));
       if (!addTrip(args.ref!, schedule.shards.map(item => item.shard))) throw new TransitToolError('ENTITY_NOT_FOUND');
     }
     const legChecks: { index: number; valid: boolean; reasons: string[] }[] = [];
@@ -72,6 +85,7 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
     if (args.itinerary) {
       const itinerary = args.itinerary;
       const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant: itinerary.departAt, windowSeconds: itinerary.windowSeconds });
+      canonicalShards.push(...schedule.shards.map(item => item.shard));
       for (const leg of itinerary.legs) if (leg.kind === 'transit') addTrip(leg.tripInstanceRef, schedule.shards.map(item => item.shard), leg.boardSequence, leg.alightSequence);
       const realtime = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', nowSeconds, handler.mcpReq.signal);
       if (realtime) sources.push(...realtimeSource(data, realtime, 'trip_updates', nowSeconds));
@@ -89,13 +103,17 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
     // Older persisted snapshots lack selector groups; never reconstruct their
     // conjunctions from lossy arrays or advertise a false empty service state.
     const usable = inFeed && feed?.payload !== null && feed?.payload !== undefined && feed.payload.every(alert => Array.isArray(alert.selectors));
-    const alerts = (usable ? feed.payload! : []).flatMap(alert => {
-      const selectors = alert.selectors.filter(selector => args.coverage || scopes.some(scope => scope.feedId === feed!.feedId && matchesAlertSelector(selector, scope)));
+    let alerts: { id: string; agencyText: { title: string; description: string; label: 'agency_supplied' }; selectors: NormalizedAlert['selectors']; routeIds: string[]; stopIds: string[]; stale: boolean }[];
+    try { alerts = (usable ? feed.payload! : []).flatMap(alert => {
+      const selectors = alert.selectors.filter(selector => {
+        const resolved = resolveAlertSelector(selector, { manifest: data.manifest, version: data.version, shards: canonicalShards, feedId: feed!.feedId });
+        return resolved && (args.coverage || scopes.some(scope => scope.feedId === feed!.feedId && matchesAlertSelector(resolved, scope)));
+      });
       if (alert.selectors.length && !selectors.length) return [];
       return [{ id: alert.id, agencyText: { title: sanitizeTransitText(alert.header), description: sanitizeTransitText(alert.description), label: 'agency_supplied' as const }, selectors,
         routeIds: [...new Set(selectors.flatMap(selector => selector.routeId === undefined ? [] : [selector.routeId]))],
         stopIds: [...new Set(selectors.flatMap(selector => selector.stopId === undefined ? [] : [selector.stopId]))], stale: feed?.freshness !== 'fresh' }];
-    });
+    }); } catch (error) { if (error instanceof AlertScopeLimitError) return scopeUnavailable(); throw error; }
     return complete({ ...meta, sources,
       status: usable ? 'realtime' as const : 'unavailable' as const, reasons: usable ? [] : ['REALTIME_UNAVAILABLE' as const], alerts, journeyValid, journeyReasons, legChecks, transferChecks });
   }, () => complete({ ...unavailable(args.coverage), alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] })));
