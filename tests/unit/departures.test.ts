@@ -29,7 +29,7 @@ async function fixture(data = input(), windows = [data.window]) {
   const objects = new Map(compiled.map(c => [c.manifest.shards[0]!.key, c.shardBytes]));
   const reads: string[] = [];
   return { manifest, compiled, reads, readDiscovery: async (key: string) => {
-    if (key !== manifest.discovery.key) throw new Error('Unexpected discovery read');
+    if (key !== manifest.discoveries[0]!.key) throw new Error('Unexpected discovery read');
     return compiled[0]!.discoveryBytes;
   }, readShard: async (key: string) => {
     reads.push(key);
@@ -43,6 +43,8 @@ describe('schedule-window metadata', () => {
   it('pins discovery to the same source version as the timetable', async () => {
     const result = await compileSchedule(input());
     expect(result.discovery).toMatchObject({ sourceSha256: result.manifest.sources[0]!.sha256 });
+    expect(result.manifest).toMatchObject({ discoveries: [{ feedId: 'sf511',
+      key: expect.any(String), sha256: await sha256(result.discoveryBytes), byteLength: result.discoveryBytes.length }] });
   });
   // Catch a loader lookback bound that silently drops legal trips after 48:00.
   it('publishes a feed-wide maximum even in a shard excluding the long trip', async () => {
@@ -317,10 +319,72 @@ describe('stop identity independent of agency filters', () => {
   it.each(['coverageId', 'feedId', 'sourceSha256'])('rejects a discovery %s identity mismatch with valid bytes/hash', async field => {
     const f = await fixture();
     const bytes = new TextEncoder().encode(JSON.stringify({ ...f.compiled[0]!.discovery, [field]: field === 'sourceSha256' ? 'a'.repeat(64) : 'other' }));
-    const manifest = { ...f.manifest, discovery: { ...f.manifest.discovery, byteLength: bytes.length, sha256: await sha256(bytes) } };
+    const manifest = { ...f.manifest, discoveries: [{ ...f.manifest.discoveries[0]!, byteLength: bytes.length, sha256: await sha256(bytes) }] };
     await expect(getScheduledDepartures({ ...f, manifest, readDiscovery: async () => bytes, stopRef: STOP,
       instant: '2026-10-19T09:00:00-07:00', windowSeconds: 60 })).rejects.toThrow(/discovery identity/i);
     expect(f.reads).toEqual([]);
+  });
+});
+
+describe('multi-feed discovery', () => {
+  async function twoFeeds() {
+    const a = await compileSchedule(input());
+    const other = input();
+    other.feedId = 'other';
+    other.coverage = { ...other.coverage, feeds: [...other.coverage.feeds, { ...other.coverage.feeds[0]!, id: 'other' }] };
+    other.files['stop_times.txt'] = other.files['stop_times.txt'].replaceAll('09:00', '10:00');
+    const b = await compileSchedule(other);
+    const descriptors = await Promise.all([a, b].map(async compiled => {
+      const hash = await sha256(compiled.discoveryBytes);
+      return { feedId: compiled.shard.feedId, key: `artifacts/sfbay/v2/${compiled.shard.feedId}/discovery/${hash}.json`,
+        sha256: hash, byteLength: compiled.discoveryBytes.length };
+    }));
+    const manifest = { ...a.manifest, sources: [...a.manifest.sources, ...b.manifest.sources], discoveries: descriptors,
+      agencyTimezones: { ...a.manifest.agencyTimezones, ...b.manifest.agencyTimezones }, shards: [...a.manifest.shards, ...b.manifest.shards] };
+    const objects = new Map([
+      [descriptors[0]!.key, a.discoveryBytes], [descriptors[1]!.key, b.discoveryBytes],
+      [a.manifest.shards[0]!.key, a.shardBytes], [b.manifest.shards[0]!.key, b.shardBytes],
+    ]);
+    const reads: string[] = [];
+    const read = async (key: string) => {
+      reads.push(key);
+      const bytes = objects.get(key);
+      if (!bytes) throw new Error('Unexpected multi-feed artifact read');
+      return bytes;
+    };
+    return { manifest, readDiscovery: read, readShard: read, reads, a, b };
+  }
+
+  it('queries known stops in either feed using only that feed discovery and timetable', async () => {
+    const f = await twoFeeds();
+    for (const [stopRef, scheduledTime, feedId] of [
+      ['tr:sfbay:sf511:stop:Uw', '2026-10-19T09:00:30-07:00', 'sf511'],
+      ['tr:sfbay:other:stop:Uw', '2026-10-19T10:00:30-07:00', 'other'],
+    ] as const) {
+      f.reads.length = 0;
+      const result = await getScheduledDepartures({ ...f, stopRef, instant: '2026-10-19T09:00:00-07:00', windowSeconds: 7200 });
+      expect(result.departures.map(d => [d.scheduledTime, d.feedId])).toEqual([[scheduledTime, feedId]]);
+      expect(f.reads).toEqual([f.manifest.discoveries.find(d => d.feedId === feedId)!.key, f.manifest.shards.find(s => s.feedId === feedId)!.key]);
+    }
+  });
+
+  it.each(['missing', 'duplicate', 'wrong_feed'] as const)('fails closed on %s queried-feed discovery descriptors', async variation => {
+    const f = await fixture();
+    // Independent artifact descriptor keeps this test focused on selection rather than bytes.
+    const descriptor = { feedId: 'sf511', key: 'test-discovery', sha256: await sha256(f.compiled[0]!.discoveryBytes), byteLength: f.compiled[0]!.discoveryBytes.length };
+    const discoveries = variation === 'missing' ? [] : variation === 'duplicate' ? [descriptor, descriptor] : [{ ...descriptor, feedId: 'other' }];
+    const manifest = { ...f.manifest, discoveries };
+    await expect(getScheduledDepartures({ ...f, manifest, stopRef: STOP, instant: '2026-10-19T09:00:00-07:00', windowSeconds: 60 }))
+      .rejects.toThrow(/discovery identity/i);
+    expect(f.reads).toEqual([]);
+  });
+
+  it('rejects discovery bytes from another source despite valid descriptor hash and feed', async () => {
+    const f = await twoFeeds();
+    const stale = new TextEncoder().encode(JSON.stringify({ ...f.b.discovery, sourceSha256: f.a.shard.source.sha256 }));
+    f.manifest.discoveries[1] = { ...f.manifest.discoveries[1]!, sha256: await sha256(stale), byteLength: stale.length };
+    await expect(getScheduledDepartures({ ...f, readDiscovery: async () => stale, stopRef: 'tr:sfbay:other:stop:Uw',
+      instant: '2026-10-19T09:00:00-07:00', windowSeconds: 7200 })).rejects.toThrow(/discovery identity/i);
   });
 });
 

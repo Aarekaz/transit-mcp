@@ -40,7 +40,10 @@ const discoveryIdentitySchema = z.object({
 });
 
 async function assertKnownStop(query: ScheduledDepartureQuery, feedId: string): Promise<void> {
-  const descriptor = query.manifest.discovery;
+  if (!Array.isArray(query.manifest.discoveries)) throw new Error('Discovery identity invalid');
+  const descriptors = query.manifest.discoveries.filter(descriptor => descriptor.feedId === feedId);
+  if (descriptors.length !== 1) throw new Error('Discovery identity missing or ambiguous');
+  const descriptor = descriptors[0]!;
   if (!Number.isSafeInteger(descriptor.byteLength) || descriptor.byteLength < 1 || descriptor.byteLength > 64 * 1024 * 1024) throw new Error('Discovery byte budget exceeded');
   const bytes = await query.readDiscovery(descriptor.key);
   if (bytes.byteLength !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Discovery integrity failure');

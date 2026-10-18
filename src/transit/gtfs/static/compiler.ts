@@ -229,7 +229,7 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
   const prefix = `artifacts/${coverage.id}/v2/${feedId}`;
   return { shard, discovery, shardBytes, discoveryBytes, manifest: {
     schemaVersion: 2, coverageId: coverage.id, sources: [source], agencyTimezones,
-    discovery: { key: `${prefix}/discovery/${discoveryHash}.json`, sha256: discoveryHash, byteLength: discoveryBytes.length },
+    discoveries: [{ feedId, key: `${prefix}/discovery/${discoveryHash}.json`, sha256: discoveryHash, byteLength: discoveryBytes.length }],
     shards: [{ feedId, window: { ...window }, maxStopTimeSeconds, key: `${prefix}/${window.startDate}-${window.endDate}/${shardHash}.bin`, sha256: shardHash, byteLength: shardBytes.length }],
   } };
 }
