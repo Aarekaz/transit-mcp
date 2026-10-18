@@ -222,6 +222,7 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     calendars, frequencies: frequencies.filter(f => activeRefs.has(f.tripRef)), blocks,
     transfers, transferBoundaryTrips, pathways };
   const discovery = { schemaVersion: 2 as const, coverageId: coverage.id, feedId, sourceSha256: source.sha256, stops: stops.filter(s => s.locationType !== 3), routes,
+    tripProviderIds: trips.map(trip => trip.providerId).sort(),
     stopRoutes: Object.fromEntries(Object.entries(stopRoutes).map(([key, values]) => [key, [...new Set(values)].sort()])) };
   const shardBytes = encodeScheduleShard(shard);
   const discoveryBytes = new TextEncoder().encode(canonicalJson(discovery));

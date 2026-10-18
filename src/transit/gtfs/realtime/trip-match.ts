@@ -1,13 +1,13 @@
 import { SFBAY_COVERAGE } from '../../../regions/sfbay';
 import { formatTripInstanceRef, parseTransitRef } from '../../core/refs';
 import { isServiceActive, serviceDayOrigin } from '../../planner/service-day';
-import type { ArtifactManifestV2, ScheduleShard, ScheduleTrip } from '../static/schema';
-import { canonicalJson, encodeScheduleShard, sha256 } from '../static/shards';
+import type { ArtifactManifestV2, DiscoveryIndex, ScheduleShard, ScheduleTrip } from '../static/schema';
+import { canonicalJson, decodeDiscoveryIndex, encodeScheduleShard, sha256 } from '../static/shards';
 import { parseGtfsTime, parseServiceDate } from '../static/time';
 import type { DecodedStopUpdate, NormalizedRealtimeFeed, NormalizedStopUpdate, NormalizedTripUpdate } from './decode';
 import { sameStaticVersion, staticVersion, type StaticVersion } from './snapshot-store';
 
-export interface TripMatchContext { manifest: ArtifactManifestV2; shards: ScheduleShard[]; version: StaticVersion; feedId?: string }
+export interface TripMatchContext { manifest: ArtifactManifestV2; shards: ScheduleShard[]; discoveries?: DiscoveryIndex[]; version: StaticVersion; feedId?: string }
 export interface MatchedTripInstance {
   shard: ScheduleShard; trip: ScheduleTrip; timezone: string; serviceDate: string;
   startSeconds: number; shiftSeconds: number; originSeconds: number; tripInstanceRef: string;
@@ -90,7 +90,8 @@ function matchedUpdates(update: NormalizedTripUpdate, match: MatchedTripInstance
     } catch { return null; }
   }
   const stops = new Map<number, DecodedStopUpdate>(); let previousSequence = -1;
-  for (const stop of update.stops) {
+  // Cancellation applies to the whole matched instance; attached stop updates have no semantics.
+  for (const stop of update.scheduleRelationship === 'CANCELED' ? [] : update.stops) {
     const candidates = trip.stopTimes.filter(call => stop.stopSequence !== undefined ? call.sequence === stop.stopSequence : parseTransitRef(call.stopRef)?.id === stop.stopId);
     if (candidates.length !== 1 || stop.stopScheduleRelationship === 'UNKNOWN') return null;
     const call = candidates[0]!;
@@ -136,10 +137,11 @@ function extraUpdates(update: NormalizedTripUpdate, context: TripMatchContext): 
     if (!stop.stopId || stop.stopSequence === undefined || stop.stopSequence <= sequence || !shard.stops.some(s => s.providerId === stop.stopId) ||
       stop.arrivalTimeSeconds === undefined || stop.departureTimeSeconds === undefined || stop.stopScheduleRelationship === 'UNKNOWN') return null;
     sequence = stop.stopSequence;
-    const noData = stop.stopScheduleRelationship === 'NO_DATA';
+    const noData = stop.stopScheduleRelationship === 'NO_DATA', skipped = stop.stopScheduleRelationship === 'SKIPPED';
     result.push({ ...stop, stopId: stop.stopId, tripId: update.tripId, routeId: update.routeId, serviceDate: update.startDate,
-      scheduleRelationship: update.scheduleRelationship, status: noData ? 'scheduled_only' : 'realtime',
-      ...(noData ? { scheduledArrivalTimeSeconds: stop.arrivalTimeSeconds, scheduledDepartureTimeSeconds: stop.departureTimeSeconds, arrivalTimeSeconds: undefined, departureTimeSeconds: undefined } : {}) });
+      scheduleRelationship: update.scheduleRelationship, status: skipped ? 'skipped' : noData ? 'scheduled_only' : 'realtime',
+      ...(noData ? { scheduledArrivalTimeSeconds: stop.arrivalTimeSeconds, scheduledDepartureTimeSeconds: stop.departureTimeSeconds } : {}),
+      ...(noData || skipped ? { arrivalTimeSeconds: undefined, departureTimeSeconds: undefined } : {}) });
   }
   return result;
 }
@@ -152,23 +154,42 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
     const bytes = encodeScheduleShard(shard), hash = await sha256(bytes);
     if (!context.manifest.shards.some(descriptor => descriptor.feedId === shard.feedId && descriptor.sha256 === hash && descriptor.byteLength === bytes.length)) throw new Error('Realtime schedule integrity failure');
   }
+  const staticIds = new Map<string, Set<string>>();
+  for (const discovery of context.discoveries ?? []) {
+    const bytes = new TextEncoder().encode(canonicalJson(discovery));
+    decodeDiscoveryIndex(bytes);
+    const descriptors = context.manifest.discoveries.filter(item => item.feedId === discovery.feedId);
+    if (staticIds.has(discovery.feedId) || discovery.coverageId !== context.manifest.coverageId ||
+      discovery.sourceSha256 !== context.version.sourceVersions[discovery.feedId] || descriptors.length !== 1 ||
+      descriptors[0]!.byteLength !== bytes.length || descriptors[0]!.sha256 !== await sha256(bytes)) throw new Error('Realtime discovery integrity or identity failure');
+    staticIds.set(discovery.feedId, new Set(discovery.tripProviderIds));
+  }
   const stopUpdates: NormalizedStopUpdate[] = []; let eligible = 0, matched = 0, invalidExtras = false;
   const index = tripIndex(context);
   for (const update of feed.trips) {
     if (update.scheduleRelationship === 'ADDED' || update.scheduleRelationship === 'REPLACEMENT') {
-      const extras = extraUpdates(update, context);
-      if (!extras) { invalidExtras = true; continue; }
       if (update.scheduleRelationship === 'REPLACEMENT') {
         const original = matchIndexedTrip(update, context, index);
         if (!original) { invalidExtras = true; continue; }
+        const extras = extraUpdates({ ...update, routeId: update.routeId ?? parseTransitRef(original.trip.routeRef)!.id }, { ...context, shards: [original.shard] });
+        if (!extras) { invalidExtras = true; continue; }
         for (const extra of extras) extra.tripInstanceRef = original.tripInstanceRef;
         const canceled = matchedUpdates({ ...update, scheduleRelationship: 'CANCELED', stops: [] }, original)!;
         stopUpdates.push(...extras, ...canceled.filter(call => !extras.some(extra => extra.stopId === call.stopId && extra.stopSequence === call.stopSequence)));
-      } else stopUpdates.push(...extras);
+      } else {
+        const extras = extraUpdates(update, context);
+        if (!extras) { invalidExtras = true; continue; }
+        stopUpdates.push(...extras);
+      }
       continue;
     }
     eligible++;
     const match = matchIndexedTrip(update, context, index);
+    if (match && update.scheduleRelationship === 'DUPLICATED') {
+      const ids = staticIds.get(match.shard.feedId), duplicateId = update.tripProperties?.tripId;
+      // Absence must be proven feed-wide, not inferred from the resident timetable window.
+      if (!ids || !duplicateId || ids.has(duplicateId)) continue;
+    }
     const updates = match ? matchedUpdates(update, match) : null;
     if (updates) { matched++; stopUpdates.push(...updates); }
   }

@@ -1,4 +1,4 @@
-import type { ScheduleShard } from './schema';
+import type { DiscoveryIndex, ScheduleShard } from './schema';
 import { z } from 'zod';
 import { parseTransitRef, type TransitRef } from '../../core/refs';
 import { parseServiceDate } from './time';
@@ -46,6 +46,24 @@ const metadataSchema = z.object({
   transferBoundaryTrips: z.array(z.object({ ...tripIdentity, firstDepartureSeconds: time, lastArrivalSeconds: time })),
   headsigns: z.array(z.string()),
 });
+
+const discoverySchema = metadataSchema.pick({ schemaVersion: true, coverageId: true, feedId: true, stops: true, routes: true }).extend({
+  sourceSha256: hash,
+  tripProviderIds: z.array(id).refine(ids => ids.every((value, index) => index === 0 || ids[index - 1]! < value)),
+  stopRoutes: z.record(stopRef, z.array(routeRef)),
+});
+
+/** The caller verifies descriptor hash/length and manifest source identity. */
+export function decodeDiscoveryIndex(bytes: Uint8Array): DiscoveryIndex {
+  try {
+    const discovery = discoverySchema.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)));
+    for (const record of [...discovery.stops, ...discovery.routes]) {
+      const ref = parseTransitRef(record.ref)!;
+      if (ref.coverage !== discovery.coverageId || ref.feed !== discovery.feedId || ref.id !== record.providerId) throw new Error();
+    }
+    return discovery;
+  } catch { throw new Error('Invalid discovery index'); }
+}
 
 /** Locale-independent canonical JSON is used only for the metadata section. */
 export function canonicalJson(value: unknown): string {

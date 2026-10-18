@@ -3,7 +3,7 @@ import type { RegionalTransitService } from '../../../mcp/context';
 import type { FeedRead } from './hub-core';
 import type { NormalizedVehicle, NormalizedAlert, NormalizedStopUpdate } from './decode';
 import { StaticArtifactStore, readBoundedObject, SF511_QUOTA_NAMESPACE, type StaticVersion } from './snapshot-store';
-import { sha256 } from '../static/shards';
+import { decodeDiscoveryIndex, sha256 } from '../static/shards';
 import type { ArtifactManifestV2, DiscoveryIndex } from '../static/schema';
 import { parseTransitRef, type TransitRef } from '../../core/refs';
 import { getScheduledDepartures } from '../../planner/departures';
@@ -32,7 +32,7 @@ export function createRegionalTransitService(env: Env): RegionalTransitService {
       if (total > 64 * 1024 * 1024) throw new Error('Discovery byte budget exceeded');
       const bytes = await readBoundedObject(bucket(), descriptor.key, descriptor.byteLength);
       if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Discovery integrity failure');
-      const index = JSON.parse(new TextDecoder().decode(bytes)) as DiscoveryIndex;
+      const index = decodeDiscoveryIndex(bytes);
       const sources = manifest.sources.filter(source => source.feedId === descriptor.feedId);
       if (index.schemaVersion !== 2 || index.coverageId !== manifest.coverageId || index.feedId !== descriptor.feedId || sources.length !== 1 ||
         index.sourceSha256 !== sources[0]!.sha256 || !Array.isArray(index.stops) || !Array.isArray(index.routes)) throw new Error('Discovery identity mismatch');
@@ -82,19 +82,31 @@ export function createRegionalTransitService(env: Env): RegionalTransitService {
         readShard: key => readBoundedObject(bucket(), key, 64 * 1024 * 1024), readDiscovery: key => readBoundedObject(bucket(), key, 64 * 1024 * 1024) });
       const usable = feed.status === 'realtime' && feed.version?.artifactVersion === version.artifactVersion;
       const updates = usable ? feed.payload ?? [] : [];
-      const byCall = new Map(updates.filter(update => update.tripInstanceRef).map(update => [`${update.tripInstanceRef}:${update.stopSequence}`, update]));
+      const callKey = (instance: string, sequence: number | undefined, stopId: string) => JSON.stringify([instance, sequence, stopId]);
+      const byCall = new Map(updates.filter(update => update.tripInstanceRef).map(update => [callKey(update.tripInstanceRef!, update.stopSequence, update.stopId), update]));
       const payload: NormalizedStopUpdate[] = [];
+      const used = new Set<NormalizedStopUpdate>();
+      const appendUpdate = (update: NormalizedStopUpdate): boolean => {
+        if (used.has(update)) return true;
+        used.add(update);
+        if (update.status === 'canceled' || update.status === 'skipped') return true;
+        if (update.status === 'realtime') { payload.push(update); return true; }
+        if (update.status === 'scheduled_only' && (update.scheduledArrivalTimeSeconds !== undefined || update.scheduledDepartureTimeSeconds !== undefined)) {
+          payload.push({ ...update, arrivalTimeSeconds: update.scheduledArrivalTimeSeconds, departureTimeSeconds: update.scheduledDepartureTimeSeconds });
+          return true;
+        }
+        return false;
+      };
       for (const departure of schedule.departures) {
-        const update = byCall.get(`${departure.tripInstanceRef}:${departure.stopSequence}`);
-        if (update?.status === 'canceled' || update?.status === 'skipped') continue;
-        if (update?.status === 'realtime') { payload.push(update); continue; }
+        const update = byCall.get(callKey(departure.tripInstanceRef, departure.stopSequence, parseTransitRef(departure.stopRef)!.id));
+        if (update && appendUpdate(update)) continue;
         const time = Date.parse(departure.scheduledTime) / 1000;
         payload.push({ entityId: `scheduled:${departure.tripInstanceRef}:${departure.stopSequence}`, tripId: parseTransitRef(departure.tripRef)!.id,
           tripInstanceRef: departure.tripInstanceRef, stopId: parseTransitRef(departure.stopRef)!.id, stopSequence: departure.stopSequence,
           routeId: parseTransitRef(departure.routeRef)!.id, serviceDate: departure.serviceDate, arrivalTimeSeconds: time, departureTimeSeconds: time, status: 'scheduled_only' });
       }
       for (const update of updates) {
-        if (update.status === 'realtime' && !payload.includes(update) && stopIds.includes(update.stopId)) payload.push(update);
+        if (stopIds.includes(update.stopId)) appendUpdate(update);
       }
       const result = payload.filter(row => (row.arrivalTimeSeconds ?? row.departureTimeSeconds ?? 0) >= nowSeconds - 30)
         .sort((a, b) => (a.arrivalTimeSeconds ?? a.departureTimeSeconds ?? 0) - (b.arrivalTimeSeconds ?? b.departureTimeSeconds ?? 0));

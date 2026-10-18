@@ -18,6 +18,20 @@ function decodedTrip(trip: transit_realtime.ITripDescriptor = {}, stops: transit
 }
 
 describe('version-pinned normalization', () => {
+  it('fails closed for duplicates without a pinned feed-wide static identity index', async () => {
+    const f = await realtimeFixture();
+    const result = await matching.applyTripUpdates(decodedTrip({ scheduleRelationship: 6 }, [], { tripProperties: { tripId: 'copy', startDate: '20261019', startTime: '09:00:00' } }),
+      { manifest: f.manifest, shards: [f.shard], version: await snapshots.staticVersion(f.manifest) });
+    expect(result.stopUpdates).toEqual([]);
+    expect(result.degraded).toBe(true);
+  });
+
+  it('rejects a modified feed-wide identity index despite an unchanged source and manifest', async () => {
+    const f = await realtimeFixture();
+    await expect(matching.applyTripUpdates(decodedTrip(), { manifest: f.manifest, shards: [f.shard],
+      discoveries: [{ ...f.discovery, tripProviderIds: ['different'] }], version: await snapshots.staticVersion(f.manifest) })).rejects.toThrow(/discovery|integrity/i);
+  });
+
   it('retains sequence-only updates, dated identity, explicit zero delays and trip cancellation', () => {
     const feed = decodedTrip({ startTime: '08:00:00' }, [{ stopSequence: 1, arrival: { delay: 0 } }]);
     expect(feed.trips[0]).toMatchObject({ tripId: 'T', startDate: '20261019', startTime: '08:00:00', scheduleRelationship: 'SCHEDULED', stops: [{ stopSequence: 1, arrivalDelaySeconds: 0 }] });
@@ -119,7 +133,7 @@ describe('version-pinned normalization', () => {
   it('normalizes duplicated trips under their new dated instance without canceling the original', async () => {
     const f = await realtimeFixture();
     const result = await matching.applyTripUpdates(decodedTrip({ scheduleRelationship: 6 }, [], { tripProperties: { tripId: 'copy', startDate: '20261020', startTime: '09:00:00' } }),
-      { manifest: f.manifest, shards: [f.shard], version: await snapshots.staticVersion(f.manifest) });
+      { manifest: f.manifest, shards: [f.shard], discoveries: [f.discovery], version: await snapshots.staticVersion(f.manifest) });
     expect(result.stopUpdates[0]).toMatchObject({ tripId: 'copy', serviceDate: '20261020', scheduledArrivalTimeSeconds: START + 90000 });
     expect(result.stopUpdates[0]?.tripInstanceRef).toBe('tr:sfbay:sf511:trip:Y29weQ:20261020:MDk6MDA6MDA');
   });
