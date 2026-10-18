@@ -85,7 +85,7 @@ export interface ValidatorEvidence {
 export interface ArtifactManifestV2 {
   schemaVersion: 2; coverageId: string; sources: SourceMetadata[];
   agencyTimezones: Record<TransitRef, string>;
-  discovery: ArtifactObject;
+  discoveries: (ArtifactObject & { feedId: string })[];
   shards: (ArtifactObject & { feedId: string; window: ServiceWindow; maxStopTimeSeconds: number })[];
   validator?: ValidatorEvidence;
 }

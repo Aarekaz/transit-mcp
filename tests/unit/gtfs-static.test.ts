@@ -330,8 +330,9 @@ describe('MobilityData publication gate', () => {
       expect(run(second).status).toBe(0);
       expect(readFileSync(join(first, 'manifest.json'))).toEqual(readFileSync(join(second, 'manifest.json')));
       const manifest = JSON.parse(readFileSync(join(first, 'manifest.json'), 'utf8'));
+      expect(manifest).toMatchObject({ discoveries: [{ feedId: 'sf511', key: expect.any(String), sha256: expect.stringMatching(/^[a-f0-9]{64}$/), byteLength: expect.any(Number) }] });
       expect(manifest.validator).toMatchObject({ version: '8.0.1', reportSha256: expect.stringMatching(/^[a-f0-9]{64}$/), systemErrorsSha256: expect.stringMatching(/^[a-f0-9]{64}$/), systemErrorsFormat: 'MobilityData notices' });
-      for (const artifact of [manifest.discovery, ...manifest.shards]) {
+      for (const artifact of [...manifest.discoveries, ...manifest.shards]) {
         expect(readFileSync(join(first, artifact.key))).toEqual(readFileSync(join(second, artifact.key)));
       }
       for (const [name, text] of [['errors', JSON.stringify(report('ERROR'))], ['warnings', JSON.stringify(report('WARNING'))], ['malformed', '{']] as const) {

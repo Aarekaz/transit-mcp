@@ -43,7 +43,7 @@ const manifestKey = `artifacts/sfbay/v2/manifests/${await sha256(manifestBytes)}
 // All validation completes before writing anything. Objects are immutable and
 // the local manifest pointer changes atomically only after every object exists.
 for (const [key, bytes] of [
-  [result.manifest.discovery.key, result.discoveryBytes],
+  [result.manifest.discoveries[0]!.key, result.discoveryBytes],
   [result.manifest.shards[0]!.key, result.shardBytes],
   [manifestKey, manifestBytes],
 ] as const) await Bun.write(join(outputDirectory, key), bytes);
