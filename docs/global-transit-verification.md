@@ -66,10 +66,10 @@ Task 12 review subsequently found incomplete check-inventory validation, checkou
 
 | Gate | Current evidence / decision |
 | --- | --- |
-| Current 511 regional static artifact | Unpassed: no configured local `SF511_API_KEY`; local artifacts are synthetic fixtures only. |
-| Canonical validator on that artifact | Unpassed: compiler/report gate tests exist, but no current authoritative archive/report pair was validated here. |
-| Live realtime compatibility and >=95% scheduled-trip matching | Unpassed: no authorized local 511 credential or matching authoritative artifact. |
-| Freshness, version mismatch, incomplete feeds, cancellation | Synthetic suites exercise these; live producer-age and quota evidence remains unpassed. |
+| Current 511 regional static artifact | Retrieved read-only on 2026-10-18 at 23:14:33Z: 64,145,418-byte ZIP, SHA-256 `941102cc60dde2379201efcde2ada96b762bcf262adaf37e6aaa9b25efac9234`; 309,456,677 uncompressed bytes. Publication remains blocked by validation. |
+| Canonical validator on that artifact | **Failed publication gate:** pinned MobilityData GTFS Validator 8.0.1 emitted five ERROR classes (`block_trips_with_overlapping_stop_times`, `duplicate_key`, `equal_shape_distance_diff_coordinates`, `number_out_of_range`, and `trip_distance_exceeds_shape_distance`). `system_errors.json` was empty. The repository build correctly refused the report. |
+| Live realtime compatibility and >=95% scheduled-trip matching | The authorized regional Trip Updates, Vehicle Positions, and Alerts endpoints returned 200 and decoded with the production decoder: 57,831 trip updates, 1,367 vehicles, and 101 alerts. Producer timestamps were 19 seconds old at inspection. The >=95% schedule-match gate remains unpassed because the matching static artifact cannot be published. |
+| Freshness, version mismatch, incomplete feeds, cancellation | One live read proved current producer timestamps and decoder compatibility. Sustained polling, quota, expiry, mismatch, incomplete-feed, cancellation, and skipped-stop behavior remains synthetic-only. |
 | Full artifact data working set <64 MiB | Unpassed: tiny fixture benchmark only, no full launch corpus/concurrent-request measurement. |
 | Planner p95 CPU <250 ms | Unpassed: Bun wall time does not establish Workers CPU; full launch measurement required. |
 | Current golden-route agreement | Unpassed: SF/DC/NYC corpora are explicitly synthetic; official planner pages were inspected, but no current itinerary pair was compared. |
@@ -77,7 +77,7 @@ Task 12 review subsequently found incomplete check-inventory validation, checkou
 | Preview live smoke, attribution acceptance and quota separation | Unpassed; no deployment, secret provisioning, agreement acceptance, or shared-token change performed. |
 | Production activation/deployment | Not authorized or performed. Keep dark. |
 
-Current [511 documentation](https://511.org/open-data/transit) confirms token requirements for the regional schedule and realtime feeds and the default 60 requests/hour per token. Only token presence was inspected locally; no token values were printed or saved. No Cloudflare analytics or production state was queried.
+Current [511 documentation](https://511.org/open-data/transit) confirms token requirements for the regional schedule and realtime feeds and the default 60 requests/hour per token. An operator-authorized token was stored only in the ignored, mode-`0600` local `.dev.vars`; its value and token-bearing URLs are excluded from repository artifacts. Four read-only provider requests were made. No Cloudflare analytics or production state was queried.
 
 ## Three-city prompt stress and disagreement review
 
