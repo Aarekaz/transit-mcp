@@ -26,9 +26,9 @@ describe('getServerInfo', () => {
     expect(body.endpoints).not.toHaveProperty('oauth');
     expect(body.endpoints).not.toHaveProperty('discovery');
     expect(body.stats).toMatchObject({
-      citiesSupported: 3,
+      citiesSupported: 2,
       toolsAvailable: 18,
-      resourcesAvailable: 3,
+      resourcesAvailable: 4,
       promptsAvailable: 3,
     });
     expect(body.tools).toHaveLength(18);
@@ -43,6 +43,32 @@ describe('getServerInfo', () => {
     expect(body.transport).not.toHaveProperty('sessions');
     expect(body.capabilities.tools).toEqual({});
     expect(body.capabilities.tools).not.toHaveProperty('listChanged');
+  });
+
+  it('does not advertise unshipped SF-specific tools or coverage', () => {
+    const body = getServerInfo('https://transitmcp.com', '2026-08-21T12:00:00.000Z');
+
+    expect(body.cities.map(city => city.code)).toEqual(['dc', 'nyc']);
+    expect(body.tools).toEqual([
+      'get_station_predictions',
+      'search_stations',
+      'get_stations_by_line',
+      'get_incidents',
+      'get_elevator_incidents',
+      'get_all_stations',
+      'get_bus_predictions',
+      'get_bus_routes',
+      'get_bus_stops',
+      'get_bus_positions',
+      'get_train_positions',
+      'get_station_transfers',
+      'get_route_info',
+      'find_transit',
+      'plan_trip',
+      'get_departures',
+      'get_service_status',
+      'get_vehicle_status',
+    ]);
   });
 
   it('keeps release and client configuration metadata aligned', () => {
@@ -89,8 +115,7 @@ describe('getServerInfo', () => {
 
     expect(body.cities.find(city => city.code === 'dc')?.stations).toBe(102);
     expect(body.cities.find(city => city.code === 'nyc')?.stations).toBe(496);
-    expect(body.cities.find(city => city.code === 'sfbay')?.stations).toBe(20_627);
-    expect(body.stats.totalStations).toBe(21_225);
+    expect(body.stats.totalStations).toBe(598);
   });
 
   it('describes the stateless MCP transport without claiming resumability', () => {

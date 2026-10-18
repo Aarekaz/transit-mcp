@@ -1,0 +1,27 @@
+{
+  "coverageId": "sfbay",
+  "scope": "public_places_only",
+  "reviewedAt": "2026-10-18",
+  "review": "Checked against the linked public agency pages. These are discovery names, not a claim of active service, a provider-ID mapping, or a walking route. Exact canonical-name matches retain every candidate; missing names fail closed. Personal home/work meanings remain client-owned.",
+  "coverageAliases": [
+    { "name": "SF", "target": "sfbay", "source": "https://511.org/open-data/transit", "basis": "511 SF Bay regional coverage; SF is a discovery shortcut, not a city-only service boundary." },
+    { "name": "San Francisco", "target": "sfbay", "source": "https://511.org/about", "basis": "San Francisco is included in the named Bay Area coverage." },
+    { "name": "Bay Area", "target": "sfbay", "source": "https://511.org/about", "basis": "511 describes the San Francisco Bay Area region." }
+  ],
+  "places": [
+    {
+      "name": "Pier 39",
+      "aliases": ["Pier 39"],
+      "stopNames": ["The Embarcadero & Stockton St (Pier 39)"],
+      "sources": ["https://www.sfmta.com/stops/embarcadero-stockton-st-pier-39-14530"],
+      "basis": "SFMTA explicitly labels this public stop Pier 39. No 511 stop ID or opposite-direction stop is inferred."
+    },
+    {
+      "name": "San Francisco International Airport",
+      "aliases": ["SFO"],
+      "stopNames": ["San Francisco International Airport", "San Francisco International Airport (SFO)", "San Francisco Int'l Airport"],
+      "sources": ["https://www.bart.gov/stations/sfia", "https://api.bart.gov/docs/overview/abbrev.aspx"],
+      "basis": "BART's public station page and abbreviation reference identify these airport station names. Airport terminal stops that already contain SFO remain separate candidates; no airport-wide equivalence or terminal walk is invented."
+    }
+  ]
+}

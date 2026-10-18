@@ -2,7 +2,7 @@
  * MTA (NYC Subway) API Client
  *
  * Implements GTFS-realtime parsing for New York City subway system.
- * Uses Protocol Buffers to parse real-time train predictions from 8 separate feeds.
+ * Uses Protocol Buffers to parse real-time train predictions from route feeds.
  */
 
 import GtfsRealtimeBindings from 'gtfs-realtime-bindings';
@@ -32,21 +32,12 @@ const MTA_FEEDS = {
   'SIR': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-si',
 } as const;
 
-/**
- * Map subway lines to their corresponding feeds
- * TODO: Use this for optimized feed fetching based on line
- */
-// const LINE_TO_FEED: Record<string, keyof typeof MTA_FEEDS> = {
-//   'A': 'ACE', 'C': 'ACE', 'E': 'ACE',
-//   'B': 'BDFM', 'D': 'BDFM', 'F': 'BDFM', 'M': 'BDFM',
-//   'G': 'G',
-//   'J': 'JZ', 'Z': 'JZ',
-//   'N': 'NQRW', 'Q': 'NQRW', 'R': 'NQRW', 'W': 'NQRW',
-//   'L': 'L',
-//   '1': '1234567', '2': '1234567', '3': '1234567',
-//   '4': '1234567', '5': '1234567', '6': '1234567', '7': '1234567',
-//   'SI': 'SIR',
-// };
+function eventTimestamp(event: GtfsRealtimeBindings.transit_realtime.TripUpdate.IStopTimeEvent | null | undefined): number | undefined {
+  // protobufjs exposes an inherited zero even when the optional field is absent.
+  if (!event || !Object.prototype.hasOwnProperty.call(event, 'time')) return undefined;
+  const seconds = Number(event.time);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
+}
 
 interface CachedFeed {
   data: GtfsRealtimeBindings.transit_realtime.FeedMessage;
@@ -81,7 +72,7 @@ export class MTAClient extends TransitAPIClient {
     const response = await fetch(feedUrl, { signal });
 
     if (!response.ok) {
-      throw new Error(`MTA feed fetch failed: ${response.status} ${response.statusText}`);
+      throw new Error('MTA feed unavailable');
     }
 
     // Parse protobuf
@@ -117,9 +108,11 @@ export class MTAClient extends TransitAPIClient {
   ): Promise<TransitPrediction[]> {
     const predictions: TransitPrediction[] = [];
 
-    // Determine which feeds to check based on the station
-    // For now, we'll check all feeds (in production, optimize this)
+    // A realtime reroute can serve a platform outside its static route membership.
+    // No current authoritative evidence rules any feed out for this station.
+    // The route IDs (including GS, FS and H shuttles) come from each trip update.
     const feedsToCheck = Object.keys(MTA_FEEDS) as (keyof typeof MTA_FEEDS)[];
+    const now = Date.now();
 
     for (const feedKey of feedsToCheck) {
       signal?.throwIfAborted();
@@ -127,12 +120,18 @@ export class MTAClient extends TransitAPIClient {
         const feed = await this.fetchFeed(feedKey, signal);
 
         for (const entity of feed.entity) {
-          if (!entity.tripUpdate) continue;
+          if (!entity.tripUpdate || entity.isDeleted) continue;
 
           const tripUpdate = entity.tripUpdate;
           const trip = tripUpdate.trip;
 
-          if (!trip || !tripUpdate.stopTimeUpdate) continue;
+          if (!trip || !tripUpdate.stopTimeUpdate || trip.scheduleRelationship === 3) continue;
+
+          // NYCT documents that updates contain ALL remaining stops. The last
+          // stop therefore identifies this trip's destination, including short
+          // turns; do not substitute the current platform or a route terminus.
+          const terminalId = tripUpdate.stopTimeUpdate.at(-1)?.stopId?.replace(/[NS]$/, '');
+          const terminal = NYC_STATIONS.find(candidate => candidate.id === terminalId);
 
           // Find stop time updates for this station
           for (const stopTimeUpdate of tripUpdate.stopTimeUpdate) {
@@ -141,13 +140,21 @@ export class MTAClient extends TransitAPIClient {
             const baseStopId = stopId.replace(/[NS]$/, '');
 
             if (baseStopId === stationId || stopId === stationId) {
-              const arrivalTime = stopTimeUpdate.arrival?.time;
-              if (!arrivalTime) continue;
+              if (stopTimeUpdate.scheduleRelationship === 1 || stopTimeUpdate.scheduleRelationship === 2) continue;
+              const arrivalSeconds = eventTimestamp(stopTimeUpdate.arrival);
+              const departureSeconds = eventTimestamp(stopTimeUpdate.departure);
+              const eventSeconds = arrivalSeconds ?? departureSeconds;
+              if (eventSeconds === undefined) continue;
+              const lastEventSeconds = departureSeconds ?? arrivalSeconds!;
+              // NYCT removes a stop only after departure. A retained past-due
+              // estimate is uncertain/delayed, not proof that the train has left.
+              const delayed = lastEventSeconds * 1000 < now;
 
               // Calculate minutes away
-              const arrivalDate = new Date(Number(arrivalTime) * 1000);
-              const now = new Date();
-              const minutesAway = Math.floor((arrivalDate.getTime() - now.getTime()) / 60000);
+              const arrivalDate = new Date(eventSeconds * 1000);
+              const minutesAway = Math.floor((arrivalDate.getTime() - now) / 60000);
+              const boarding = arrivalSeconds !== undefined && arrivalSeconds * 1000 <= now
+                && departureSeconds !== undefined && departureSeconds * 1000 >= now;
 
               // Determine direction from stop_id suffix
               const direction = stopId.endsWith('N') ? 'NORTH' : stopId.endsWith('S') ? 'SOUTH' : undefined;
@@ -155,9 +162,11 @@ export class MTAClient extends TransitAPIClient {
               predictions.push({
                 city: 'nyc',
                 line: trip.routeId || '',
-                destination: stopTimeUpdate.stopId || 'Unknown',
+                destination: terminal?.name ?? 'Unknown',
+                destinationCode: terminal?.id,
                 arrivalTime: arrivalDate.toISOString(),
-                minutesAway: minutesAway <= 0 ? 'ARR' : minutesAway,
+                minutesAway: delayed ? 0 : boarding ? 'BRD' : minutesAway <= 0 ? 'ARR' : minutesAway,
+                arrivalStatus: delayed ? 'DELAYED' : undefined,
                 direction,
               });
             }
@@ -173,18 +182,14 @@ export class MTAClient extends TransitAPIClient {
         ) {
           throw error;
         }
-        // Log error but continue with other feeds to provide partial results
-        // In production, this would be sent to Cloudflare's logging/observability
-        // Continue with other feeds
+        // The legacy schema has no completeness field. A required-feed failure
+        // must be an error, never a plausible complete (or quiet) station board.
+        throw new Error('MTA predictions unavailable: a required feed could not be loaded');
       }
     }
 
     // Sort by arrival time
-    predictions.sort((a, b) => {
-      if (a.minutesAway === 'ARR') return -1;
-      if (b.minutesAway === 'ARR') return 1;
-      return (a.minutesAway as number) - (b.minutesAway as number);
-    });
+    predictions.sort((a, b) => Date.parse(a.arrivalTime) - Date.parse(b.arrivalTime));
 
     return predictions;
   }
@@ -235,9 +240,11 @@ export class MTAClient extends TransitAPIClient {
 
         // Get timestamp from mercury extensions
         const updatedAt = alert['transit_realtime.mercury_alert']?.updated_at;
-        const timestamp = updatedAt
-          ? new Date(updatedAt * 1000).toISOString()
-          : new Date().toISOString();
+        const updatedDate = typeof updatedAt === 'number' && updatedAt > 0
+          ? new Date(updatedAt * 1000) : undefined;
+        const timestamp = updatedDate && Number.isFinite(updatedDate.getTime())
+          ? updatedDate.toISOString()
+          : 'Unknown';
 
         incidents.push({
           city: 'nyc',
@@ -259,8 +266,7 @@ export class MTAClient extends TransitAPIClient {
       ) {
         throw error;
       }
-      // If alerts feed fails, return empty array rather than breaking the whole request
-      // In production, this would be sent to Cloudflare's logging/observability
+      throw new Error('MTA service alerts unavailable');
     }
 
     return incidents;

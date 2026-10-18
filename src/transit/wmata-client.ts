@@ -54,9 +54,9 @@ export class WMATAClient extends TransitAPIClient {
       });
 
       if (!response.ok) {
-        let errorText: string;
         try {
-          errorText = await response.text();
+          // Drain the response while preserving cancellation; never expose its body.
+          await response.text();
         } catch (error) {
           if (
             signal?.aborted ||
@@ -67,9 +67,8 @@ export class WMATAClient extends TransitAPIClient {
           ) {
             throw error;
           }
-          errorText = 'Unknown error';
         }
-        throw new WMATAError(`API request failed: ${errorText}`, response.status);
+        throw new WMATAError('WMATA API request failed', response.status);
       }
 
       const data = (await response.json()) as T;
@@ -113,6 +112,8 @@ export class WMATAClient extends TransitAPIClient {
         state: wmataStation.Address.State,
         zip: wmataStation.Address.Zip,
       },
+      stationTogether: [wmataStation.StationTogether1, wmataStation.StationTogether2]
+        .filter((code): code is string => !!code && code !== wmataStation.Code),
     };
   }
 
@@ -128,6 +129,11 @@ export class WMATAClient extends TransitAPIClient {
       arrivalTime: wmataPrediction.Min, // WMATA uses "ARR", "BRD", or minutes
       minutesAway: wmataPrediction.Min,
       cars: wmataPrediction.Car,
+      // Group distinguishes provider track groupings, not physical track numbers.
+      track: wmataPrediction.Group ? `Group ${wmataPrediction.Group}` : undefined,
+      direction: wmataPrediction.DestinationCode && wmataPrediction.DestinationName
+        ? `${wmataPrediction.DestinationName}-bound`
+        : undefined,
     };
   }
 
@@ -231,7 +237,39 @@ export class WMATAClient extends TransitAPIClient {
     const stations = await this.getStations(signal);
     const lineUpper = lineCode.toUpperCase();
 
-    return stations.filter((station) => station.lines.includes(lineUpper));
+    const members = stations.filter((station) => station.lines.includes(lineUpper));
+    if (members.length === 0) return [];
+
+    const { Lines } = await this.makeRequest<{ Lines: {
+      LineCode: string; StartStationCode: string; EndStationCode: string;
+    }[] }>('/Rail.svc/json/jLines', 3600, signal);
+    const line = Array.isArray(Lines) ? Lines.find(candidate => candidate?.LineCode === lineUpper) : undefined;
+    if (!line?.StartStationCode || !line.EndStationCode) {
+      throw new WMATAError('WMATA ordered line path unavailable');
+    }
+
+    const { Path } = await this.makeRequest<{ Path: { StationCode: string; SeqNum: number }[] }>(
+      `/Rail.svc/json/jPath?FromStationCode=${encodeURIComponent(line.StartStationCode)}&ToStationCode=${encodeURIComponent(line.EndStationCode)}`,
+      3600,
+      signal,
+    );
+    if (!Array.isArray(Path) || Path.some(stop => !stop
+      || typeof stop.StationCode !== 'string' || !Number.isInteger(stop.SeqNum))) {
+      throw new WMATAError('WMATA ordered line path unavailable');
+    }
+    const ordered = [...Path].sort((a, b) => a.SeqNum - b.SeqNum);
+    const byId = new Map(members.map(station => [station.id, station]));
+    // jPath can choose another line at a junction. Never publish that shortcut as
+    // the requested line's ordered pattern, or silently return partial coverage.
+    if (ordered.length !== members.length
+      || ordered[0]?.StationCode !== line.StartStationCode
+      || ordered.at(-1)?.StationCode !== line.EndStationCode
+      || new Set(ordered.map(stop => stop.StationCode)).size !== ordered.length
+      || new Set(ordered.map(stop => stop.SeqNum)).size !== ordered.length
+      || ordered.some(stop => !byId.has(stop.StationCode))) {
+      throw new WMATAError('WMATA ordered line path unavailable');
+    }
+    return ordered.map(stop => byId.get(stop.StationCode)!);
   }
 
   /**

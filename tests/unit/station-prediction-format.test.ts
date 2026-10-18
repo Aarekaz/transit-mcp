@@ -30,7 +30,7 @@ describe('formatStationPredictionsForMcp', () => {
         destination: 'Downtown Largo',
         minutesAway: 6,
         arrivalTime: '2026-06-10T18:06:00.000Z',
-        arrivalStatus: 'SCHEDULED',
+        arrivalStatus: 'ARRIVING',
         cars: '8',
         direction: null,
         track: null
@@ -46,5 +46,11 @@ describe('formatStationPredictionsForMcp', () => {
         track: null
       }
     ]);
+  });
+
+  it('does not invent a timestamp when the provider supplied neither a timestamp nor a numeric countdown', () => {
+    expect(formatStationPredictionsForMcp([{
+      city: 'nyc', line: '1', destination: 'Unknown', arrivalTime: '', minutesAway: '',
+    }], new Date('2026-10-18T16:00:00Z'))[0]?.arrivalTime).toBeNull();
   });
 });

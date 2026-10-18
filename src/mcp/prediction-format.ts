@@ -60,9 +60,9 @@ export function formatStationPredictionsForMcp(
       destination: prediction.destination,
       minutesAway,
       arrivalTime: normalizeArrivalTime(prediction.arrivalTime, minutesAway, now),
-      arrivalStatus: minutesAway === null
+      arrivalStatus: prediction.arrivalStatus ?? (minutesAway === null
         ? (STATUS_BY_SENTINEL[sentinel] ?? 'SCHEDULED')
-        : 'SCHEDULED',
+        : 'ARRIVING'),
       cars: prediction.cars ?? null,
       direction: prediction.direction ?? null,
       track: prediction.track ?? null

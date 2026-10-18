@@ -62,6 +62,9 @@ export interface TransitStation {
 
   /** Optional: Transfer connections to other stations */
   transfers?: StationTransfer[];
+
+  /** Provider station-complex links, without an asserted walking duration. */
+  stationTogether?: string[];
 }
 
 /**
@@ -85,6 +88,9 @@ export interface TransitPrediction {
 
   /** Minutes until arrival - number or special strings like "ARR", "BRD" */
   minutesAway: number | string;
+
+  /** Explicit observation status when a numeric countdown alone is ambiguous. */
+  arrivalStatus?: 'ARRIVING' | 'BOARDING' | 'DELAYED';
 
   /** Optional: Number of cars */
   cars?: string;

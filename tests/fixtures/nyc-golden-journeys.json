@@ -1,0 +1,21 @@
+{
+  "coverage": "nyc",
+  "feed": "mta_subway",
+  "provenance": { "classification": "synthetic_topology", "scope": "Invented IDs, coordinates, timetables and weekend patterns for core acceptance only. Not an authoritative MTA schedule or production readiness evidence.", "sourceUrl": "https://example.invalid/transit-mcp/fixtures/nyc-golden-journeys" },
+  "now": "2026-10-19T08:59:00-04:00",
+  "files": {
+    "agency.txt": "agency_id,agency_name,agency_url,agency_timezone\nsyn_mta,MTA,https://www.mta.info,America/New_York\n",
+    "stops.txt": "stop_id,stop_name,stop_lat,stop_lon\nsyn_times,Times Sq-42 St,40.755,-73.987\nsyn_28,28 St,40.746,-73.993\nsyn_14,14 St-7 Av,40.738,-74.001\nsyn_l,14 St-8 Av,40.739,-74.003\nsyn_union,Union Sq,40.735,-73.991\n",
+    "routes.txt": "route_id,agency_id,route_short_name,route_long_name,route_type\nsyn_local,syn_mta,1,Local,1\nsyn_express,syn_mta,2,Express,1\nsyn_cross,syn_mta,L,Crosstown,1\n",
+    "trips.txt": "route_id,service_id,trip_id,trip_headsign,direction_id\nsyn_local,D,syn_local_train,South Ferry,1\nsyn_express,W,syn_express_train,Flatbush Av,1\nsyn_cross,D,syn_l_train,Canarsie,0\n",
+    "stop_times.txt": "trip_id,arrival_time,departure_time,stop_id,stop_sequence\nsyn_local_train,09:00:00,09:00:00,syn_times,1\nsyn_local_train,09:06:00,09:06:00,syn_28,2\nsyn_local_train,09:12:00,09:12:00,syn_14,3\nsyn_express_train,09:02:00,09:02:00,syn_times,1\nsyn_express_train,09:08:00,09:08:00,syn_14,2\nsyn_l_train,09:16:00,09:16:00,syn_l,1\nsyn_l_train,09:22:00,09:22:00,syn_union,2\n",
+    "calendar.txt": "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nD,1,1,1,1,1,1,1,20261019,20261025\nW,1,1,1,1,1,0,0,20261019,20261025\n",
+    "pathways.txt": "pathway_id,from_stop_id,to_stop_id,pathway_mode,is_bidirectional,length,traversal_time\nsyn_l_transfer,syn_14,syn_l,1,1,180,180\n"
+  },
+  "journeys": [
+    { "name": "local-only stop cannot be reached by express", "origin": "Times Sq-42 St", "destination": "28 St", "departAt": "2026-10-19T08:59:00-04:00", "want": { "trips": ["syn_local_train"], "headsigns": ["South Ferry"], "arrivalTime": "2026-10-19T13:06:00.000Z", "transfers": 0 } },
+    { "name": "express overtakes the local", "origin": "Times Sq-42 St", "destination": "14 St-7 Av", "departAt": "2026-10-19T08:59:00-04:00", "want": { "trips": ["syn_express_train"], "headsigns": ["Flatbush Av"], "arrivalTime": "2026-10-19T13:08:00.000Z", "transfers": 0 } },
+    { "name": "transfer through an explicit pedestrian pathway", "origin": "28 St", "destination": "Union Sq", "departAt": "2026-10-19T09:05:00-04:00", "want": { "trips": ["syn_local_train", "syn_l_train"], "headsigns": ["South Ferry", "Canarsie"], "arrivalTime": "2026-10-19T13:22:00.000Z", "transfers": 1 } },
+    { "name": "Saturday uses active local service rather than weekday express", "origin": "Times Sq-42 St", "destination": "14 St-7 Av", "departAt": "2026-10-24T08:59:00-04:00", "want": { "trips": ["syn_local_train"], "headsigns": ["South Ferry"], "arrivalTime": "2026-10-24T13:12:00.000Z", "transfers": 0 } }
+  ]
+}

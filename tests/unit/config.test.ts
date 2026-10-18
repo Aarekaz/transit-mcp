@@ -221,14 +221,14 @@ describe('anonymous deployment configuration', () => {
       MCP_PUBLIC_ORIGIN: 'https://transitmcp.com',
       MCP_ALLOWED_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
       MCP_ALLOWED_ORIGIN_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
-      SFBAY_MODE: 'on',
+      SFBAY_MODE: 'dark',
       ENVIRONMENT: 'production',
     });
     expect(wrangler.env.preview.vars).toEqual({
       MCP_PUBLIC_ORIGIN: 'https://metro-mcp-preview.anuragd.me',
       MCP_ALLOWED_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
       MCP_ALLOWED_ORIGIN_HOSTNAMES: 'metro-mcp-preview.anuragd.me',
-      SFBAY_MODE: 'on',
+      SFBAY_MODE: 'dark',
       ENVIRONMENT: 'preview',
     });
     expect(wrangler.kv_namespaces).toBeUndefined();

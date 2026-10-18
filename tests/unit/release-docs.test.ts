@@ -16,9 +16,11 @@ const appsVerification = readProjectFile('docs/mcp-apps-verification.md');
 const landingPage = readProjectFile('public/index.html');
 const publicDocs = readProjectFile('public/docs/index.html');
 const llmsText = readProjectFile('public/llms.txt');
+const sfBayRollout = readProjectFile('docs/sfbay-rollout.md');
 const privacy = readProjectFile('public/privacy/index.html');
 const terms = readProjectFile('public/terms/index.html');
 const support = readProjectFile('public/support/index.html');
+const ogImageSvg = readProjectFile('public/og-image.svg');
 const transitBoardSource = readProjectFile('apps/transit-board/transit-board.html');
 const registry = readProjectFile('server.json');
 const wrangler = readProjectFile('wrangler.jsonc');
@@ -30,8 +32,31 @@ const packageJson = JSON.parse(readProjectFile('package.json')) as {
 };
 const workflow = readOptionalProjectFile('.github/workflows/type-check.yml');
 
+const forbiddenSfLiveClaimPatterns = [
+  /(?:live|real-time)[^.!?\n]{0,120}(?:San Francisco |SF )?Bay Area/i,
+  /(?:San Francisco |SF )?Bay Area[^.!?\n]{0,120}(?:live|real-time)/i,
+  /(?:live|real-time)\s+SF Bay\b/i,
+  /\bSF Bay\b[^.!?\n]{0,40}(?:is\s+)?(?:live|real-time)\b/i,
+] as const;
+
 describe('release operator documentation', () => {
-  it('publishes live Bay Area coverage consistently across public discovery surfaces', () => {
+  it('routes public LLM guidance by runtime planning capability and retains legacy lookup limits', () => {
+    expect(llmsText).toMatch(/find_transit.*availability.*planning/);
+    expect(llmsText).toMatch(/plan_trip.*only when/);
+    expect(llmsText).toContain('do not provide a full journey planner');
+    expect(llmsText).toContain('minutesAway');
+  });
+  it('keeps SF Bay dark while documenting the in-development rollout', () => {
+    for (const [name, document] of [
+      ['README', readme],
+      ['landing page', landingPage],
+      ['public docs', publicDocs],
+      ['LLM index', llmsText],
+      ['changelog', changelog],
+    ] as const) {
+      expect(document, name).toMatch(/SF Bay support is in development/i);
+    }
+
     for (const [name, document] of [
       ['README', readme],
       ['landing page', landingPage],
@@ -41,21 +66,34 @@ describe('release operator documentation', () => {
       ['terms', terms],
       ['support', support],
       ['registry', registry],
+      ['social image', ogImageSvg],
+      ['changelog', changelog],
     ] as const) {
-      expect(document, name).toMatch(/(?:San Francisco )?Bay Area/i);
+      for (const pattern of forbiddenSfLiveClaimPatterns) {
+        expect(document, name).not.toMatch(pattern);
+      }
     }
 
     expect(readme).toMatch(/18 MCP tools/i);
     expect(publicDocs).toMatch(/18 Model Context Protocol tools/i);
-    expect(llmsText).toContain('search_sfbay_stations');
-    expect(llmsText).toContain('get_vehicle_positions');
-    expect(landingPage).toContain('511 SF Bay');
-    expect(publicDocs).toContain('511 SF Bay');
+    expect(sfBayRollout).not.toMatch(/without registering public tools|on.*registers tools|current\.json\.gz/);
+    expect(readme).toContain('docs/global-transit-verification.md');
+    expect(sfBayRollout).toMatch(/SF Bay support is in development/i);
+    expect(sfBayRollout).toContain('511 SF Bay');
     expect(privacy).toContain('511 SF Bay');
     expect(terms).toContain('511 SF Bay');
     expect(transitBoardSource).toContain('<title>Transit MCP Transit Board</title>');
-    expect(wrangler).toMatch(/"SFBAY_MODE": "on"/);
-    expect(wrangler).not.toMatch(/"SFBAY_MODE": "dark"/);
+    expect(ogImageSvg).toContain('SF Bay: in development');
+    expect(ogImageSvg).toContain('2 live regions');
+    expect([...wrangler.matchAll(/"SFBAY_MODE": "([^"]+)"/g)].map(match => match[1]))
+      .toEqual(['dark', 'dark']);
+  });
+
+  it.each([
+    'Live SF Bay arrivals and service alerts',
+    'SF Bay transit is live',
+  ])('recognizes a canonical SF Bay live claim: %s', claim => {
+    expect(forbiddenSfLiveClaimPatterns.some(pattern => pattern.test(claim))).toBe(true);
   });
 
   it('documents Transit MCP 6.0 as anonymous with no credential setup', () => {
@@ -110,8 +148,8 @@ describe('release operator documentation', () => {
     expect(securityGuide).toMatch(/never treat a header as identity/i);
 
     const telemetryFields = [
-      'correlationId', 'era', 'protocolVersion', 'mcpMethod', 'mcpName',
-      'clientName', 'sessionId', 'alias', 'upstream', 'durationMs', 'statusClass',
+      'era', 'protocolVersion', 'mcpMethod', 'mcpName',
+      'clientName', 'alias', 'upstream', 'durationMs', 'statusClass',
     ];
     for (const field of telemetryFields) expect(securityGuide).toContain(`\`${field}\``);
     expect(securityGuide).not.toMatch(/clientId|authentication detail/i);
@@ -170,7 +208,7 @@ describe('release operator documentation', () => {
       .toBeGreaterThan(workflow.indexOf('git diff --exit-code -- public/apps/transit-board.html'));
     expect(workflow.indexOf('bun run test:apps'))
       .toBeGreaterThan(workflow.indexOf('bunx playwright install --with-deps chromium'));
-    expect(workflow.indexOf('bunx wrangler deploy --dry-run'))
+    expect(workflow.indexOf('node node_modules/wrangler/bin/wrangler.js deploy --dry-run'))
       .toBeGreaterThan(workflow.indexOf('bun run test:apps'));
     expect(appsHostHtml).toMatch(
       /<iframe[^>]+id="app-frame"[^>]+sandbox="allow-scripts"[^>]+data-resource="\/apps\/transit-board\.html"/,

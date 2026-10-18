@@ -7,6 +7,7 @@ import type { MetroMcpContext, MetroRequestState } from '../../src/mcp/context';
 import { createMetroMcpServer } from '../../src/mcp/server';
 import {
   EXPECTED_TOOL_NAMES,
+  EXPECTED_CATALOG_TOOL_NAMES,
   TRANSIT_BOARD_MIME,
   TRANSIT_BOARD_TOOL_META,
 } from '../fixtures/mcp-contracts';
@@ -31,6 +32,26 @@ describe('createMetroMcpServer', () => {
 
     expect(a).not.toBe(b);
     expect(a.server).not.toBe(b.server);
+  });
+
+  it('keeps dark server metadata limited to the registered DC and NYC surface', () => {
+    const dark = createMetroMcpServer(testContext()).server as unknown as {
+      _instructions: string;
+      _serverInfo: { description: string };
+    };
+    const enabled = createMetroMcpServer(testContext({
+      env: createMockEnv({ SFBAY_MODE: 'on' }),
+    })).server as unknown as {
+      _instructions: string;
+      _serverInfo: { description: string };
+    };
+
+    expect(dark._serverInfo.description).toBe(
+      'Real-time DC Metro and NYC Subway arrivals, service alerts, stations, and DC buses.',
+    );
+    expect(dark._instructions).not.toMatch(/San Francisco|SF Bay|sfbay|511/);
+    expect(enabled._serverInfo.description).toBe(dark._serverInfo.description);
+    expect(enabled._instructions).toBe(dark._instructions);
   });
 
   it('fails construction when the request-state key is too short', () => {
@@ -93,12 +114,12 @@ describe('createMetroMcpServer', () => {
       _registeredTools: Record<string, { _meta?: unknown }>;
     };
 
-    expect(Object.keys(server._registeredTools)).toEqual(EXPECTED_TOOL_NAMES);
-    for (const tool of Object.values(server._registeredTools)) {
+    expect(Object.keys(server._registeredTools)).toEqual(EXPECTED_CATALOG_TOOL_NAMES);
+    for (const tool of Object.values(server._registeredTools).slice(0, EXPECTED_TOOL_NAMES.length)) {
       expect(tool._meta).toEqual(TRANSIT_BOARD_TOOL_META);
     }
     expect(new Set(
-      Object.values(server._registeredTools).map(tool => tool._meta),
+      Object.values(server._registeredTools).slice(0, EXPECTED_TOOL_NAMES.length).map(tool => tool._meta),
     ).size).toBe(1);
     const meta = Object.values(server._registeredTools)[0]!._meta as {
       ui: { visibility: readonly string[] };

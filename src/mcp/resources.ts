@@ -7,6 +7,7 @@ import {
 import { getTransitClient } from '../transit/registry';
 import type { SupportedCity } from '../transit/base';
 import type { MetroMcpContext } from './context';
+import { findEntityResult } from './tools/global/find';
 import {
   PRIVATE_NO_CACHE,
   PUBLIC_24H,
@@ -156,4 +157,21 @@ export function registerResources(
       };
     }, handlerContext.mcpReq.signal),
   );
+
+  server.registerResource('entity', new ResourceTemplate('transit://entity/{ref}?version={version}', { list: undefined }), {
+    title: 'Versioned transit entity', description: 'Pinned static transit entity detail; the same essential detail is available through find_transit(ref).',
+    mimeType: JSON_MIME_TYPE,
+    // Retention has not yet been established for a public cache lifetime.
+    cacheHint: PRIVATE_NO_CACHE,
+  }, async (uri, { ref, version }, handler) => {
+    try {
+      if (typeof ref !== 'string' || typeof version !== 'string' || !/^[a-f0-9]{64}$/.test(version)) throw new Error('Invalid entity URI');
+      const result = await findEntityResult(context, ref, handler.mcpReq.signal, version);
+      if (!result.entities.length) throw new Error('Entity unavailable');
+      return { contents: [{ uri: uri.href, mimeType: JSON_MIME_TYPE, text: JSON.stringify(result) }] };
+    } catch (error) {
+      if (handler.mcpReq.signal.aborted) throw error;
+      throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'ENTITY_NOT_FOUND: pinned entity or version is unavailable');
+    }
+  });
 }

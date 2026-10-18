@@ -1,6 +1,6 @@
 # Transit MCP
 
-Transit MCP is an anonymous, read-only Model Context Protocol server for live DC Metro, NYC Subway, and San Francisco Bay Area transit information.
+Transit MCP is an anonymous, read-only Model Context Protocol server for live DC Metro and NYC Subway transit information. SF Bay support is in development and is not available on the production MCP surface.
 
 **Metro MCP is now Transit MCP.**
 
@@ -53,20 +53,20 @@ codex mcp add transit-mcp https://transitmcp.com/mcp
 
 ## What it provides
 
-Transit MCP exposes 18 MCP tools across WMATA, MTA, and 511 SF Bay data, including arrivals, service incidents, stations, routes, buses, trains, transfers, and live vehicle positions.
+This checkout registers 18 MCP tools: the 13 compatible DC/NYC tools plus five global capabilities, `find_transit`, `plan_trip`, `get_departures`, `get_service_status`, and `get_vehicle_status`. Tool registration does not mean a coverage unit is enabled. Existing WMATA and MTA tools provide arrivals, service incidents, stations, routes, buses, trains, transfers, and vehicle positions.
 
-Five Bay Area tools cover regional station search, station arrivals, routes, service alerts, and vehicle positions. Bay Area results include freshness information and attribution to 511 SF Bay and participating operators.
+SF Bay support is in development. The checked-in production and preview configurations remain dark; global tools report coverage unavailable until validated data and activation gates are satisfied. DC and NYC global planning also defaults off; their 13 legacy tools remain available. These branch changes have not been deployed. Attribution remains with 511 SF Bay and participating operators.
 
-It also provides three `transit://` URI templates (stations, routes, and incidents) and three canned templates (`service-briefing`, `commute-planner`, and `accessibility-check`). Tool calls are read-only, idempotent, and open-world. Every result includes typed `structuredContent` and a JSON text fallback.
+It also provides four `transit://` URI templates (stations, routes, incidents, and versioned entities) and three canned prompts (`service-briefing`, `commute-planner`, and `accessibility-check`). Use `plan_trip` for journeys; do not assemble routes from departure boards. Global results distinguish `realtime`, `scheduled_only`, and `unavailable`, with source timestamps, versions, reasons, attribution, and a JSON text fallback.
 
-An Apps-capable host can render the Transit Board resource for the 13 DC and NYC tools. Bay Area tools return the same structured content and JSON text fallback without a specialized board renderer. See [the Apps verification record](docs/mcp-apps-verification.md).
+An Apps-capable host can render the Transit Board resource for the 13 DC and NYC tools. See [the Apps verification record](docs/mcp-apps-verification.md).
 
 ## Runtime and safety boundaries
 
 - **Protocol:** MCP `2026-07-28` stateless Streamable HTTP. The server does not advertise sessions, resumability, or server push.
 - **Request trust:** public origin and host/origin allowlists are validated at startup. The signed MRTR request-state codec is bound to the MCP method and expires after five minutes.
 - **Cancellation:** client disconnects propagate request cancellation to MCP handlers and upstream transit fetches.
-- **Caching:** discovery and tool metadata are publicly cacheable for 24 hours. Station and route resources are public-cacheable; live incident resources are not. WMATA uses Cloudflare edge cache windows appropriate to each feed, MTA real-time feeds use a 30-second in-memory cache, and Bay Area GTFS data is refreshed through the regional feed hub.
+- **Caching:** discovery and tool metadata are publicly cacheable for 24 hours. Station and route resources are public-cacheable; incident and versioned-entity resources are not. Legacy WMATA and MTA tools retain their provider caches. Global tools read versioned artifacts and snapshots without fetching upstream providers during a request.
 - **Rate limiting:** roughly 300 requests per 60-second window per source-IP key per Cloudflare location. Shared egress IPs group clients, and enforcement is eventually consistent. This is abuse protection, not a dedicated user quota.
 - **Rollback:** the inactive `MetroMcpAgent` class and original `v1` Durable Object migration remain for rollback. Do not add a deletion migration during stabilization.
 
@@ -85,20 +85,21 @@ Use the checked-in loopback origin, hostname allowlists, and `ENVIRONMENT=develo
 Before an approved deployment, run only dry-runs:
 
 ```bash
-bunx wrangler deploy --dry-run --outdir /tmp/transit-mcp-production
-bunx wrangler deploy --env preview --dry-run --outdir /tmp/transit-mcp-preview
+production_out=$(mktemp -d /tmp/transit-mcp-production.XXXXXX)
+preview_out=$(mktemp -d /tmp/transit-mcp-preview.XXXXXX)
+node node_modules/wrangler/bin/wrangler.js deploy --dry-run --env "" --outdir "$production_out"
+node node_modules/wrangler/bin/wrangler.js deploy --env preview --dry-run --outdir "$preview_out"
 ```
 
 ## Verification
 
-Run the suite with `bun run test`. The direct conformance runner requires only a target URL:
+Run `bun run build && bun run test && bun run test:apps`. The conformance runner starts and stops its own isolated local Worker, uses the installed pinned referee, and gates a frozen product profile with mapped real tests. The full official score is reported separately and is not a product-profile pass:
 
 ```bash
-export MCP_CONFORMANCE_TARGET_URL=https://metro-mcp-preview.anuragd.me/mcp
 ./scripts/run-conformance.sh
 ```
 
-See [MCP 2026 verification](docs/mcp-2026-verification.md) for protocol coverage and [security architecture](docs/SECURITY.md) for the public-request and rate-limit boundaries.
+See [global transit verification](docs/global-transit-verification.md) for current evidence and unpassed launch gates, [SF rollout](docs/sfbay-rollout.md) for activation prerequisites, and [security architecture](docs/SECURITY.md) for request boundaries. The [older MCP 2026 record](docs/mcp-2026-verification.md) is historical evidence, not this branch's acceptance.
 
 ## Support and legal
 

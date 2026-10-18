@@ -67,6 +67,37 @@ afterEach(() => {
 });
 
 describe('Transit Board arrival renderers', () => {
+  it('shows an overdue retained call as delayed rather than an immediate zero-minute arrival', () => {
+    const representative = EXPECTED_TOOL_CONTRACTS.get_station_predictions.structuredContent;
+    const container = mountResult('get_station_predictions', {
+      ...representative,
+      predictions: [{ ...representative.predictions[0], arrivalStatus: 'DELAYED', minutesAway: 0, arrivalTime: '2026-10-18T15:59:30.000Z' }],
+    });
+    expect(queryRequired(container, '.arrival-due').textContent).toBe('Delayed');
+    expect(container.textContent).not.toContain('0 min');
+  });
+
+  it('shows a numeric realtime countdown and provider group without claiming a physical track', () => {
+    const representative = EXPECTED_TOOL_CONTRACTS.get_station_predictions.structuredContent;
+    const container = mountResult('get_station_predictions', {
+      ...representative,
+      predictions: [{ ...representative.predictions[0], arrivalStatus: 'ARRIVING', minutesAway: 5, track: 'Group 2' }],
+    });
+    expect(queryRequired(container, '.arrival-due').textContent).toBe('5 min');
+    expect(container.textContent).toContain('Group 2');
+    expect(container.textContent).not.toContain('Track Group');
+  });
+
+  it('renders an explicitly unknown alert update time without a fabricated datetime', () => {
+    const representative = EXPECTED_TOOL_CONTRACTS.get_incidents.structuredContent;
+    const container = mountResult('get_incidents', {
+      ...representative,
+      incidents: [{ ...representative.incidents[0], lastUpdated: 'Unknown' }],
+    });
+    expect(queryRequired(container, '[data-incident-row]').textContent).toContain('Updated Unknown');
+    expect(container.querySelector('[datetime="Unknown"]')).toBeNull();
+  });
+
   it('renders the representative rail wire result as an operational arrivals board', () => {
     const result = EXPECTED_TOOL_CONTRACTS.get_station_predictions.structuredContent;
     const container = mountResult('get_station_predictions', result);

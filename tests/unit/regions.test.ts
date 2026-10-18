@@ -1,9 +1,49 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { getPublicCities, normalizeRegionMode } from '../../src/regions/manifest';
+import { getCoverage, getPublicCities, normalizeRegionMode } from '../../src/regions/manifest';
 import { SFBAY_REGION } from '../../src/regions/sfbay';
 
 describe('regional transit manifests', () => {
+  it('resolves Bay Area aliases to the permanent coverage ID without widening public discovery', () => {
+    for (const alias of ['sfbay', 'SF', ' San Francisco ', 'Bay Area', 'San Francisco Bay Area']) {
+      expect(getCoverage(alias)?.id).toBe('sfbay');
+    }
+    expect(getCoverage('unknown')).toBeUndefined();
+    expect(getCoverage('91')).toBeUndefined();
+    expect(getPublicCities('dark')).toEqual(['dc', 'nyc']);
+  });
+
+  it('provides source capability, threshold, timezone, and attribution metadata without credentials', () => {
+    const coverage = getCoverage('sfbay');
+    expect(coverage).toMatchObject({
+      kind: 'region',
+      capabilities: { schedules: true, realtimeDepartures: true, alerts: true, vehicles: true, planning: true, accessibility: true },
+      agencyTimezones: {},
+      thresholds: {
+        tripUpdates: { realtimeSeconds: 180, staleSeconds: 600 },
+        vehiclePositions: { realtimeSeconds: 360, unavailableSeconds: 600 },
+        alerts: { currentSeconds: 1200 },
+        minimumScheduleMatchRate: 0.95,
+        maximumUnverifiedWalkMetres: 800,
+      },
+      attribution: [{ text: 'Transit data provided by 511 SF Bay and participating Bay Area operators.', url: 'https://511.org/open-data/transit' }],
+    });
+    expect(coverage?.feeds).toEqual([{ id: 'sf511', realtime: SFBAY_REGION.realtime.feeds }]);
+    expect(coverage?.supportedModes).toEqual(expect.arrayContaining(['bus', 'rail', 'ferry']));
+    expect(coverage).not.toHaveProperty('secretEnv');
+    expect(coverage).not.toHaveProperty('modeEnv');
+    expect(JSON.stringify(coverage)).not.toMatch(/api_key|SF511_API_KEY/);
+  });
+
+  it('does not interpret public places or client-owned personal meanings as coverage names', () => {
+    for (const query of ['Pier 39', 'SFO', 'home', 'work']) expect(getCoverage(query)).toBeUndefined();
+    expect(getPublicCities('dark')).toEqual(['dc', 'nyc']);
+  });
+
+  it('does not fabricate agency IDs from the consolidated feed namespace', () => {
+    expect(getCoverage('sfbay')?.agencyTimezones).toEqual({});
+  });
+
   it('keeps Bay Area discovery dark until explicitly enabled', () => {
     expect(getPublicCities('off')).toEqual(['dc', 'nyc']);
     expect(getPublicCities('dark')).toEqual(['dc', 'nyc']);

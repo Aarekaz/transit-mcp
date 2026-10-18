@@ -13,26 +13,33 @@ export interface TelemetryInput extends Record<string, unknown> {
 }
 
 export interface SafeTelemetry {
-  correlationId?: string;
   era?: 'modern' | 'legacy';
   protocolVersion?: string;
   mcpMethod?: string;
   mcpName?: string;
   clientName?: string;
-  sessionId?: string;
   alias?: '/mcp' | '/sse';
   upstream?: string;
   durationMs?: number;
   statusClass?: `${1 | 2 | 3 | 4 | 5}xx`;
 }
 
-function safeString(value: unknown, pattern: RegExp, maxLength: number): string | undefined {
-  return typeof value === 'string'
-    && value.length > 0
-    && value.length <= maxLength
-    && pattern.test(value)
-    ? value
-    : undefined;
+// Finite, server-owned categories: regex validation alone permits identifiers,
+// coordinates, keys and place names to be smuggled into otherwise safe fields.
+export const TELEMETRY_TOOLS = [
+  'find_transit', 'plan_trip', 'get_departures', 'get_service_status', 'get_vehicle_status',
+  'get_station_predictions', 'search_stations', 'get_stations_by_line', 'get_all_stations',
+  'get_station_transfers', 'get_incidents', 'get_elevator_incidents', 'get_route_info',
+  'get_train_positions', 'get_bus_predictions', 'get_bus_routes', 'get_bus_stops', 'get_bus_positions',
+] as const;
+export const TELEMETRY_CLIENTS = ['ChatGPT', 'openai-mcp', 'Claude Desktop', 'claude-ai', 'transit-prompt-evals'] as const;
+export const TELEMETRY_ENVIRONMENTS = ['production', 'preview', 'development', 'test'] as const;
+export function telemetryCategory(value: unknown, allowed: readonly string[]): string {
+  return typeof value === 'string' && allowed.includes(value) ? value : 'unclassified';
+}
+function known(value: unknown, allowed: readonly string[]): string | undefined {
+  const category = telemetryCategory(value, allowed);
+  return category === 'unclassified' ? undefined : category;
 }
 
 function addIfDefined<Key extends keyof SafeTelemetry>(
@@ -48,7 +55,6 @@ function addIfDefined<Key extends keyof SafeTelemetry>(
 /** Build a new allowlisted object; unknown input keys are never copied. */
 export function sanitizeTelemetry(input: TelemetryInput): SafeTelemetry {
   const safe: SafeTelemetry = {};
-  addIfDefined(safe, 'correlationId', safeString(input.correlationId, /^[A-Za-z0-9._:-]+$/, 128));
   addIfDefined(
     safe,
     'era',
@@ -57,20 +63,20 @@ export function sanitizeTelemetry(input: TelemetryInput): SafeTelemetry {
   addIfDefined(
     safe,
     'protocolVersion',
-    safeString(input.protocolVersion, /^\d{4}-\d{2}-\d{2}$/, 10),
+    known(input.protocolVersion, ['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25', '2026-07-28']),
   );
   addIfDefined(
     safe,
     'mcpMethod',
-    safeString(input.mcpMethod, /^[A-Za-z][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9_.-]+)*$/, 128),
+    known(input.mcpMethod, ['initialize', 'ping', 'tools/call', 'tools/list', 'resources/list', 'resources/read', 'resources/templates/list', 'prompts/list', 'prompts/get', 'completion/complete', 'notifications/initialized', 'notifications/cancelled']),
   );
-  addIfDefined(safe, 'mcpName', safeString(input.mcpName, /^[A-Za-z0-9_.:-]+$/, 128));
+  addIfDefined(safe, 'mcpName', known(input.mcpName, TELEMETRY_TOOLS));
   addIfDefined(
     safe,
     'alias',
     input.alias === '/mcp' || input.alias === '/sse' ? input.alias : undefined,
   );
-  addIfDefined(safe, 'upstream', safeString(input.upstream, /^[a-z0-9][a-z0-9._-]*$/, 64));
+  addIfDefined(safe, 'upstream', known(input.upstream, ['wmata', 'mta', 'sf511']));
   addIfDefined(
     safe,
     'durationMs',
@@ -80,12 +86,7 @@ export function sanitizeTelemetry(input: TelemetryInput): SafeTelemetry {
       ? input.durationMs
       : undefined,
   );
-  addIfDefined(safe, 'clientName', safeString(input.clientName, /^[A-Za-z0-9_.: -]+$/, 64));
-  addIfDefined(
-    safe,
-    'sessionId',
-    safeString(input.sessionId, /^[A-Za-z0-9._:-]+$/, 128),
-  );
+  if (input.clientName !== undefined) safe.clientName = telemetryCategory(input.clientName, TELEMETRY_CLIENTS);
   if (typeof input.status === 'number'
     && Number.isInteger(input.status)
     && input.status >= 100

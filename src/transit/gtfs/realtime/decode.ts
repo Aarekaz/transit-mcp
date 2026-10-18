@@ -9,6 +9,25 @@ export interface NormalizedStopUpdate {
   stopSequence?: number;
   arrivalTimeSeconds?: number;
   departureTimeSeconds?: number;
+  arrivalDelaySeconds?: number;
+  departureDelaySeconds?: number;
+  stopScheduleRelationship?: StopRelationship;
+  scheduleRelationship?: TripRelationship;
+  tripInstanceRef?: string;
+  serviceDate?: string;
+  scheduledArrivalTimeSeconds?: number;
+  scheduledDepartureTimeSeconds?: number;
+  status?: 'realtime' | 'scheduled_only' | 'canceled' | 'skipped';
+}
+
+export type TripRelationship = 'SCHEDULED' | 'ADDED' | 'UNSCHEDULED' | 'CANCELED' | 'REPLACEMENT' | 'DUPLICATED' | 'UNKNOWN';
+export type StopRelationship = 'SCHEDULED' | 'SKIPPED' | 'NO_DATA' | 'UNSCHEDULED' | 'UNKNOWN';
+export interface DecodedStopUpdate extends Omit<NormalizedStopUpdate, 'stopId'> { stopId?: string }
+export interface NormalizedTripUpdate {
+  entityId: string; tripId?: string; routeId?: string; startDate?: string; startTime?: string;
+  scheduleRelationship: TripRelationship; rawScheduleRelationship: number;
+  delaySeconds?: number; stops: DecodedStopUpdate[];
+  tripProperties?: { tripId?: string; startDate?: string; startTime?: string };
 }
 
 export interface NormalizedVehicle {
@@ -16,12 +35,18 @@ export interface NormalizedVehicle {
   vehicleId?: string;
   label?: string;
   tripId?: string;
+  startDate?: string;
+  startTime?: string;
+  scheduleRelationship?: TripRelationship;
+  tripInstanceRef?: string;
   routeId?: string;
   latitude: number;
   longitude: number;
   bearing?: number;
   speedMetersPerSecond?: number;
   timestampSeconds?: number;
+  observationAgeSeconds?: number | null;
+  status?: 'realtime' | 'unavailable';
 }
 
 export interface NormalizedAlert {
@@ -30,11 +55,21 @@ export interface NormalizedAlert {
   description: string;
   routeIds: string[];
   stopIds: string[];
+  tripIds?: string[];
+  /** Conjunction within one selector; alternatives between selectors. */
+  selectors: NormalizedAlertSelector[];
+  /** Empty means always active; otherwise alternatives with open interval ends. */
+  activePeriods?: { start?: number; end?: number }[];
+}
+export interface NormalizedAlertSelector {
+  agencyId?: string; routeId?: string; routeType?: number; stopId?: string; directionId?: number;
+  trip?: { tripId?: string; startDate?: string; startTime?: string; routeId?: string; directionId?: number };
 }
 
 export interface NormalizedRealtimeFeed {
   producerTimestampSeconds?: number;
   tripUpdates: NormalizedStopUpdate[];
+  trips: NormalizedTripUpdate[];
   vehicles: NormalizedVehicle[];
   alerts: NormalizedAlert[];
   warnings: string[];
@@ -44,6 +79,40 @@ function numberValue(value: number | { toString(): string } | null | undefined):
   if (value == null) return undefined;
   const parsed = Number(value.toString());
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+// Protobuf defaults live on the prototype: absent timestamps/delays must remain absent.
+function ownNumber(object: object | null | undefined, key: string): number | undefined {
+  return object && Object.hasOwn(object, key) ? numberValue((object as Record<string, number>)[key]) : undefined;
+}
+
+function identifier(value: string | null | undefined): string | undefined {
+  // IDs are never rewritten: doing so could alias two provider entities.
+  return value && value.length <= 512 && !/[\u0000-\u001f\u007f]/.test(value) ? value : undefined;
+}
+
+export function safeAlertIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 256 && !/[<>\u0000-\u001f\u007f]/.test(value);
+}
+export function safeAlertSelector(selector: NormalizedAlertSelector): boolean {
+  return [selector.agencyId, selector.routeId, selector.stopId, selector.trip?.tripId, selector.trip?.routeId,
+    selector.trip?.startDate, selector.trip?.startTime].every(value => value === undefined || safeAlertIdentifier(value)) &&
+    [selector.routeType, selector.directionId, selector.trip?.directionId].every(value => value === undefined || Number.isSafeInteger(value) && value >= 0);
+}
+
+function alertSelector(value: transit_realtime.IEntitySelector): NormalizedAlertSelector {
+  const selector: NormalizedAlertSelector = {};
+  // Preserve presence: protobuf defaults must not create constraints, and an
+  // explicitly empty/invalid identifier must not become a general selector.
+  for (const key of ['agencyId', 'routeId', 'stopId'] as const) if (Object.hasOwn(value, key)) selector[key] = value[key] ?? '';
+  for (const key of ['routeType', 'directionId'] as const) { const number = ownNumber(value, key); if (number !== undefined) selector[key] = number; }
+  if (value.trip) {
+    selector.trip = {};
+    for (const key of ['tripId', 'startDate', 'startTime', 'routeId'] as const) if (Object.hasOwn(value.trip, key)) selector.trip[key] = value.trip[key] ?? '';
+    const direction = ownNumber(value.trip, 'directionId'); if (direction !== undefined) selector.trip.directionId = direction;
+    // GTFS explicitly ignores schedule_relationship in alert TripDescriptors.
+  }
+  return selector;
 }
 
 function firstTranslation(value: transit_realtime.ITranslatedString | null | undefined): string {
@@ -60,25 +129,35 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
   }
 
   const feed: NormalizedRealtimeFeed = {
-    producerTimestampSeconds: numberValue(message.header.timestamp),
+    producerTimestampSeconds: ownNumber(message.header, 'timestamp'),
     tripUpdates: [],
+    trips: [],
     vehicles: [],
     alerts: [],
     warnings: [],
   };
 
+  if (message.header.incrementality === 1) throw new Error('Unsupported differential GTFS-Realtime feed');
   for (const entity of message.entity) {
-    for (const update of entity.tripUpdate?.stopTimeUpdate ?? []) {
-      if (!update.stopId) continue;
-      feed.tripUpdates.push({
-        entityId: entity.id,
-        tripId: entity.tripUpdate?.trip?.tripId ?? undefined,
-        routeId: entity.tripUpdate?.trip?.routeId ?? undefined,
-        stopId: update.stopId,
-        stopSequence: update.stopSequence ?? undefined,
-        arrivalTimeSeconds: numberValue(update.arrival?.time),
-        departureTimeSeconds: numberValue(update.departure?.time),
-      });
+    if (entity.isDeleted) { feed.warnings.push('unsupported_deleted_entity'); continue; }
+    if (entity.tripUpdate) {
+      const update = entity.tripUpdate, descriptor = update.trip;
+      const raw = descriptor.scheduleRelationship ?? 0;
+      const relationships: Record<number, TripRelationship> = { 0: 'SCHEDULED', 1: 'ADDED', 2: 'UNSCHEDULED', 3: 'CANCELED', 5: 'REPLACEMENT', 6: 'DUPLICATED' };
+      const stopRelationships: Record<number, StopRelationship> = { 0: 'SCHEDULED', 1: 'SKIPPED', 2: 'NO_DATA', 3: 'UNSCHEDULED' };
+      const trip: NormalizedTripUpdate = { entityId: identifier(entity.id) ?? '', tripId: identifier(descriptor.tripId), routeId: identifier(descriptor.routeId),
+        startDate: identifier(descriptor.startDate), startTime: identifier(descriptor.startTime), scheduleRelationship: relationships[raw] ?? 'UNKNOWN',
+        rawScheduleRelationship: raw, delaySeconds: ownNumber(update, 'delay'), stops: [],
+        ...(update.tripProperties ? { tripProperties: { tripId: identifier(update.tripProperties.tripId), startDate: identifier(update.tripProperties.startDate), startTime: identifier(update.tripProperties.startTime) } } : {}) };
+      for (const stop of update.stopTimeUpdate ?? []) {
+        const normalized: DecodedStopUpdate = { entityId: trip.entityId, tripId: trip.tripId, routeId: trip.routeId, stopId: identifier(stop.stopId),
+          stopSequence: ownNumber(stop, 'stopSequence'), arrivalTimeSeconds: ownNumber(stop.arrival, 'time'), departureTimeSeconds: ownNumber(stop.departure, 'time'),
+          arrivalDelaySeconds: ownNumber(stop.arrival, 'delay'), departureDelaySeconds: ownNumber(stop.departure, 'delay'),
+          stopScheduleRelationship: stopRelationships[stop.scheduleRelationship ?? 0] ?? 'UNKNOWN' };
+        trip.stops.push(normalized);
+        if (normalized.stopId) feed.tripUpdates.push({ ...normalized, stopId: normalized.stopId });
+      }
+      feed.trips.push(trip);
     }
 
     const vehicle = entity.vehicle;
@@ -86,25 +165,40 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
       feed.vehicles.push({
         entityId: entity.id,
         vehicleId: vehicle.vehicle?.id ?? undefined,
-        label: vehicle.vehicle?.label ?? undefined,
-        tripId: vehicle.trip?.tripId ?? undefined,
-        routeId: vehicle.trip?.routeId ?? undefined,
+        label: vehicle.vehicle?.label ? sanitizeTransitText(vehicle.vehicle.label, 120) : undefined,
+        tripId: identifier(vehicle.trip?.tripId),
+        startDate: identifier(vehicle.trip?.startDate),
+        startTime: identifier(vehicle.trip?.startTime),
+        scheduleRelationship: vehicle.trip?.scheduleRelationship === 2 ? 'UNSCHEDULED' : vehicle.trip?.scheduleRelationship == null || vehicle.trip.scheduleRelationship === 0 ? 'SCHEDULED' : 'UNKNOWN',
+        routeId: identifier(vehicle.trip?.routeId),
         latitude: vehicle.position.latitude,
         longitude: vehicle.position.longitude,
-        bearing: vehicle.position.bearing ?? undefined,
-        speedMetersPerSecond: vehicle.position.speed ?? undefined,
-        timestampSeconds: numberValue(vehicle.timestamp),
+        bearing: ownNumber(vehicle.position, 'bearing'),
+        speedMetersPerSecond: ownNumber(vehicle.position, 'speed'),
+        timestampSeconds: ownNumber(vehicle, 'timestamp'),
       });
     }
 
     if (entity.alert) {
       const informedEntities = entity.alert.informedEntity ?? [];
+      const selectors = informedEntities.map(alertSelector);
+      const activePeriods = (entity.alert.activePeriod ?? []).map(period => ({
+        ...(Object.hasOwn(period, 'start') ? { start: ownNumber(period, 'start') } : {}),
+        ...(Object.hasOwn(period, 'end') ? { end: ownNumber(period, 'end') } : {}),
+      }));
+      if (!safeAlertIdentifier(entity.id) || selectors.length > 100 || selectors.some(selector => !safeAlertSelector(selector)) || activePeriods.length > 32 ||
+        activePeriods.some(period => Object.values(period).some(value => value === undefined || !Number.isSafeInteger(value) || value < 0 || value > 253402300799) ||
+          period.start !== undefined && period.end !== undefined && period.end <= period.start)) {
+        feed.warnings.push('invalid_alert'); continue;
+      }
       feed.alerts.push({
         id: entity.id,
         header: firstTranslation(entity.alert.headerText),
         description: firstTranslation(entity.alert.descriptionText),
         routeIds: [...new Set(informedEntities.flatMap(item => item.routeId ? [item.routeId] : []))],
         stopIds: [...new Set(informedEntities.flatMap(item => item.stopId ? [item.stopId] : []))],
+        tripIds: [...new Set(informedEntities.flatMap(item => item.trip?.tripId ? [item.trip.tripId] : []))],
+        selectors, activePeriods,
       });
     }
   }

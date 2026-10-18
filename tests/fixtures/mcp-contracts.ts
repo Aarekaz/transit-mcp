@@ -14,6 +14,9 @@ export const EXPECTED_TOOL_NAMES = [
   'get_route_info',
 ] as const;
 
+export const EXPECTED_GLOBAL_TOOL_NAMES = ['find_transit', 'plan_trip', 'get_departures', 'get_service_status', 'get_vehicle_status'] as const;
+export const EXPECTED_CATALOG_TOOL_NAMES = [...EXPECTED_TOOL_NAMES, ...EXPECTED_GLOBAL_TOOL_NAMES] as const;
+
 export const EXPECTED_SERVER_INFO = {
   name: 'transit-mcp',
   title: 'Transit MCP',
@@ -173,7 +176,7 @@ export const EXPECTED_PROMPT_CONTRACTS = {
   },
   'commute-planner': {
     title: 'Commute planner',
-    description: 'Build a step-by-step real-time commute plan between two stations.',
+    description: 'Check planning availability for a commute; return a verified journey where supported or scoped station and service lookups.',
     arguments: [
       { name: 'city', required: true },
       { name: 'fromStation', description: 'Origin station name', required: true },
@@ -185,7 +188,7 @@ export const EXPECTED_PROMPT_CONTRACTS = {
         fromStation: 'Times Square',
         toStation: 'Jay St',
       },
-      text: 'Plan a NYC transit commute from "Times Square" to "Jay St". Use search_stations to resolve each, get_station_predictions on the origin for the next train, and check get_incidents for relevant alerts. Return a concrete plan with line, direction, transfer points, and an estimated end-to-end time.',
+      text: 'Use find_transit with query "nyc" to inspect coverage. Only if coverage is available and its planning capability is true, use plan_trip with coverage "nyc", origin {query: "Times Square"} and destination {query: "Jay St"}. Report the verified itinerary and its status. Otherwise explain that journey planning is unavailable; use search_stations, get_station_predictions and get_incidents for station departures and service questions. These legacy tools do not provide a full journey planner. Never construct, extend or repair journeys from departures or station predictions.',
     }],
   },
   'accessibility-check': {
