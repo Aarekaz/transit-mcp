@@ -122,6 +122,22 @@ describe('NYC subway through the global tools with every MTA feed', () => {
       scheduledTime: '2026-10-20T00:28:00-04:00', predictedTime: '2026-10-20T04:29:00.000Z' })]);
   });
 
+  it.each([
+    ['keeps its >24h origin, dated by calendar day', '146400_1..S03R', undefined],
+    ['restarts the clock after midnight', '002400_1..S03R', '00:24:00'],
+  ])('matches an after-midnight NYCT trip that %s to the previous service day', async (_label, tripId, startTime) => {
+    vi.setSystemTime(new Date('2026-10-20T00:20:00-04:00'));
+    const stamp = nowSeconds(), at = (time: string) => civil(time, '2026-10-20');
+    const documents = nycDocuments(stamp, { 'nyct/gtfs': feedBytes(stamp, [{ id: tripId, tripUpdate: { trip: { tripId, routeId: '1', startDate: '20261020', ...(startTime ? { startTime } : {}) },
+      stopTimeUpdate: [['127S', '00:25:00'], ['128S', '00:27:00'], ['129S', '00:29:30'], ['130S', '00:31:00'], ['131S', '00:33:00'], ['132S', '00:35:00']]
+        .map(([stopId, time]) => ({ stopId, arrival: { time: at(time!) }, departure: { time: at(time!) } })) } }]) });
+    const f = await nyc(documents);
+    const result = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '129'), windowSeconds: 1800 })).structuredContent;
+    expect(result.departures).toEqual([expect.objectContaining({ serviceDate: SERVICE_DATE, scheduleMatch: 'matched', status: 'realtime',
+      tripInstanceRef: formatTripInstanceRef({ coverage: 'nyc', feed: 'mta_subway', id: 'AFA25GEN-1092-Weekday-00_146400_1..S03R', serviceDate: SERVICE_DATE, startTime: '24:24:00' }),
+      predictedTime: '2026-10-20T04:29:30.000Z' })]);
+  });
+
   it('resolves MTA alert agency aliases and parent-station selectors for route and stop scopes', async () => {
     const stamp = nowSeconds();
     const alerts = feedBytes(stamp, [

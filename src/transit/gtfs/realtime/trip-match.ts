@@ -1,7 +1,7 @@
 import { SFBAY_COVERAGE } from '../../../regions/sfbay';
 import type { RealtimeSourcePolicy } from '../../../regions/types';
 import { formatTripInstanceRef, parseTransitRef } from '../../core/refs';
-import { isServiceActive, serviceDayOrigin } from '../../planner/service-day';
+import { isServiceActive, serviceDayOrigin, shiftServiceDate } from '../../planner/service-day';
 import type { ArtifactManifestV2, DiscoveryIndex, ScheduleShard, ScheduleTrip } from '../static/schema';
 import { canonicalJson, decodeDiscoveryIndex, encodeScheduleShard, sha256 } from '../static/shards';
 import { parseGtfsTime, parseServiceDate } from '../static/time';
@@ -81,11 +81,31 @@ function tripIndex(context: TripMatchContext): Map<string, { shard: ScheduleShar
 function matchIndexedTrip(update: NormalizedTripUpdate, context: TripMatchContext, index: ReturnType<typeof tripIndex>): MatchedTripInstance | null {
   if (!update.tripId || !update.startDate || update.scheduleRelationship === 'UNKNOWN') return null;
   try { parseServiceDate(update.startDate); } catch { return null; }
+  const exact = tripCandidates(update, update.tripId, update.startDate, context, index);
+  if (exact.length || context.tripMatching !== 'nyct_suffix') return exact.length === 1 ? exact[0]! : null;
+  // NYCT dates a trip running after midnight by calendar day, either keeping its >24h
+  // origin (144000_6..N04X001) or restarting the clock (003750_J..N41R for 147750). Both
+  // name the previous service day's trip; used only when the start date has no match.
+  const previous = nyctPreviousDayTripId(update.tripId);
+  if (!previous) return null;
+  const shifted = tripCandidates(update, previous, shiftServiceDate(update.startDate, -1), context, index);
+  return shifted.length === 1 ? shifted[0]! : null;
+}
+
+/** NYCT trip IDs start with the origin time in hundredths of a minute (144000 = 24:00). */
+export function nyctPreviousDayTripId(tripId: string): string | null {
+  const match = /^(\d{6})(_.+)$/.exec(tripId);
+  if (!match) return null;
+  const origin = Number(match[1]);
+  return origin >= 144_000 ? tripId : `${String(origin + 144_000).padStart(6, '0')}${match[2]}`;
+}
+
+function tripCandidates(update: NormalizedTripUpdate, tripKey: string, serviceDate: string, context: TripMatchContext, index: ReturnType<typeof tripIndex>): MatchedTripInstance[] {
   const candidates: MatchedTripInstance[] = [];
-  for (const { shard, trip } of index.get(update.tripId) ?? []) {
+  for (const { shard, trip } of index.get(tripKey) ?? []) {
     if (context.feedId && shard.feedId !== context.feedId) continue;
-    if (update.startDate < shard.window.startDate || update.startDate > shard.window.endDate) continue;
-    if (!isServiceActive(shard.calendars[trip.serviceId]!, update.startDate)) continue;
+    if (serviceDate < shard.window.startDate || serviceDate > shard.window.endDate) continue;
+    if (!isServiceActive(shard.calendars[trip.serviceId]!, serviceDate)) continue;
     const route = shard.routes.find(route => route.ref === trip.routeRef)!;
     if (update.routeId && route.providerId !== update.routeId) continue;
     const timezone = shard.agencyTimezones[route.agencyRef]!;
@@ -102,12 +122,12 @@ function matchIndexedTrip(update: NormalizedTripUpdate, context: TripMatchContex
     // trip_id already encodes the scheduled origin, so identity is (trip, date, route).
     else if (context.tripMatching === 'nyct_suffix') startSeconds = first;
     else if (startSeconds !== first) continue;
-    const result: MatchedTripInstance = { shard, trip, timezone, serviceDate: update.startDate, startSeconds,
-      shiftSeconds: startSeconds - first, originSeconds: serviceDayOrigin(update.startDate, timezone) / 1000,
-      tripInstanceRef: formatTripInstanceRef({ coverage: shard.coverageId, feed: shard.feedId, id: trip.providerId, serviceDate: update.startDate, startTime: timeString(startSeconds) }) };
+    const result: MatchedTripInstance = { shard, trip, timezone, serviceDate, startSeconds,
+      shiftSeconds: startSeconds - first, originSeconds: serviceDayOrigin(serviceDate, timezone) / 1000,
+      tripInstanceRef: formatTripInstanceRef({ coverage: shard.coverageId, feed: shard.feedId, id: trip.providerId, serviceDate, startTime: timeString(startSeconds) }) };
     if (!candidates.some(candidate => candidate.tripInstanceRef === result.tripInstanceRef)) candidates.push(result);
   }
-  return candidates.length === 1 ? candidates[0]! : null;
+  return candidates;
 }
 
 function matchedUpdates(update: NormalizedTripUpdate, match: MatchedTripInstance): NormalizedStopUpdate[] | null {
