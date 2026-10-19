@@ -223,7 +223,7 @@ describe('anonymous deployment configuration', () => {
       MCP_ALLOWED_ORIGIN_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
       SFBAY_MODE: 'dark',
       // Preview has no DC/NYC artifacts, so its coverages stay off by omission.
-      TRANSIT_COVERAGE_MODES: '{"dc":"dark","nyc":"dark"}',
+      TRANSIT_COVERAGE_MODES: '{"dc":"on","nyc":"on"}',
       ENVIRONMENT: 'production',
     });
     expect(wrangler.env.preview.vars).toEqual({
