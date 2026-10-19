@@ -34,8 +34,18 @@ function distance(from: JourneyEndpoint, to: JourneyEndpoint, stops: Map<Transit
 function stopMatches(rule: TransitRef | undefined, stop: TransitRef, stops: Map<TransitRef, ScheduleStop>): boolean {
   return !rule || rule === stop || rule === stops.get(stop)?.parentStationRef;
 }
-function transferRules(previous: TransitLeg, next: Instance, board: TransitRef, transfers: ScheduleTransfer[], stops: Map<TransitRef, ScheduleStop>): ScheduleTransfer[] {
-  const matched = transfers.filter(rule => stopMatches(rule.fromStopRef, previous.to, stops) && stopMatches(rule.toStopRef, board, stops) &&
+/** Rules keyed by destination stop ('' = any). A boarding can only match rules naming its
+ * stop, its parent station, or no stop, so lookups never scan the whole table. */
+function indexTransfers(transfers: ScheduleTransfer[]): Map<string, ScheduleTransfer[]> {
+  const index = new Map<string, ScheduleTransfer[]>();
+  for (const rule of transfers) { const key = rule.toStopRef ?? '', list = index.get(key) ?? []; list.push(rule); index.set(key, list); }
+  return index;
+}
+function transferRules(previous: TransitLeg, next: Instance, board: TransitRef, index: Map<string, ScheduleTransfer[]>, stops: Map<TransitRef, ScheduleStop>): ScheduleTransfer[] {
+  const parent = stops.get(board)?.parentStationRef;
+  const candidates = [...index.get(board) ?? [], ...parent ? index.get(parent) ?? [] : [], ...index.get('') ?? []];
+  if (!candidates.length) return candidates;
+  const matched = candidates.filter(rule => stopMatches(rule.fromStopRef, previous.to, stops) && stopMatches(rule.toStopRef, board, stops) &&
     (!rule.fromTripRef || rule.fromTripRef === previous.tripRef) && (!rule.toTripRef || rule.toTripRef === next.trip.ref) &&
     (!rule.fromRouteRef || rule.fromRouteRef === previous.routeRef) && (!rule.toRouteRef || rule.toRouteRef === next.trip.routeRef));
   const specificity = (rule: ScheduleTransfer) => (rule.fromTripRef ? 4 : 0) + (rule.toTripRef ? 4 : 0) + (rule.fromRouteRef && !rule.fromTripRef ? 1 : 0) + (rule.toRouteRef && !rule.toTripRef ? 1 : 0);
@@ -61,10 +71,11 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
   const maxWalk = Math.min(800, query.maxWalkMetres ?? 800), maxTransfers = query.maxTransfers ?? 3;
   const stops = new Map<TransitRef, ScheduleStop>();
   const transfers: ScheduleTransfer[] = [], pathways: ScheduleShard['pathways'] = [];
-  const pathwayDefinitions = new Map<string, string>();
+  const pathwayDefinitions = new Map<string, string>(), transferKeys = new Set<string>();
   for (const { shard } of loaded) {
     for (const stop of shard.stops) stops.set(stop.ref, stop);
-    transfers.push(...shard.transfers);
+    // Every time band of a feed repeats the feed's transfer table; keep one copy of each rule.
+    for (const rule of shard.transfers) { const key = canonicalJson(rule); if (!transferKeys.has(key)) { transferKeys.add(key); transfers.push(rule); } }
     for (const pathway of shard.pathways) {
       const key = `${shard.feedId}/${shard.source.sha256}/${pathway.id}`, definition = canonicalJson(pathway);
       const previous = pathwayDefinitions.get(key);
@@ -218,9 +229,12 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
   // Target pruning: once K distinct journeys reach the destination, a label already
   // later than the K-th arrival cannot become a returned itinerary.
   const arrivals = new Map<string, number>();
-  const cutoff = () => arrivals.size < PARETO_ALTERNATIVES ? Infinity : [...arrivals.values()].sort((a, b) => a - b)[PARETO_ALTERNATIVES - 1]!;
-  const arrived = (label: Label) => { const key = label.signature!; arrivals.set(key, Math.min(arrivals.get(key) ?? Infinity, label.time)); };
-  const dominated = (label: Label) => label.time > cutoff() || (bags.get(label.stop) ?? []).filter(other =>
+  let cutoff = Infinity; // Recomputed only when a journey finishes, never per check.
+  const arrived = (label: Label) => {
+    const key = label.signature!; arrivals.set(key, Math.min(arrivals.get(key) ?? Infinity, label.time));
+    if (arrivals.size >= PARETO_ALTERNATIVES) cutoff = [...arrivals.values()].sort((a, b) => a - b)[PARETO_ALTERNATIVES - 1]!;
+  };
+  const dominated = (label: Label) => label.time > cutoff || (bags.get(label.stop) ?? []).filter(other =>
     other.time <= label.time && other.boardings <= label.boardings && other.walking <= label.walking).length >= PARETO_ALTERNATIVES;
   function retain(label: Label): Label {
     const bag = bags.get(label.stop) ?? []; bag.push(label); bags.set(label.stop, bag);
@@ -327,6 +341,12 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     const predicted = row?.status === 'realtime' ? (event === 'arrival' ? row.arrivalTimeSeconds : row.departureTimeSeconds) : undefined;
     return predicted !== undefined ? predicted * 1000 : instance.origin + (seconds + instance.shift) * 1000;
   };
+  const transferIndex = indexTransfers(transfers);
+  const inSeatTo = new Map<TransitRef, ScheduleTransfer[]>(), inSeatFrom = new Map<TransitRef, ScheduleTransfer[]>();
+  for (const rule of transfers) {
+    if (rule.transferType === 4 && rule.toTripRef) inSeatTo.set(rule.toTripRef, [...inSeatTo.get(rule.toTripRef) ?? [], rule]);
+    if ((rule.transferType === 4 || rule.transferType === 5) && rule.fromTripRef) inSeatFrom.set(rule.fromTripRef, [...inSeatFrom.get(rule.fromTripRef) ?? [], rule]);
+  }
   for (let round = 1; round <= maxTransfers + 1 && frontier.length; round++) {
     await new Promise<void>(resolve => setTimeout(resolve, 0)); assertNotAborted(signal); rounds = round;
     for (const interval of approximate) for (const label of frontier) {
@@ -345,16 +365,16 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
       for (let board = 0; board < calls.length - 1; board++) {
         const call = calls[board]!, departure = timeAt(instance, board, 'departure');
         if (departure === null || departure < begin || departure >= end || instance.updates.get(call.sequence)?.status === 'skipped') continue;
-        const explicitLinks = board === 0 ? transfers.filter(rule => rule.transferType === 4 && rule.toTripRef === instance.trip.ref).flatMap(rule => terminalLabels.get(rule.fromTripRef!) ?? []) : [];
+        const explicitLinks = board === 0 ? (inSeatTo.get(instance.trip.ref) ?? []).flatMap(rule => terminalLabels.get(rule.fromTripRef!) ?? []) : [];
         for (const label of new Set([...(prior.get(call.stopRef) ?? []), ...(current.get(call.stopRef) ?? []), ...explicitLinks])) {
           if (label.time > departure || label.legs.some(leg => leg.kind === 'transit' && leg.tripInstanceRef === instance.ref)) continue;
           const previous = label.last, previousInstance = previous ? byRef.get(previous.tripInstanceRef) : undefined;
-          const rules = previous ? transferRules(previous, instance, call.stopRef, transfers, stops) : [];
+          const rules = previous ? transferRules(previous, instance, call.stopRef, transferIndex, stops) : [];
           if (rules.some(rule => rule.transferType === 3)) continue;
           const linked = rules.some(rule => rule.transferType === 4);
           const terminal = previousInstance && previous?.alightSequence === previousInstance.trip.stopTimes.at(-1)!.sequence && board === 0;
           const block = previousInstance && label.stop === call.stopRef && blockSuccessor.get(previousInstance.ref) === instance.ref &&
-            !transfers.some(rule => rule.fromTripRef === previousInstance.trip.ref && (rule.transferType === 4 || rule.transferType === 5) && rule.toTripRef !== instance.trip.ref);
+            !(inSeatFrom.get(previousInstance.trip.ref) ?? []).some(rule => rule.toTripRef !== instance.trip.ref);
           const continuation = !!(terminal && label.legs.at(-1)?.kind === 'transit' && !rules.some(rule => rule.transferType === 5) && (linked || block));
           if ((call.pickupType !== 0 || previousInstance?.trip.stopTimes.find(c => c.sequence === previous?.alightSequence)?.dropOffType !== 0 && previous) && !continuation) continue;
           const boardings = label.boardings + (continuation ? 0 : 1);
