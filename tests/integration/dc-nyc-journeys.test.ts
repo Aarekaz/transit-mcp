@@ -96,17 +96,18 @@ describe('DC and NYC synthetic acceptance corpus through the five global tools',
     expect((await validateItinerary(itinerary as Parameters<typeof validateItinerary>[0], f.source)).valid).toBe(false);
   });
 
-  it.each(corpora)('$coverage keeps scheduled departures and refuses live claims without request-time agency calls', async corpus => {
+  it.each(corpora)('$coverage degrades to schedules when its own coordinator fails, without request-time agency calls', async corpus => {
     const f = await fixture(corpus);
     const network = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Agency fetch forbidden'));
-    const hubFetch = vi.fn().mockRejectedValue(new Error('SF coordinator must not own DC/NYC'));
-    f.env.REGION_FEED_HUB = { idFromName: () => 'sf', get: () => ({ fetch: hubFetch }) } as unknown as DurableObjectNamespace;
+    const hubFetch = vi.fn().mockRejectedValue(new Error('coordinator outage'));
+    const names: string[] = [];
+    f.env.REGION_FEED_HUB = { idFromName: (name: string) => { names.push(name); return name; }, get: () => ({ fetch: hubFetch }) } as unknown as DurableObjectNamespace;
     const stopId = corpus.coverage === 'dc' ? 'syn_dupont' : 'syn_times';
     const result = await call(f.env, 'get_departures', { stopRef: ref(corpus, 'stop', stopId), at: corpus.now, windowSeconds: 900 });
-    expect(result.structuredContent.status).toBe('scheduled_only');
+    expect(result.structuredContent).toMatchObject({ status: 'scheduled_only', reasons: ['REALTIME_UNAVAILABLE'] });
     expect(result.structuredContent.departures).toHaveLength(2);
-    expect(result.structuredContent.departures.every((row: { predictedTime: unknown; status: string; tripInstanceRef: string }) =>
-      row.predictedTime === null && row.status === 'scheduled_only' && parseTransitRef(row.tripInstanceRef)?.coverage === corpus.coverage)).toBe(true);
+    expect(result.structuredContent.departures.every((row: { predictedTime: unknown; status: string; tripInstanceRef: string; scheduleMatch: string }) =>
+      row.predictedTime === null && row.status === 'scheduled_only' && row.scheduleMatch === 'matched' && parseTransitRef(row.tripInstanceRef)?.coverage === corpus.coverage)).toBe(true);
     const vehicle = await call(f.env, 'get_vehicle_status', { ref: result.structuredContent.departures[0].tripInstanceRef });
     expect(vehicle.structuredContent).toMatchObject({ status: 'unavailable', reasons: ['REALTIME_UNAVAILABLE'], vehicles: [] });
     const service = await call(f.env, 'get_service_status', { coverage: corpus.coverage });
@@ -116,7 +117,9 @@ describe('DC and NYC synthetic acceptance corpus through the five global tools',
     expect(plan.structuredContent.status).toBe('scheduled_only');
     expect((await call(f.env, 'find_transit', { query: corpus.coverage })).structuredContent.coverages[0].available).toBe(true);
     expect(network).not.toHaveBeenCalled();
-    expect(hubFetch).not.toHaveBeenCalled();
+    expect(hubFetch).toHaveBeenCalled();
+    // Each coverage owns its coordinator; SF's quota-holding coordinator is never addressed.
+    expect([...new Set(names)]).toEqual([corpus.coverage === 'dc' ? 'dc:wmata' : 'nyc:mta']);
   });
 
   it('isolates current versions and coordinate discovery across co-resident coverage artifacts', async () => {

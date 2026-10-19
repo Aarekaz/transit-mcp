@@ -12,7 +12,9 @@ interface Instance {
   shard: ScheduleShard; trip: ScheduleTrip; date: string; timezone: string; origin: number; start: number;
   ref: TransitLeg['tripInstanceRef']; shift: number; updates: Map<number, NormalizedStopUpdate>;
 }
-interface Label { stop: TransitRef; time: number; walking: number; boardings: number; legs: ItineraryLeg[]; last?: TransitLeg; signature?: string; transitKey?: string }
+interface Label { stop: TransitRef; time: number; walking: number; boardings: number; legs: ItineraryLeg[]; last?: TransitLeg;
+  /** Interned ids of the leg sequence and of its transit legs: equal ids, equal sequences. */
+  signature?: number; transitKey?: number }
 export interface RouterOutput { candidates: Itinerary[]; reasons: VerificationReason[]; rounds: number; estimatedWorkingSetBytes: number }
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const signature = (legs: ItineraryLeg[]) => legs.map(l => l.kind === 'transit' ? `${l.tripInstanceRef}/${l.boardSequence}/${l.alightSequence}` : `${JSON.stringify(l.from)}/${JSON.stringify(l.to)}/${l.pathwayId ?? ''}`).join('|');
@@ -34,14 +36,30 @@ function distance(from: JourneyEndpoint, to: JourneyEndpoint, stops: Map<Transit
 function stopMatches(rule: TransitRef | undefined, stop: TransitRef, stops: Map<TransitRef, ScheduleStop>): boolean {
   return !rule || rule === stop || rule === stops.get(stop)?.parentStationRef;
 }
-function transferRules(previous: TransitLeg, next: Instance, board: TransitRef, transfers: ScheduleTransfer[], stops: Map<TransitRef, ScheduleStop>): ScheduleTransfer[] {
-  const matched = transfers.filter(rule => stopMatches(rule.fromStopRef, previous.to, stops) && stopMatches(rule.toStopRef, board, stops) &&
+/** Rules keyed by destination stop ('' = any). A boarding can only match rules naming its
+ * stop, its parent station, or no stop, so lookups never scan the whole table. */
+function indexTransfers(transfers: ScheduleTransfer[]): Map<string, ScheduleTransfer[]> {
+  const index = new Map<string, ScheduleTransfer[]>();
+  for (const rule of transfers) { const key = rule.toStopRef ?? '', list = index.get(key) ?? []; list.push(rule); index.set(key, list); }
+  return index;
+}
+function transferRules(previous: TransitLeg, next: Instance, board: TransitRef, index: Map<string, ScheduleTransfer[]>, stops: Map<TransitRef, ScheduleStop>): ScheduleTransfer[] {
+  const parent = stops.get(board)?.parentStationRef;
+  const candidates = [...index.get(board) ?? [], ...parent ? index.get(parent) ?? [] : [], ...index.get('') ?? []];
+  if (!candidates.length) return candidates;
+  const matched = candidates.filter(rule => stopMatches(rule.fromStopRef, previous.to, stops) && stopMatches(rule.toStopRef, board, stops) &&
     (!rule.fromTripRef || rule.fromTripRef === previous.tripRef) && (!rule.toTripRef || rule.toTripRef === next.trip.ref) &&
     (!rule.fromRouteRef || rule.fromRouteRef === previous.routeRef) && (!rule.toRouteRef || rule.toRouteRef === next.trip.routeRef));
   const specificity = (rule: ScheduleTransfer) => (rule.fromTripRef ? 4 : 0) + (rule.toTripRef ? 4 : 0) + (rule.fromRouteRef && !rule.fromTripRef ? 1 : 0) + (rule.toRouteRef && !rule.toTripRef ? 1 : 0);
   const highest = Math.max(-1, ...matched.map(specificity));
   return matched.filter(rule => specificity(rule) === highest);
 }
+
+/** Estimated working set one search may reach. The estimate runs about 1.65x the heap it
+ * measures: NYC Inwood-207 St to Coney Island, the longest subway trip, estimates 70 MB and
+ * retains 32 MB beyond its decoded shards. This leaves most of a 128 MB isolate to the
+ * shards, realtime feed, discovery index and runtime. */
+const ROUTER_BUDGET_BYTES = 96 * 1024 * 1024;
 
 /** Round-based earliest-arrival scan. Each round adds one vehicle boarding;
  * block/explicit in-seat continuation is closed inside that same round.
@@ -50,21 +68,19 @@ function transferRules(previous: TransitLeg, next: Instance, board: TransitRef, 
 export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleShard[], artifactVersion: string,
   realtime: NormalizedStopUpdate[], realtimeTimestamp: number | undefined, baseBytes: number, signal?: AbortSignal): Promise<RouterOutput> {
   assertNotAborted(signal);
-  if (baseBytes + realtime.length * 512 >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
-  let realtimeBytes = 0;
-  for (const row of realtime) {
-    // Include UTF-16 identities plus the normalized record and index/key copies.
-    realtimeBytes += 512 + 8 * [row.entityId, row.tripId, row.routeId, row.stopId, row.tripInstanceRef, row.serviceDate].reduce((sum, value) => sum + (value?.length ?? 0), 0);
-    if (baseBytes + realtimeBytes >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
-  }
+  // Rows already live in the decoded feed; the router only adds an index entry
+  // that references each one. Charging per-row copies refused every NYC rush-hour plan.
+  const realtimeBytes = realtime.length * 128;
+  if (baseBytes + realtimeBytes >= ROUTER_BUDGET_BYTES) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
   const begin = parseInstant(query.departAt), end = begin + (query.windowSeconds ?? 7200) * 1000;
   const maxWalk = Math.min(800, query.maxWalkMetres ?? 800), maxTransfers = query.maxTransfers ?? 3;
   const stops = new Map<TransitRef, ScheduleStop>();
   const transfers: ScheduleTransfer[] = [], pathways: ScheduleShard['pathways'] = [];
-  const pathwayDefinitions = new Map<string, string>();
+  const pathwayDefinitions = new Map<string, string>(), transferKeys = new Set<string>();
   for (const { shard } of loaded) {
     for (const stop of shard.stops) stops.set(stop.ref, stop);
-    transfers.push(...shard.transfers);
+    // Every time band of a feed repeats the feed's transfer table; keep one copy of each rule.
+    for (const rule of shard.transfers) { const key = canonicalJson(rule); if (!transferKeys.has(key)) { transferKeys.add(key); transfers.push(rule); } }
     for (const pathway of shard.pathways) {
       const key = `${shard.feedId}/${shard.source.sha256}/${pathway.id}`, definition = canonicalJson(pathway);
       const previous = pathwayDefinitions.get(key);
@@ -73,7 +89,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     }
   }
   for (const endpoint of [query.origin, query.destination]) if (typeof endpoint === 'string' && !stops.has(endpoint)) throw new Error('ENTITY_NOT_FOUND: unknown journey stop');
-  if (baseBytes + realtimeBytes + stops.size * 512 >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
+  if (baseBytes + realtimeBytes + stops.size * 512 >= ROUTER_BUDGET_BYTES) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
   const reasons = new Set<VerificationReason>();
   const updates = new Map<string, Map<number, NormalizedStopUpdate>>();
   const observedStarts = new Map<string, Set<number>>();
@@ -169,7 +185,8 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
   // creates precise departures or claims that an approximate connection works.
   const reachesDestination = new Set<TransitRef>();
   if (approximate.length) {
-    for (const stop of stops.values()) if (stop.ref === query.destination || distance(stop.ref, query.destination, stops) <= maxWalk) reachesDestination.add(stop.ref);
+    for (const stop of stops.values()) if (stop.ref === query.destination || typeof query.destination === 'string' && stop.parentStationRef === query.destination ||
+      distance(stop.ref, query.destination, stops) <= maxWalk) reachesDestination.add(stop.ref);
     const patterns = [...instances.map(instance => instance.trip), ...approximate.map(item => item.trip)];
     let changed = true;
     while (changed) {
@@ -189,26 +206,99 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
       }
     }
   }
-  let retainedLabelBytes = 0, rounds = 0;
-  const estimatedBytes = () => baseBytes + instanceBytes + retainedLabelBytes + stops.size * 512 + realtimeBytes;
+  let retainedLabelBytes = 0, neighbourBytes = 0, rounds = 0;
+  // Hash-consed leg sequences. Every label extends its parent by one leg, so a sequence is
+  // interned as (parent id, leg id) and labels hold integers instead of a ~500-character
+  // signature each. Full text is built only for finished journeys, to order ties.
+  const legIds = new Map<string, number>(), legIdOf = new WeakMap<ItineraryLeg, number>(), pathIds = new Map<string, number>();
+  const legId = (leg: ItineraryLeg) => {
+    let id = legIdOf.get(leg);
+    if (id === undefined) {
+      const piece = signature([leg]);
+      id = legIds.get(piece);
+      if (id === undefined) { id = legIds.size + 1; legIds.set(piece, id); }
+      legIdOf.set(leg, id);
+    }
+    return id;
+  };
+  const pathId = (legs: ItineraryLeg[], transitOnly = false) => {
+    let id = 0;
+    for (const leg of legs) {
+      if (transitOnly && leg.kind !== 'transit') continue;
+      const key = `${id}:${legId(leg)}`;
+      let next = pathIds.get(key);
+      if (next === undefined) { next = pathIds.size + 1; pathIds.set(key, next); }
+      id = next;
+    }
+    return id;
+  };
+  const estimatedBytes = () => baseBytes + instanceBytes + retainedLabelBytes + neighbourBytes + stops.size * 512 + realtimeBytes;
+  // Labels share leg objects by reference: charge each retained leg once (object overhead
+  // plus its exact UTF-16 text, which also bounds its interned piece), and every label for
+  // its own path array, two interned path entries, state-map keys and queue/sort slots.
+  // Never rely on a fixed bytes/label.
+  const chargedLegs = new WeakSet<ItineraryLeg>();
+  /** Checks the charge; only retain() commits leg charges, so a pre-checked candidate
+   * that is later deduplicated never leaves its leg text uncounted. Without signature
+   * text yet, each leg is bounded by its own string fields (legBytes). */
   function labelCharge(label: Label): number {
-    // Charge full leg objects even when shared, plus path arrays, signatures,
-    // state-map keys and queue/sort copies. Never rely on a fixed bytes/label.
-    const legBytes = label.legs.reduce((total, leg) => total + 512 + Object.values(leg).reduce<number>((size, value) => size + (typeof value === 'string' ? value.length * 2 : 32), 0), 0);
-    const charge = 1024 + label.legs.length * 64 + legBytes * 4;
-    if (label.legs.length > 100 || estimatedBytes() + charge >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
+    let legBytes = 0;
+    for (const leg of label.legs) {
+      if (chargedLegs.has(leg)) continue;
+      legBytes += 512 + Object.values(leg).reduce<number>((size, value) => size + (typeof value === 'string' ? value.length * 2 : 32), 0);
+    }
+    const charge = 1024 + label.legs.length * 64 + 2 * 96 + legBytes;
+    if (label.legs.length > 100 || estimatedBytes() + charge >= ROUTER_BUDGET_BYTES) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
     return charge;
   }
+  // Per-stop Pareto bags (RAPTOR): a label at least as late, with as many boardings and
+  // as much walking as K retained labels at that stop cannot lead anywhere they cannot.
+  // K > 1 keeps distinct alternatives for the three returned itineraries.
+  const PARETO_ALTERNATIVES = 3;
+  const bags = new Map<TransitRef, Label[]>();
+  // Target pruning: once K distinct journeys reach the destination, a label already
+  // later than the K-th arrival cannot become a returned itinerary.
+  const arrivals = new Map<number, number>();
+  let cutoff = Infinity; // Recomputed only when a journey finishes, never per check.
+  const arrived = (label: Label) => {
+    const key = label.signature!; arrivals.set(key, Math.min(arrivals.get(key) ?? Infinity, label.time));
+    if (arrivals.size >= PARETO_ALTERNATIVES) cutoff = [...arrivals.values()].sort((a, b) => a - b)[PARETO_ALTERNATIVES - 1]!;
+  };
+  const dominated = (label: Label) => label.time > cutoff || (bags.get(label.stop) ?? []).filter(other =>
+    other.time <= label.time && other.boardings <= label.boardings && other.walking <= label.walking).length >= PARETO_ALTERNATIVES;
   function retain(label: Label): Label {
+    const bag = bags.get(label.stop) ?? []; bag.push(label); bags.set(label.stop, bag);
+    label.signature = pathId(label.legs);
+    label.transitKey = pathId(label.legs, true);
     retainedLabelBytes += labelCharge(label);
-    label.signature = signature(label.legs);
-    label.transitKey = signature(label.legs.filter(leg => leg.kind === 'transit'));
+    for (const leg of label.legs) chargedLegs.add(leg);
     return label;
   }
   const makeWalk = (from: JourneyEndpoint, to: JourneyEndpoint, time: number, metres: number, seconds = Math.ceil(metres / 1.25), pathwayId?: string): WalkLeg => ({
     kind: 'walk', from, to, departureTime: iso(time), arrivalTime: iso(time + seconds * 1000), distanceMetres: metres,
     verification: pathwayId ? 'pathway' : 'unverified', estimated: !pathwayId || seconds === undefined, ...(pathwayId ? { pathwayId } : {}),
   });
+  // Street walks a stop can make within the request's walking limit, computed once per stop.
+  // A street walk ends where something can happen: a boardable stop, or an entrance into
+  // a published pathway graph. Stations, generic nodes and boarding areas are reached only
+  // through their own stops or pathways.
+  const walkTarget = (stop: ScheduleStop) => stop.locationType === 0 || stop.locationType === 2 && pathNodes.has(stop.ref);
+  const neighbours = new Map<TransitRef, { ref: TransitRef; metres: number }[]>();
+  const walkNeighbours = (from: TransitRef) => {
+    let list = neighbours.get(from);
+    if (!list) {
+      list = [];
+      for (const stop of stops.values()) {
+        if (stop.ref === from || !walkTarget(stop) || pathwayControlled(from, stop.ref)) continue;
+        const metres = distance(from, stop.ref, stops);
+        if (metres <= maxWalk) list.push({ ref: stop.ref, metres });
+      }
+      neighbourBytes += 128 + list.length * 64;
+      if (estimatedBytes() >= ROUTER_BUDGET_BYTES) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
+      neighbours.set(from, list);
+    }
+    return list;
+  };
   function walkClosure(seeds: Label[]): Label[] {
     const queue: Label[] = [], states = new Map<string, Label[]>();
     const stateKey = (label: Label) => `${label.stop}/${label.boardings}/${label.transitKey}/${label.legs.at(-1)?.kind === 'transit' ? 'onboard' : 'walking'}`;
@@ -216,7 +306,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
       const key = stateKey(label), bucket = states.get(key) ?? [];
       // Equal resources have identical future transfer possibilities. Keeping
       // the first deterministic representative collapses zero-cost permutations.
-      if (bucket.some(other => other.time <= label.time && other.walking <= label.walking)) return;
+      if (bucket.some(other => other.time <= label.time && other.walking <= label.walking) || !retained && dominated(label)) return;
       states.set(key, [...bucket.filter(other => !(label.time <= other.time && label.walking <= other.walking)), label]);
       if (!retained) retain(label);
       queue.push(label);
@@ -235,10 +325,12 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
         const leg = makeWalk(label.stop, to, label.time, metres, seconds, path.id); leg.estimated = path.traversalSeconds === null;
         edges.push(leg);
       }
-      if (maxWalk > label.walking) for (const stop of stops.values()) {
-        if (stop.ref === label.stop || pathwayControlled(label.stop, stop.ref)) continue;
-        const metres = distance(label.stop, stop.ref, stops);
-        if (metres <= maxWalk - label.walking) edges.push(makeWalk(label.stop, stop.ref, label.time, metres));
+      if (maxWalk > label.walking) for (const { ref, metres } of walkNeighbours(label.stop)) {
+        if (metres > maxWalk - label.walking) continue;
+        // Prune on numbers before formatting any leg text.
+        const time = label.time + Math.ceil(metres / 1.25) * 1000;
+        if (time > end || dominated({ stop: ref, time, walking: label.walking + metres, boardings: label.boardings, legs: [] })) continue;
+        edges.push(makeWalk(label.stop, ref, label.time, metres));
       }
       for (const leg of edges) {
         if (label.walking + leg.distanceMetres > maxWalk || Date.parse(leg.arrivalTime) > end) continue;
@@ -249,10 +341,15 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     return [...states.values()].flat();
   }
   let frontier: Label[] = [];
-  if (typeof query.origin === 'string') frontier.push(retain({ stop: query.origin, time: begin, walking: 0, boardings: 0, legs: [] }));
+  // GTFS stations (location_type 1) contain their platforms: being at the station is
+  // being at any child stop, with no invented walk between them.
+  const within = (stop: TransitRef, endpoint: TransitRef) => stop === endpoint || stops.get(endpoint)?.locationType === 1 && stops.get(stop)?.parentStationRef === endpoint;
+  if (typeof query.origin === 'string') {
+    for (const stop of stops.values()) if (within(stop.ref, query.origin)) frontier.push(retain({ stop: stop.ref, time: begin, walking: 0, boardings: 0, legs: [] }));
+  }
   else for (const stop of stops.values()) {
     // Pathway-defined platforms are accessed through their entrance graph.
-    if (!exteriorAccess(stop.ref)) continue;
+    if (!exteriorAccess(stop.ref) || !walkTarget(stop)) continue;
     const metres = distance(query.origin, stop.ref, stops); if (metres > maxWalk) continue;
     const leg = makeWalk(query.origin, stop.ref, begin, metres);
     frontier.push(retain({ stop: stop.ref, time: Date.parse(leg.arrivalTime), walking: metres, boardings: 0, legs: [leg] }));
@@ -261,12 +358,12 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
   const finished: Label[] = [];
   const finish = (label: Label) => {
     if (!label.last) return;
-    if (typeof query.destination === 'string') { if (label.stop === query.destination) finished.push(label); return; }
+    if (typeof query.destination === 'string') { if (within(label.stop, query.destination)) { finished.push(label); arrived(label); } return; }
     if (!exteriorAccess(label.stop)) return;
     const metres = distance(label.stop, query.destination, stops);
     if (metres + label.walking > maxWalk) return;
     const leg = makeWalk(label.stop, query.destination, label.time, metres);
-    if (Date.parse(leg.arrivalTime) <= end) finished.push(retain({ ...label, time: Date.parse(leg.arrivalTime), walking: label.walking + metres, legs: [...label.legs, leg] }));
+    if (Date.parse(leg.arrivalTime) <= end) { const done = retain({ ...label, time: Date.parse(leg.arrivalTime), walking: label.walking + metres, legs: [...label.legs, leg] }); finished.push(done); arrived(done); }
   };
   const timeAt = (instance: Instance, index: number, event: 'arrival' | 'departure') => {
     const call = instance.trip.stopTimes[index]!, row = instance.updates.get(call.sequence), seconds = event === 'arrival' ? call.arrivalSeconds : call.departureSeconds;
@@ -274,6 +371,12 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     const predicted = row?.status === 'realtime' ? (event === 'arrival' ? row.arrivalTimeSeconds : row.departureTimeSeconds) : undefined;
     return predicted !== undefined ? predicted * 1000 : instance.origin + (seconds + instance.shift) * 1000;
   };
+  const transferIndex = indexTransfers(transfers);
+  const inSeatTo = new Map<TransitRef, ScheduleTransfer[]>(), inSeatFrom = new Map<TransitRef, ScheduleTransfer[]>();
+  for (const rule of transfers) {
+    if (rule.transferType === 4 && rule.toTripRef) inSeatTo.set(rule.toTripRef, [...inSeatTo.get(rule.toTripRef) ?? [], rule]);
+    if ((rule.transferType === 4 || rule.transferType === 5) && rule.fromTripRef) inSeatFrom.set(rule.fromTripRef, [...inSeatFrom.get(rule.fromTripRef) ?? [], rule]);
+  }
   for (let round = 1; round <= maxTransfers + 1 && frontier.length; round++) {
     await new Promise<void>(resolve => setTimeout(resolve, 0)); assertNotAborted(signal); rounds = round;
     for (const interval of approximate) for (const label of frontier) {
@@ -284,7 +387,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     }
     const prior = new Map<TransitRef, Label[]>(), current = new Map<TransitRef, Label[]>();
     for (const label of frontier) { const list = prior.get(label.stop) ?? []; list.push(label); prior.set(label.stop, list); }
-    const next: Label[] = [], stateCounts = new Map<string, Set<string>>(), terminalLabels = new Map<TransitRef, Label[]>();
+    const next: Label[] = [], stateCounts = new Map<string, Set<number>>(), terminalLabels = new Map<TransitRef, Label[]>();
     for (const instance of instances) {
       assertNotAborted(signal);
       if ([...instance.updates.values()].some(row => row.status === 'canceled' || row.scheduleRelationship === 'CANCELED')) { reasons.add('TRIP_CANCELED'); continue; }
@@ -292,16 +395,16 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
       for (let board = 0; board < calls.length - 1; board++) {
         const call = calls[board]!, departure = timeAt(instance, board, 'departure');
         if (departure === null || departure < begin || departure >= end || instance.updates.get(call.sequence)?.status === 'skipped') continue;
-        const explicitLinks = board === 0 ? transfers.filter(rule => rule.transferType === 4 && rule.toTripRef === instance.trip.ref).flatMap(rule => terminalLabels.get(rule.fromTripRef!) ?? []) : [];
+        const explicitLinks = board === 0 ? (inSeatTo.get(instance.trip.ref) ?? []).flatMap(rule => terminalLabels.get(rule.fromTripRef!) ?? []) : [];
         for (const label of new Set([...(prior.get(call.stopRef) ?? []), ...(current.get(call.stopRef) ?? []), ...explicitLinks])) {
           if (label.time > departure || label.legs.some(leg => leg.kind === 'transit' && leg.tripInstanceRef === instance.ref)) continue;
           const previous = label.last, previousInstance = previous ? byRef.get(previous.tripInstanceRef) : undefined;
-          const rules = previous ? transferRules(previous, instance, call.stopRef, transfers, stops) : [];
+          const rules = previous ? transferRules(previous, instance, call.stopRef, transferIndex, stops) : [];
           if (rules.some(rule => rule.transferType === 3)) continue;
           const linked = rules.some(rule => rule.transferType === 4);
           const terminal = previousInstance && previous?.alightSequence === previousInstance.trip.stopTimes.at(-1)!.sequence && board === 0;
           const block = previousInstance && label.stop === call.stopRef && blockSuccessor.get(previousInstance.ref) === instance.ref &&
-            !transfers.some(rule => rule.fromTripRef === previousInstance.trip.ref && (rule.transferType === 4 || rule.transferType === 5) && rule.toTripRef !== instance.trip.ref);
+            !(inSeatFrom.get(previousInstance.trip.ref) ?? []).some(rule => rule.toTripRef !== instance.trip.ref);
           const continuation = !!(terminal && label.legs.at(-1)?.kind === 'transit' && !rules.some(rule => rule.transferType === 5) && (linked || block));
           if ((call.pickupType !== 0 || previousInstance?.trip.stopTimes.find(c => c.sequence === previous?.alightSequence)?.dropOffType !== 0 && previous) && !continuation) continue;
           const boardings = label.boardings + (continuation ? 0 : 1);
@@ -312,6 +415,8 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
             const dest = calls[alight]!, arrival = timeAt(instance, alight, 'arrival');
             if (arrival === null || arrival < departure || arrival > end || instance.updates.get(dest.sequence)?.status === 'skipped') continue;
             if (dest.dropOffType !== 0 && alight !== calls.length - 1) continue;
+            // Prune on numbers before formatting any leg text.
+            if (dominated({ stop: dest.stopRef, time: arrival, walking: label.walking, boardings, legs: [] })) continue;
             const predicted = instance.updates.get(call.sequence)?.status === 'realtime' && instance.updates.get(call.sequence)?.departureTimeSeconds !== undefined ||
               instance.updates.get(dest.sequence)?.status === 'realtime' && instance.updates.get(dest.sequence)?.arrivalTimeSeconds !== undefined;
             const leg: TransitLeg = { kind: 'transit', from: call.stopRef, to: dest.stopRef, tripRef: instance.trip.ref, tripInstanceRef: instance.ref,
@@ -325,7 +430,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
             // Check variable string/path allocation before constructing a new
             // signature, including candidates that are later deduplicated.
             labelCharge(candidate);
-            const key = `${instance.ref}/${dest.sequence}/${candidate.walking}/${label.transitKey}`, signatures = stateCounts.get(key) ?? new Set<string>(), sig = signature(candidate.legs);
+            const key = `${instance.ref}/${dest.sequence}/${candidate.walking}/${label.transitKey}`, signatures = stateCounts.get(key) ?? new Set<number>(), sig = pathId(candidate.legs);
             if (signatures.has(sig) || signatures.size >= 3) continue; signatures.add(sig); stateCounts.set(key, signatures);
             retain(candidate); next.push(candidate);
             const sameRound = current.get(dest.stopRef) ?? []; sameRound.push(candidate); current.set(dest.stopRef, sameRound);
@@ -342,9 +447,10 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     }));
     frontier.forEach(finish);
   }
-  const unique = new Map<string, Label>();
+  const unique = new Map<number, Label>();
   for (const label of finished) unique.set(label.signature!, label);
-  const ordered = [...unique.values()].sort((a, b) => a.time - b.time || a.boardings - b.boardings || a.walking - b.walking || compare(a.signature!, b.signature!));
+  const text = new Map([...unique.values()].map(label => [label, signature(label.legs)]));
+  const ordered = [...unique.values()].sort((a, b) => a.time - b.time || a.boardings - b.boardings || a.walking - b.walking || compare(text.get(a)!, text.get(b)!));
   const candidates = ordered.map(label => ({
     coverageId: query.manifest.coverageId, artifactVersion, origin: query.origin, destination: query.destination, departAt: query.departAt,
     windowSeconds: query.windowSeconds ?? 7200, maxWalkMetres: maxWalk, maxTransfers, departureTime: label.legs[0]!.departureTime,

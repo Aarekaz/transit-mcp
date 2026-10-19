@@ -53,9 +53,16 @@ codex mcp add transit-mcp https://transitmcp.com/mcp
 
 ## What it provides
 
-This checkout registers 18 MCP tools: the 13 compatible DC/NYC tools plus five global capabilities, `find_transit`, `plan_trip`, `get_departures`, `get_service_status`, and `get_vehicle_status`. Tool registration does not mean a coverage unit is enabled. Existing WMATA and MTA tools provide arrivals, service incidents, stations, routes, buses, trains, transfers, and vehicle positions.
+This checkout registers 18 MCP tools: the 13 compatible DC/NYC tools plus five global capabilities, `find_transit`, `plan_trip`, `get_departures`, `get_service_status`, and `get_vehicle_status`. The compatible tools call WMATA and MTA directly for arrivals, service incidents, stations, routes, buses, trains, transfers, and vehicle positions.
 
-SF Bay support is in development. The checked-in production and preview configurations remain dark; global tools report coverage unavailable until validated data and activation gates are satisfied. DC and NYC global planning also defaults off; their 13 legacy tools remain available. These branch changes have not been deployed. Attribution remains with 511 SF Bay and participating operators.
+DC Metro and the NYC Subway serve all five global tools:
+
+- `plan_trip` plans trips between stations, or from map coordinates with short walks, using the published WMATA and MTA timetables and live predictions. Every itinerary is checked by an independent validator before it is returned.
+- `get_departures` merges the timetable with live trip updates. In NYC that includes rerouted trains and trains missing from the timetable, which are marked as observed rather than dropped. You can pass a station name directly; a station complex such as Times Sq-42 St or 14 St-Union Sq counts as one place and lists departures from every line in it, and genuinely different stations with the same name come back as choices.
+- `get_service_status` returns the agencies' own alerts for a city, line, station, or trip.
+- `get_vehicle_status` shows where trains are: on a line, on a dated trip from a departure board or planned journey, or at a station (every station of a complex). Each train reports the station it is stopped at or heading to, the station it last served, and its destination. DC trains carry GPS coordinates. MTA publishes stations rather than coordinates, so an NYC train stopped at a station is placed there and one between stations has no coordinates rather than a guessed one.
+
+Timetables refresh automatically at the edge whenever WMATA or MTA publish a new one. An update that would remove most of a day's service is rejected, and one that makes live matching worse is rolled back. See [DC and NYC global transit](docs/dc-nyc-global-transit.md) for how that works and what has been verified. SF Bay support is in development; its global coverage stays dark, with attribution to 511 SF Bay and participating operators.
 
 It also provides four `transit://` URI templates (stations, routes, incidents, and versioned entities) and three canned prompts (`service-briefing`, `commute-planner`, and `accessibility-check`). Use `plan_trip` for journeys; do not assemble routes from departure boards. Global results distinguish `realtime`, `scheduled_only`, and `unavailable`, with source timestamps, versions, reasons, attribution, and a JSON text fallback.
 

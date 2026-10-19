@@ -30,7 +30,7 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
         system: 'WMATA',
         stations: 102,
         lines: 6,
-        features: ['real-time', 'alerts', 'elevators', 'search', 'line-info', 'bus-routes', 'bus-stops', 'bus-positions', 'train-positions']
+        features: ['trip-planning', 'departures', 'real-time', 'alerts', 'elevators', 'search', 'line-info', 'bus-routes', 'bus-stops', 'bus-positions', 'train-positions']
       },
       {
         code: 'nyc',
@@ -38,7 +38,7 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
         system: 'MTA',
         stations: 496,
         lines: 29,
-        features: ['real-time', 'alerts', 'search', 'line-info', 'transfers', 'route-info']
+        features: ['trip-planning', 'departures', 'real-time', 'alerts', 'search', 'line-info', 'transfers', 'route-info']
       }
     ],
     stats: {

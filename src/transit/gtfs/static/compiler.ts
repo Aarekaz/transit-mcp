@@ -5,7 +5,7 @@ import { parseGtfsTime, parseServiceDate } from './time';
 import type { ServiceCalendar } from './artifact';
 import { formatEntityRef, type TransitEntityKind, type TransitRef } from '../../core/refs';
 import { canonicalJson, encodeScheduleShard, sha256 } from './shards';
-import type { CompileScheduleInput, CompiledSchedule, SchedulePattern, ScheduleShard, ScheduleTrip, ServiceWindow } from './schema';
+import type { CompileScheduleInput, CompiledSchedule, SchedulePattern, ScheduleShard, ScheduleStop, ScheduleTransfer, ScheduleTrip, ServiceWindow } from './schema';
 
 export type GtfsStaticFiles = Record<'stops.txt' | 'routes.txt' | 'trips.txt' | 'stop_times.txt', string> & Partial<Record<'calendar.txt' | 'calendar_dates.txt', string>>;
 
@@ -52,11 +52,20 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
   const url = new URL(input.source.url);
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Invalid public source URL');
   if (!Number.isFinite(Date.parse(input.source.retrievedAt))) throw new Error('Invalid source retrieval timestamp');
-  const ref = (kind: TransitEntityKind, id: string) => formatEntityRef({ coverage: coverage.id, feed: feedId, kind, id });
-  const tables = Object.fromEntries(Object.entries(files).map(([name, csv]) => [name, parseGtfsCsv(csv).sort((a, b) => {
-    const left = canonicalJson(a), right = canonicalJson(b);
-    return left < right ? -1 : left > right ? 1 : 0;
-  })]));
+  // Millions of rows name thousands of entities: format (and validate) each reference once.
+  const refs = new Map<string, TransitRef>();
+  const ref = (kind: TransitEntityKind, id: string) => {
+    const key = `${kind}\u0000${id}`;
+    let value = refs.get(key);
+    if (!value) { value = formatEntityRef({ coverage: coverage.id, feed: feedId, kind, id }); refs.set(key, value); }
+    return value;
+  };
+  // Canonical row order makes the source hash and order-sensitive outputs deterministic.
+  // Trips and stop times are re-ordered by trip reference and stop sequence below, so when
+  // the feed identity is supplied (no hash to compute) their rows need no canonical sort.
+  const orderFree = new Set(input.identity ? ['trips.txt', 'stop_times.txt'] : []);
+  const tables = Object.fromEntries(Object.entries(files).map(([name, csv]) => [name, orderFree.has(name) ? parseGtfsCsv(csv) : parseGtfsCsv(csv)
+    .map(row => [canonicalJson(row), row] as const).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, row]) => row)]));
   const rows = (name: string) => tables[name] ?? [];
   const agencyRows = rows('agency.txt');
   // GTFS permits the ID to be absent only for a single agency. Keep the raw
@@ -96,24 +105,7 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
       shortName: row.route_short_name ?? '', longName: row.route_long_name ?? '', routeType,
       mode: routeTypeToMode(routeType), color: row.route_color ?? '', textColor: row.route_text_color ?? '' };
   }).sort((a, b) => a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0);
-  const calendars: Record<string, ServiceCalendar> = Object.create(null);
-  for (const [id, row] of indexed(rows('calendar.txt'), 'service_id')) {
-    const startDate = required(row, 'start_date'), endDate = required(row, 'end_date');
-    if (parseServiceDate(startDate) > parseServiceDate(endDate)) throw new Error('Invalid calendar date range');
-    calendars[id] = { monday: integer(row, 'monday', undefined, 1) === 1, tuesday: integer(row, 'tuesday', undefined, 1) === 1,
-      wednesday: integer(row, 'wednesday', undefined, 1) === 1, thursday: integer(row, 'thursday', undefined, 1) === 1,
-      friday: integer(row, 'friday', undefined, 1) === 1, saturday: integer(row, 'saturday', undefined, 1) === 1,
-      sunday: integer(row, 'sunday', undefined, 1) === 1, startDate, endDate, exceptions: {} };
-  }
-  for (const row of rows('calendar_dates.txt')) {
-    const id = required(row, 'service_id'), date = required(row, 'date');
-    parseServiceDate(date);
-    const type = integer(row, 'exception_type', undefined, 2);
-    if (type !== 1 && type !== 2) throw new Error('Invalid exception_type');
-    const calendar = calendars[id] ??= { monday: false, tuesday: false, wednesday: false, thursday: false, friday: false, saturday: false, sunday: false, startDate: '00000000', endDate: '99999999', exceptions: {} };
-    if (calendar.exceptions[date]) throw new Error('duplicate calendar exception');
-    calendar.exceptions[date] = type;
-  }
+  const calendars = buildServiceCalendars(rows('calendar.txt'), rows('calendar_dates.txt'));
   const trips: ScheduleTrip[] = [...tripRows].map(([id, row]) => {
     const serviceId = required(row, 'service_id');
     if (!calendars[serviceId]) throw new Error('unknown service reference');
@@ -186,7 +178,9 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     signpostedAs: row.signposted_as ?? '', reversedSignpostedAs: row.reversed_signposted_as ?? '',
   }));
   const source = { feedId, url: url.href, retrievedAt: input.source.retrievedAt,
-    sha256: await sha256(new TextEncoder().encode(canonicalJson(tables))), feedInfo: rows('feed_info.txt'),
+    sha256: input.identity?.sha256 ?? await sha256(new TextEncoder().encode(canonicalJson(tables))), feedInfo: rows('feed_info.txt'),
+    ...(input.identity?.archiveSha256 ? { archiveSha256: input.identity.archiveSha256 } : {}),
+    ...(input.identity?.derivedFrom ? { derivedFrom: input.identity.derivedFrom } : {}),
     ...(anonymousAgencyId ? { anonymousAgencyRef: ref('agency', anonymousAgencyId) } : {}) };
   for (const info of source.feedInfo) {
     for (const field of ['feed_publisher_url', 'feed_contact_url']) {
@@ -217,13 +211,18 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     // Non-exact service covers the entire half-open interval, including its final fractional second.
     if (first !== null && last !== null) maxStopTimeSeconds = Math.max(maxStopTimeSeconds, frequency.endSeconds - (frequency.exactTimes === 1 ? 1 : 0) + last - first);
   }
+  if (input.identity) {
+    if (maxStopTimeSeconds > input.identity.maxStopTimeSeconds) throw new Error('Part exceeds the feed-wide timetable bound');
+    maxStopTimeSeconds = input.identity.maxStopTimeSeconds;
+  }
   const shard: ScheduleShard = { schemaVersion: 2, coverageId: coverage.id, feedId, window: { ...window }, maxStopTimeSeconds, source, agencyTimezones,
     stops, routes, trips: activeTrips, patterns: [...patterns.values()].filter(p => activePatterns.has(p.id)).sort((a, b) => a.id < b.id ? -1 : 1),
     calendars, frequencies: frequencies.filter(f => activeRefs.has(f.tripRef)), blocks,
     transfers, transferBoundaryTrips, pathways };
   const discovery = { schemaVersion: 2 as const, coverageId: coverage.id, feedId, sourceSha256: source.sha256, stops: stops.filter(s => s.locationType !== 3), routes,
     tripProviderIds: trips.map(trip => trip.providerId).sort(),
-    stopRoutes: Object.fromEntries(Object.entries(stopRoutes).map(([key, values]) => [key, [...new Set(values)].sort()])) };
+    stopRoutes: Object.fromEntries(Object.entries(stopRoutes).map(([key, values]) => [key, [...new Set(values)].sort()])),
+    stationLinks: stationLinks(stops, transfers) };
   const shardBytes = encodeScheduleShard(shard);
   const discoveryBytes = new TextEncoder().encode(canonicalJson(discovery));
   const shardHash = await sha256(shardBytes), discoveryHash = await sha256(discoveryBytes);
@@ -233,6 +232,47 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     discoveries: [{ feedId, key: `${prefix}/discovery/${discoveryHash}.json`, sha256: discoveryHash, byteLength: discoveryBytes.length }],
     shards: [{ feedId, window: { ...window }, maxStopTimeSeconds, key: `${prefix}/${window.startDate}-${window.endDate}/${shardHash}.bin`, sha256: shardHash, byteLength: shardBytes.length }],
   } };
+}
+
+/** GTFS calendar.txt and calendar_dates.txt as service calendars keyed by service_id. */
+export function buildServiceCalendars(calendarRows: GtfsCsvRow[], calendarDateRows: GtfsCsvRow[]): Record<string, ServiceCalendar> {
+  const calendars: Record<string, ServiceCalendar> = Object.create(null);
+  for (const [id, row] of indexed(calendarRows, 'service_id')) {
+    const startDate = required(row, 'start_date'), endDate = required(row, 'end_date');
+    if (parseServiceDate(startDate) > parseServiceDate(endDate)) throw new Error('Invalid calendar date range');
+    calendars[id] = { monday: integer(row, 'monday', undefined, 1) === 1, tuesday: integer(row, 'tuesday', undefined, 1) === 1,
+      wednesday: integer(row, 'wednesday', undefined, 1) === 1, thursday: integer(row, 'thursday', undefined, 1) === 1,
+      friday: integer(row, 'friday', undefined, 1) === 1, saturday: integer(row, 'saturday', undefined, 1) === 1,
+      sunday: integer(row, 'sunday', undefined, 1) === 1, startDate, endDate, exceptions: {} };
+  }
+  for (const row of calendarDateRows) {
+    const id = required(row, 'service_id'), date = required(row, 'date');
+    parseServiceDate(date);
+    const type = integer(row, 'exception_type', undefined, 2);
+    if (type !== 1 && type !== 2) throw new Error('Invalid exception_type');
+    const calendar = calendars[id] ??= { monday: false, tuesday: false, wednesday: false, thursday: false, friday: false, saturday: false, sunday: false, startDate: '00000000', endDate: '99999999', exceptions: {} };
+    if (calendar.exceptions[date]) throw new Error('duplicate calendar exception');
+    calendar.exceptions[date] = type;
+  }
+  return calendars;
+}
+
+/** Stations joined by a published stop-level transfer: one complex published as several. */
+function stationLinks(stops: ScheduleStop[], transfers: ScheduleTransfer[]): [TransitRef, TransitRef][] {
+  const byRef = new Map(stops.map(stop => [stop.ref, stop]));
+  const station = (ref: TransitRef | undefined) => {
+    const stop = ref ? byRef.get(ref) : undefined;
+    return stop?.locationType === 1 ? stop.ref : stop?.parentStationRef;
+  };
+  const pairs = new Map<string, [TransitRef, TransitRef]>();
+  for (const transfer of transfers) {
+    if (transfer.fromTripRef || transfer.toTripRef || transfer.transferType === 3) continue;
+    const from = station(transfer.fromStopRef), to = station(transfer.toStopRef);
+    if (!from || !to || from === to) continue;
+    const pair = (from < to ? [from, to] : [to, from]) as [TransitRef, TransitRef];
+    pairs.set(pair.join('\n'), pair);
+  }
+  return [...pairs.values()].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
 }
 
 function finiteNumber(row: GtfsCsvRow, name: string): number {

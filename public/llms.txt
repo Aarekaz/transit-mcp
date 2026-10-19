@@ -1,6 +1,6 @@
 # Transit MCP
 
-> Transit MCP is a free, anonymous, read-only Model Context Protocol (MCP) server for real-time DC Metro and NYC Subway transit information. SF Bay support is in development and is not available through public tools. Transit MCP was formerly Metro MCP; it is the same server.
+> Transit MCP is a free, anonymous, read-only Model Context Protocol (MCP) server for DC Metro and NYC Subway trip planning and real-time transit information. SF Bay support is in development and is not available through public tools. Transit MCP was formerly Metro MCP; it is the same server.
 
 - MCP endpoint (Streamable HTTP): https://transitmcp.com/mcp
 - Legacy endpoint, still supported: https://metro-mcp.anuragd.me/mcp
@@ -16,7 +16,10 @@
 - Stations: station search, listing by line, full station lists, and transfers (`search_stations`, `get_stations_by_line`, `get_all_stations`, `get_station_transfers`).
 - Routes: NYC Subway route detail, DC Metrobus routes and stops (`get_route_info`, `get_bus_routes`, `get_bus_stops`).
 - Live positions: DC Metro train positions and Metrobus vehicles (`get_train_positions`, `get_bus_positions`).
-- Global capabilities: `find_transit`, `plan_trip`, `get_departures`, `get_service_status`, `get_vehicle_status`. These five tools are registered alongside the 13 compatible tools. Registration is independent of data availability: SF is dark and DC/NYC global planning defaults off.
+- Global capabilities: `find_transit`, `plan_trip`, `get_departures`, `get_service_status`, `get_vehicle_status`. These five tools are registered alongside the 13 compatible tools. DC and NYC are available; SF Bay is dark and reports unavailable.
+- For "when is the next train at X", call `get_departures` with `stop` (a station name) and `coverage` in one step. A station complex such as Times Sq-42 St resolves as one place and covers every line in it; different stations that share a name return `ENTITY_AMBIGUOUS` with one candidate per place, so ask the user or pick by context. Rows carry `routeName` and `stopName`.
+- NYC departures can include observed trains: `scheduleMatch` is `unscheduled_call` (a reroute) or `unmatched_trip` (not in the timetable). These have a predicted time and no scheduled time. Report them as running, not as scheduled service.
+- For "where is my train" or "what trains are at X", call `get_vehicle_status` with a line `ref`, a dated `tripInstanceRef` (from `get_departures` or a `plan_trip` leg), or a station (`stop` name with `coverage`). Each train has `stopStatus` (`stopped_at`, `incoming_at`, `in_transit_to`), `stopName`, `previousStopName` and `headsign`. DC trains have GPS `coordinates`; NYC trains have coordinates only when stopped at a station (`coordinatesSource: stop`), otherwise null. Describe NYC positions by station, never invent a point between stations.
 - Use `find_transit` to inspect coverage availability and its planning capability; call `plan_trip` only when both allow planning. When global coverage is unavailable, use `search_stations`, `get_station_predictions` and `get_incidents` for DC/NYC departure or service questions. These legacy tools do not provide a full journey planner. Never assemble a route from departure boards. Preserve `realtime`, `scheduled_only`, or `unavailable` status and source timestamps. Global tools have no Transit Board renderer.
 - DC-only: bus tools, `get_train_positions` and `get_elevator_incidents`. NYC-only: `get_route_info` and `get_station_transfers`. A null `minutesAway` means unknown, not zero; retain the returned arrival status.
 - Discovery preserves material exact alternatives up to 50 candidates per query or endpoint (100 across a two-endpoint selection). Larger ambiguous sets return `SCOPE_LIMIT_EXCEEDED` with no partial choices; narrow the query or supply an exact reference. Non-material fuzzy results honor `limit`.

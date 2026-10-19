@@ -96,6 +96,15 @@ describe('release operator documentation', () => {
     expect(forbiddenSfLiveClaimPatterns.some(pattern => pattern.test(claim))).toBe(true);
   });
 
+  it('links the landing page directly to the Claude Directory listing', () => {
+    const directoryUrl = 'https://claude.ai/directory/metro-mcp';
+
+    expect(landingPage).toMatch(
+      new RegExp(`<a[^>]+href="${directoryUrl}"[^>]+aria-label="Open Transit MCP in the Claude Directory"`, 'i'),
+    );
+    expect(landingPage).not.toContain('href="https://claude.com"');
+  });
+
   it('documents Transit MCP 6.0 as anonymous with no credential setup', () => {
     for (const [name, document, endpoint] of [
       ['README', readme, 'https://transitmcp.com/mcp'],

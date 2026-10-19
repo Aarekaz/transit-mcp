@@ -6,6 +6,8 @@ import { z } from 'zod';
 
 export interface ScheduledDepartureQuery extends ScheduleWindowQuery {
   stopRef: TransitRef;
+  /** Other stations of the same complex (e.g. Times Sq-42 St is published as four), searched with `stopRef`. */
+  complexStationRefs?: TransitRef[];
   /** Reads the manifest-pinned discovery object independently of timetable filters. */
   readDiscovery: (key: string) => Promise<Uint8Array>;
   routeRefs?: TransitRef[];
@@ -63,7 +65,7 @@ async function assertKnownStop(query: ScheduledDepartureQuery, feedId: string): 
     if (!ref || ref.kind !== 'stop' || ref.feed !== feedId || ref.coverage !== discovery.coverageId || refs.has(stop.ref)) throw new Error('Discovery identity mismatch');
     refs.add(stop.ref);
   }
-  if (!refs.has(query.stopRef)) throw new Error('ENTITY_NOT_FOUND: stop is absent from discovery');
+  for (const ref of [query.stopRef, ...query.complexStationRefs ?? []]) if (!refs.has(ref)) throw new Error('ENTITY_NOT_FOUND: stop is absent from discovery');
 }
 
 function gtfsTime(seconds: number): string {
@@ -92,9 +94,9 @@ async function collectScheduledDepartures(query: ScheduledDepartureQuery): Promi
   const seen = new Set<string>();
   const seenWindows = new Set<string>();
   for (const { shard, serviceDays } of shards) {
-    const requested = shard.stops.find(candidate => candidate.ref === query.stopRef);
-    if (!requested) continue;
-    const stops = new Set(shard.stops.filter(candidate => candidate.ref === query.stopRef || candidate.parentStationRef === query.stopRef).map(candidate => candidate.ref));
+    const within = new Set<string>([query.stopRef, ...query.complexStationRefs ?? []]);
+    const stops = new Set(shard.stops.filter(candidate => within.has(candidate.ref) || candidate.parentStationRef !== undefined && within.has(candidate.parentStationRef)).map(candidate => candidate.ref));
+    if (!stops.size) continue;
     const routes = new Map(shard.routes.map(route => [route.ref, route]));
     const frequencies = new Map<TransitRef, typeof shard.frequencies>();
     for (const frequency of shard.frequencies) {

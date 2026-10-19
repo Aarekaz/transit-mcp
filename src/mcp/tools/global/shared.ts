@@ -6,12 +6,17 @@ import { getCoverage, getCoverages, type CoverageManifest } from '../../../trans
 import { getCoverageMode } from '../../../regions/manifest';
 import { formatEntityRef, parseTransitRef, type TransitRef } from '../../../transit/core/refs';
 import { VERIFICATION_REASONS, type SourceStatus, type VerificationReason } from '../../../transit/core/results';
-import { StaticArtifactStore, readBoundedObject, sameStaticVersion, SF511_QUOTA_NAMESPACE, type StaticVersion } from '../../../transit/gtfs/realtime/snapshot-store';
+import { StaticArtifactStore, readBoundedObject, sameStaticVersion, type StaticVersion } from '../../../transit/gtfs/realtime/snapshot-store';
+import { credential, getRealtimeSource, publishedKinds } from '../../../transit/gtfs/realtime/sources';
+import type { CoverageCapability } from '../../../transit/core/coverage';
 import { decodeDiscoveryIndex, decodeScheduleShard, sha256 } from '../../../transit/gtfs/static/shards';
-import type { ArtifactManifestV2, DiscoveryIndex } from '../../../transit/gtfs/static/schema';
+import type { ArtifactManifestV2, DiscoveryIndex, ScheduleStop } from '../../../transit/gtfs/static/schema';
 import type { FeedRead } from '../../../transit/gtfs/realtime/hub-core';
+import type { NormalizedVehicle } from '../../../transit/gtfs/realtime/decode';
 import type { RealtimeFeedKind } from '../../../regions/types';
 import { classifyManifestFreshness, sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
+import { serviceDateAtInstant } from '../../../transit/planner/service-day';
+import { parseGtfsTime } from '../../../transit/gtfs/static/time';
 
 export const boundedText = z.string().trim().min(1).max(256);
 export const coverageSchema = boundedText.describe('Runtime coverage name or identifier; use find_transit to inspect availability.');
@@ -28,7 +33,7 @@ export const candidateSchema = z.strictObject({ ref: z.string(), kind: z.enum(['
 export type Candidate = z.infer<typeof candidateSchema>;
 /** Per endpoint/query; two-endpoint elicitation is therefore at most 100 choices. */
 export const MAX_DISCOVERY_CANDIDATES = 50;
-export const errorSchema = z.strictObject({ code: z.enum(['ENTITY_NOT_FOUND', 'ENTITY_AMBIGUOUS', 'INVALID_TRANSIT_REF', 'TIME_OUTSIDE_WINDOW', 'SELECTION_DECLINED']),
+export const errorSchema = z.strictObject({ code: z.enum(['ENTITY_NOT_FOUND', 'ENTITY_AMBIGUOUS', 'INVALID_TRANSIT_REF', 'INVALID_ITINERARY', 'TIME_OUTSIDE_WINDOW', 'SELECTION_DECLINED']),
   message: z.string(), candidates: z.array(candidateSchema).max(2 * MAX_DISCOVERY_CANDIDATES) });
 export class TransitToolError extends Error {
   constructor(readonly code: z.infer<typeof errorSchema>['code'], readonly candidates: Candidate[] = []) { super(code); }
@@ -37,6 +42,7 @@ const messages = {
   ENTITY_NOT_FOUND: 'No matching transit entity was found. Use find_transit to choose a reference.',
   ENTITY_AMBIGUOUS: 'Choose an exact reference from the candidates and retry.',
   INVALID_TRANSIT_REF: 'Use a reference of the kind required by this tool, returned by find_transit or get_departures.',
+  INVALID_ITINERARY: 'Pass an itinerary exactly as plan_trip returned it, without edits.',
   TIME_OUTSIDE_WINDOW: 'Narrow the search window or filters; the window must be between one second and seven days and within the candidate budget.',
   SELECTION_DECLINED: 'Transit entity selection was declined or cancelled.',
 };
@@ -67,11 +73,23 @@ export interface TransitData {
   coverage: CoverageManifest; manifest: ArtifactManifestV2; version: StaticVersion; indexes: DiscoveryIndex[];
   readObject: (key: string) => Promise<Uint8Array>;
 }
+/** One store per bucket and coverage keeps the resident manifest across requests; the
+ * pointer is still read every time, so a new version is seen immediately. */
+const artifactStores = new WeakMap<R2Bucket, Map<string, StaticArtifactStore>>();
+function artifactStore(bucket: R2Bucket, coverageId: string): StaticArtifactStore {
+  let stores = artifactStores.get(bucket);
+  if (!stores) { stores = new Map(); artifactStores.set(bucket, stores); }
+  let store = stores.get(coverageId);
+  if (!store) { store = new StaticArtifactStore(bucket, coverageId); stores.set(coverageId, store); }
+  return store;
+}
+/** Verified, content-addressed discovery indexes per bound bucket (one store never vouches for another). */
+const discoveryCaches = new WeakMap<R2Bucket, Map<string, DiscoveryIndex>>();
 /** Public mode checks belong at the data boundary; catalog registration never changes. */
 export async function loadData(context: MetroMcpContext, coverageId: string, signal: AbortSignal, version?: string): Promise<TransitData | null> {
   const coverage = getCoverage(coverageId);
   if (!coverage || getCoverageMode(coverage.id, context.env) !== 'on' || !context.env.TRANSIT_ARTIFACTS) return null;
-  const bucket = context.env.TRANSIT_ARTIFACTS, store = new StaticArtifactStore(bucket, coverage.id);
+  const bucket = context.env.TRANSIT_ARTIFACTS, store = artifactStore(bucket, coverage.id);
   signal.throwIfAborted();
   const current = version ? await store.read(version) : await store.current();
   signal.throwIfAborted();
@@ -81,9 +99,17 @@ export async function loadData(context: MetroMcpContext, coverageId: string, sig
   for (const descriptor of current.manifest.discoveries) {
     total += descriptor.byteLength;
     if (total > 64 * 1024 * 1024) throw new Error('Discovery budget');
-    const bytes = await readObject(descriptor.key);
-    if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Discovery integrity');
-    const index = decodeDiscoveryIndex(bytes);
+    let discoveryCache = discoveryCaches.get(bucket);
+    if (!discoveryCache) { discoveryCache = new Map(); discoveryCaches.set(bucket, discoveryCache); }
+    let index = discoveryCache.get(descriptor.sha256);
+    if (!index) {
+      const bytes = await readObject(descriptor.key);
+      if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Discovery integrity');
+      index = decodeDiscoveryIndex(bytes);
+      // Content-addressed and verified: safe to reuse across requests in this isolate.
+      discoveryCache.set(descriptor.sha256, index);
+      while (discoveryCache.size > 4) discoveryCache.delete(discoveryCache.keys().next().value!);
+    }
     if (index.coverageId !== coverage.id || index.feedId !== descriptor.feedId || index.sourceSha256 !== current.version.sourceVersions[index.feedId]) throw new Error('Discovery identity');
     indexes.push(index);
   }
@@ -98,29 +124,62 @@ export function validRef(value: string, kinds: string[], dated = false): NonNull
   if (!parsed || !kinds.includes(parsed.kind) || (dated && parsed.kind === 'trip' && !('serviceDate' in parsed))) throw new TransitToolError('INVALID_TRANSIT_REF');
   return parsed;
 }
-export function entities(data: TransitData): Candidate[] {
-  return data.indexes.flatMap(index => [
+/** Entities of one verified discovery index, built once: the index is immutable and
+ * content-addressed, so the list, reference map and normalized names never change. */
+interface EntityIndex { list: readonly Candidate[]; byRef: Map<string, Candidate>; names: Map<string, readonly string[]> }
+const entityIndexes = new WeakMap<DiscoveryIndex, Map<string, EntityIndex>>();
+function entityIndex(data: TransitData, index: DiscoveryIndex): EntityIndex {
+  const agencies = Object.keys(data.manifest.agencyTimezones).filter(ref => parseTransitRef(ref)?.feed === index.feedId).sort();
+  const key = agencies.join('\n');
+  let byAgencies = entityIndexes.get(index);
+  const cached = byAgencies?.get(key);
+  if (cached) return cached;
+  const routes = new Map(index.routes.map(route => [route.ref as string, route]));
+  const list = [
     ...index.stops.map(stop => ({ ref: stop.ref, providerId: stop.providerId, name: sanitizeTransitText(stop.name), kind: 'stop' as const })),
     ...index.routes.map(route => ({ ref: route.ref, providerId: route.providerId, name: sanitizeTransitText(`${route.shortName} ${route.longName}`.trim()), kind: 'route' as const })),
     ...index.tripProviderIds.map(id => ({ ref: formatEntityRef({ coverage: index.coverageId, feed: index.feedId, kind: 'trip', id }), providerId: id, name: sanitizeTransitText(id), kind: 'trip' as const })),
-    ...Object.keys(data.manifest.agencyTimezones).filter(ref => parseTransitRef(ref)?.feed === index.feedId).map(ref => ({ ref, providerId: parseTransitRef(ref)!.id, name: sanitizeTransitText(parseTransitRef(ref)!.id), kind: 'agency' as const })),
-  ].map(entity => ({ ...entity, coverage: index.coverageId, feed: index.feedId })));
+    ...agencies.map(ref => ({ ref, providerId: parseTransitRef(ref)!.id, name: sanitizeTransitText(parseTransitRef(ref)!.id), kind: 'agency' as const })),
+  ].map(entity => Object.freeze({ ...entity, coverage: index.coverageId, feed: index.feedId }) as Candidate);
+  const names = new Map(list.map(entity => {
+    const route = entity.kind === 'route' ? routes.get(entity.ref) : undefined;
+    return [entity.ref, Object.freeze([entity.providerId, entity.name, route?.shortName ?? '', route?.longName ?? ''].filter(Boolean).map(normalizeEntityName))] as const;
+  }));
+  const built: EntityIndex = { list: Object.freeze(list), byRef: new Map(list.map(entity => [entity.ref, entity])), names };
+  if (!byAgencies) { byAgencies = new Map(); entityIndexes.set(index, byAgencies); }
+  byAgencies.set(key, built);
+  return built;
+}
+export function entities(data: TransitData): readonly Candidate[] {
+  return data.indexes.length === 1 ? entityIndex(data, data.indexes[0]!).list : data.indexes.flatMap(index => entityIndex(data, index).list);
 }
 export function candidates(data: TransitData, query: string, kind?: string): Candidate[] {
-  const normalized = normalizeEntityName(query);
-  return entities(data).filter(entity => (!kind || kind === entity.kind) &&
-    (entityNames(data, entity).some(name => name.includes(normalized)) || placeAliasMatch(data, entity, normalized)))
-    .sort((a, b) => Number(exactCandidate(data, b, query)) - Number(exactCandidate(data, a, query)) || a.providerId.localeCompare(b.providerId) || a.ref.localeCompare(b.ref));
+  const normalized = normalizeEntityName(query), aliasStops = aliasStopNames(data, normalized);
+  const found: { entity: Candidate; exact: boolean }[] = [];
+  for (const index of data.indexes) {
+    const { list, names } = entityIndex(data, index);
+    for (const entity of list) {
+      if (kind && kind !== entity.kind) continue;
+      const own = names.get(entity.ref)!, alias = aliasMatch(entity, aliasStops);
+      if (alias || own.some(name => name.includes(normalized))) found.push({ entity, exact: alias || own.includes(normalized) });
+    }
+  }
+  return found.sort((a, b) => Number(b.exact) - Number(a.exact) || a.entity.providerId.localeCompare(b.entity.providerId) || a.entity.ref.localeCompare(b.entity.ref))
+    .map(item => item.entity);
 }
 const normalizeEntityName = (value: string) => value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
-function entityNames(data: TransitData, entity: Candidate): string[] {
-  const route = entity.kind === 'route' ? data.indexes.find(index => index.feedId === entity.feed)?.routes.find(route => route.ref === entity.ref) : undefined;
-  return [entity.providerId, entity.name, route?.shortName ?? '', route?.longName ?? ''].filter(Boolean).map(normalizeEntityName);
+function entityNames(data: TransitData, entity: Candidate): readonly string[] {
+  const index = data.indexes.find(index => index.feedId === entity.feed);
+  return (index && entityIndex(data, index).names.get(entity.ref)) ?? [entity.providerId, entity.name].filter(Boolean).map(normalizeEntityName);
 }
+/** Normalized stop names a reviewed public place alias stands for (empty when none match). */
+function aliasStopNames(data: TransitData, normalized: string): Set<string> {
+  return new Set((data.coverage.placeAliases ?? []).filter(place => place.aliases.some(alias => normalizeEntityName(alias) === normalized))
+    .flatMap(place => place.stopNames.map(normalizeEntityName)));
+}
+const aliasMatch = (entity: Candidate, aliasStops: Set<string>) => entity.kind === 'stop' && aliasStops.size > 0 && aliasStops.has(normalizeEntityName(entity.name));
 function placeAliasMatch(data: TransitData, entity: Candidate, normalized: string): boolean {
-  return entity.kind === 'stop' && (data.coverage.placeAliases ?? []).some(place =>
-    place.aliases.some(alias => normalizeEntityName(alias) === normalized) &&
-    place.stopNames.some(name => normalizeEntityName(name) === normalizeEntityName(entity.name)));
+  return aliasMatch(entity, aliasStopNames(data, normalized));
 }
 export const exactCandidate = (data: TransitData, entity: Candidate, query: string) =>
   entityNames(data, entity).includes(normalizeEntityName(query)) || placeAliasMatch(data, entity, normalizeEntityName(query));
@@ -130,10 +189,80 @@ export function ambiguityCandidate(data: TransitData, entity: Candidate, query: 
   return exactCandidate(data, entity, query) || entity.kind === 'stop' && normalizeEntityName(entity.name).includes(normalized) &&
     (data.coverage.placeAliases ?? []).some(place => place.aliases.some(alias => normalizeEntityName(alias) === normalized));
 }
+/** Matches that all belong to one station complex name one place, and resolve to its
+ * station. A complex is a GTFS station with its platforms and entrances, together with
+ * same-named stations published separately within a short walk (for example the four
+ * "Times Sq-42 St" stations). Same-named stations farther apart stay separate candidates. */
+export const COMPLEX_RADIUS_METRES = 200;
+/** Groups same-named stations into complexes: the publisher links them with a transfer,
+ * or they lie within a short walk of each other. Maps each station to its complex's first station. */
+function stationComplexes(data: TransitData, roots: string[]): Map<string, string> {
+  const stops = stopsByRef(data);
+  const metres = (a: ScheduleStopLike, b: ScheduleStopLike) => {
+    if (a.latitude === null || a.longitude === null || b.latitude === null || b.longitude === null) return Infinity;
+    const radians = Math.PI / 180, x = (b.longitude - a.longitude) * radians * Math.cos((a.latitude + b.latitude) * radians / 2), y = (b.latitude - a.latitude) * radians;
+    return Math.hypot(x, y) * 6_371_000;
+  };
+  roots = [...new Set(roots)].sort();
+  const linked = new Set(data.indexes.flatMap(index => index.stationLinks ?? []).map(([a, b]) => `${a}\n${b}`));
+  const parent = new Map(roots.map(root => [root, root]));
+  const find = (root: string): string => { let at = root; while (parent.get(at) !== at) at = parent.get(at)!; return at; };
+  for (const [index, a] of roots.entries()) for (const b of roots.slice(index + 1)) {
+    const left = stops.get(a)!, right = stops.get(b)!;
+    if (normalizeEntityName(left.name) !== normalizeEntityName(right.name)) continue;
+    if (linked.has(`${a}\n${b}`) || metres(left, right) <= COMPLEX_RADIUS_METRES) {
+      const [x, y] = [find(a), find(b)].sort() as [string, string];
+      parent.set(y, x);
+    }
+  }
+  return new Map(roots.map(root => [root, find(root)]));
+}
+const stopMaps = new WeakMap<TransitData['indexes'], Map<string, ScheduleStop>>();
+function stopsByRef(data: TransitData): Map<string, ScheduleStop> {
+  let stops = stopMaps.get(data.indexes);
+  if (!stops) { stops = new Map(data.indexes.flatMap(index => index.stops).map(stop => [stop.ref as string, stop])); stopMaps.set(data.indexes, stops); }
+  return stops;
+}
+function stationOf(data: TransitData, ref: string): string | undefined {
+  const stop = stopsByRef(data).get(ref);
+  return stop?.locationType === 1 ? ref : stop?.parentStationRef;
+}
+export function sameStation(data: TransitData, matches: Candidate[]): Candidate[] {
+  if (matches.length < 2) return matches;
+  const complex = stationComplexes(data, matches.flatMap(match => { const root = match.kind === 'stop' ? stationOf(data, match.ref) : undefined; return root ? [root] : []; }));
+  // One candidate per place, in the original rank order; a place is its complex's first station.
+  const seen = new Set<string>(), result: Candidate[] = [];
+  for (const match of matches) {
+    const root = match.kind === 'stop' ? stationOf(data, match.ref) : undefined;
+    if (!root) { result.push(match); continue; }
+    const place = complex.get(root)!;
+    if (seen.has(place)) continue;
+    seen.add(place);
+    result.push(matches.find(candidate => candidate.ref === place) ?? match);
+  }
+  return result;
+}
+/** The name riders use for a route: its short name ("A", "7"), unless that is only the
+ * initial of the long name, as WMATA publishes "R" for "Red". */
+export function routeName(route: { shortName: string; longName: string }): string {
+  const initial = route.shortName.length === 1 && route.longName.toUpperCase().startsWith(route.shortName.toUpperCase());
+  return sanitizeTransitText(!route.shortName || initial ? route.longName || route.shortName : route.shortName, 120);
+}
+/** The other stations in a station's complex (Times Sq-42 St is published as four). */
+export function complexStations(data: TransitData, stationRef: string): string[] {
+  const station = stopsByRef(data).get(stationRef);
+  if (station?.locationType !== 1) return [];
+  const name = normalizeEntityName(station.name);
+  const sameName = data.indexes.flatMap(index => index.stops).filter(stop => stop.locationType === 1 && normalizeEntityName(stop.name) === name).map(stop => stop.ref as string);
+  const complex = stationComplexes(data, sameName), place = complex.get(stationRef);
+  return sameName.filter(ref => ref !== stationRef && complex.get(ref) === place).sort();
+}
+type ScheduleStopLike = { latitude: number | null; longitude: number | null };
 export function knownEntity(data: TransitData, ref: string): Candidate {
   const parsed = validRef(ref, ['agency', 'route', 'stop', 'trip']);
   const base = formatEntityRef(parsed);
-  const entity = entities(data).find(entity => entity.ref === base);
+  const index = data.indexes.find(index => index.feedId === parsed.feed);
+  const entity = index && entityIndex(data, index).byRef.get(base);
   if (!entity) throw new TransitToolError('ENTITY_NOT_FOUND');
   return { ...entity, ref };
 }
@@ -145,9 +274,18 @@ export async function detail(data: TransitData, ref: string) {
   const patterns: { id: string; directionId: number | null; stopRefs: string[] }[] = [];
   const calls: { stopRef: string; sequence: number; arrivalSeconds: number | null; departureSeconds: number | null; pickupType: number; dropOffType: number }[] = [];
   if (entity.kind === 'route' || entity.kind === 'trip') {
+    // Decode one shard at a time: bounded per object, never a whole artifact at once.
+    const timezone = Object.entries(data.manifest.agencyTimezones).find(([ref]) => parseTransitRef(ref)?.feed === entity.feed)?.[1];
+    const today = timezone ? serviceDateAtInstant(Date.now(), timezone) : undefined;
+    const day = 'serviceDate' in parsed ? parsed.serviceDate : today;
+    const start = 'startTime' in parsed ? parseGtfsTime(parsed.startTime).totalSeconds : undefined;
+    const descriptors = data.manifest.shards.filter(shard => shard.feedId === entity.feed && (!shard.timeRange || day === undefined || day >= shard.window.startDate && day <= shard.window.endDate) &&
+      (!('serviceDate' in parsed) || parsed.serviceDate >= shard.window.startDate && parsed.serviceDate <= shard.window.endDate) &&
+      (start === undefined || !shard.timeRange || start >= shard.timeRange.bandStart && start < shard.timeRange.bandEnd));
     let total = 0;
-    for (const descriptor of data.manifest.shards.filter(shard => shard.feedId === entity.feed && (!('serviceDate' in parsed) || parsed.serviceDate >= shard.window.startDate && parsed.serviceDate <= shard.window.endDate))) {
-      total += descriptor.byteLength; if (total > 48 * 1024 * 1024 / 8) throw new Error('Detail budget');
+    for (const descriptor of descriptors) {
+      total += descriptor.byteLength;
+      if (descriptor.byteLength > 8 * 1024 * 1024 || total > 64 * 1024 * 1024) throw new Error('Detail budget');
       const bytes = await data.readObject(descriptor.key);
       if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Detail integrity');
       const shard = decodeScheduleShard(bytes);
@@ -164,16 +302,32 @@ export async function detail(data: TransitData, ref: string) {
     coordinates: stop?.latitude != null && stop.longitude != null ? { latitude: stop.latitude, longitude: stop.longitude } : null,
     routeRefs: stop ? index.stopRoutes[stop.ref] ?? [] : [], agencyRef: route?.agencyRef ?? null, mode: route?.mode ?? null, patterns, calls };
 }
-/** This coordinator owns sf511 only; artifact membership does not imply realtime ownership. */
+/** Source support narrowed to what this deployment can serve now: realtime kinds need
+ * a bound coordinator, any required credential, and an ingested feed of that kind. */
+export function effectiveCapabilities(context: MetroMcpContext, coverage: CoverageManifest, requireCredential = true): CoverageCapability {
+  const source = getRealtimeSource(coverage.id);
+  const ingests = (kind: RealtimeFeedKind) => !!source && !!context.env.REGION_FEED_HUB && (!requireCredential || credential(source, context.env) !== null) &&
+    publishedKinds(source).has(kind);
+  return { ...coverage.capabilities,
+    realtimeDepartures: coverage.capabilities.realtimeDepartures && ingests('trip_updates'),
+    alerts: coverage.capabilities.alerts && ingests('service_alerts'),
+    vehicles: coverage.capabilities.vehicles && ingests('vehicle_positions') };
+}
+/** Each coverage's coordinator owns exactly one static feed's realtime. */
 export type OwnedFeedRead<T> = FeedRead<T> & { feedId: string; reasons: VerificationReason[] };
-export async function readFeed<T>(context: MetroMcpContext, data: TransitData, kind: RealtimeFeedKind, now: number, signal: AbortSignal): Promise<OwnedFeedRead<T[]>> {
-  const missing = (): OwnedFeedRead<T[]> => ({ feedId: 'sf511', freshness: 'unavailable', status: kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: null, warnings: [], reasons: ['REALTIME_UNAVAILABLE'] });
-  if (data.coverage.id !== 'sfbay' || !context.env.REGION_FEED_HUB) return missing();
+export async function readFeed<T>(context: MetroMcpContext, data: TransitData, kind: RealtimeFeedKind, now: number, signal: AbortSignal, stopIds: string[] = []): Promise<OwnedFeedRead<T[]>> {
+  const source = getRealtimeSource(data.coverage.id);
+  const feedId = source?.policy.feedId ?? data.manifest.sources[0]?.feedId ?? '';
+  const missing = (): OwnedFeedRead<T[]> => ({ feedId, freshness: 'unavailable', status: kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: null, warnings: [], reasons: ['REALTIME_UNAVAILABLE'] });
+  const capability = kind === 'trip_updates' ? 'realtimeDepartures' : kind === 'vehicle_positions' ? 'vehicles' : 'alerts';
+  if (!source || !context.env.REGION_FEED_HUB || !effectiveCapabilities(context, data.coverage, false)[capability]) return missing();
+  // Without a credential the coordinator publishes nothing, so reads degrade by freshness.
   const url = new URL(`https://region-feed-hub.internal/${kind}`);
   url.searchParams.set('now', String(now)); url.searchParams.set('artifact', data.version.artifactVersion);
+  for (const stop of kind === 'trip_updates' ? stopIds.slice(0, 200) : []) url.searchParams.append('stop', stop);
   signal.throwIfAborted();
   try {
-    const response = await context.env.REGION_FEED_HUB.get(context.env.REGION_FEED_HUB.idFromName(SF511_QUOTA_NAMESPACE)).fetch(url.href, { signal });
+    const response = await context.env.REGION_FEED_HUB.get(context.env.REGION_FEED_HUB.idFromName(source.policy.namespace)).fetch(url.href, { signal });
     signal.throwIfAborted();
     if (!response.ok) return missing();
     const feed = await response.json<FeedRead<T[]>>();
@@ -184,14 +338,37 @@ export async function readFeed<T>(context: MetroMcpContext, data: TransitData, k
     const producerTimestampSeconds = validStamp(feed.producerTimestampSeconds) ? feed.producerTimestampSeconds : undefined;
     const receivedAtSeconds = validStamp(feed.receivedAtSeconds) ? feed.receivedAtSeconds : undefined;
     const freshness = classifyManifestFreshness(producerTimestampSeconds, now, threshold, expiry);
-    const mismatch = !!feed.version && (!sameStaticVersion(feed.version, data.version) || !data.version.sourceVersions.sf511);
+    const mismatch = !!feed.version && (!sameStaticVersion(feed.version, data.version) || !data.version.sourceVersions[feedId]);
     const reasons: VerificationReason[] = mismatch || feed.warnings?.includes('SCHEDULE_REALTIME_MISMATCH') ? ['SCHEDULE_REALTIME_MISMATCH'] :
       feed.degraded || !feed.version || freshness === 'expired' || freshness === 'unavailable' || receivedAtSeconds === undefined || receivedAtSeconds < (producerTimestampSeconds ?? Infinity) || !Array.isArray(feed.payload) ? ['REALTIME_UNAVAILABLE'] :
       freshness === 'stale' ? ['REALTIME_STALE'] : [];
     const usable = reasons.length === 0 || kind === 'service_alerts' && reasons[0] === 'REALTIME_STALE';
-    return { ...feed, feedId: 'sf511', reasons, warnings: [], producerTimestampSeconds, receivedAtSeconds, freshness,
+    return { ...feed, feedId, reasons, warnings: [], producerTimestampSeconds, receivedAtSeconds, freshness,
       status: usable ? 'realtime' : kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: usable ? feed.payload : null };
   } catch (error) { signal.throwIfAborted(); if (error instanceof Error && error.name === 'AbortError') throw error; return missing(); }
+}
+/** Train numbers are observations, not schedule entities. Resolve one only from a fresh
+ * vehicle feed, to the dated trip instance that train is running; never guess. */
+export async function trainCandidates(context: MetroMcpContext, data: TransitData, query: string, signal: AbortSignal): Promise<{ candidates: Candidate[]; sources: SourceStatus[] }> {
+  const number = query.trim().replace(/^train\s+/i, '');
+  if (!/^[A-Za-z0-9-]{1,16}$/.test(number) || !effectiveCapabilities(context, data.coverage, false).vehicles) return { candidates: [], sources: [] };
+  const now = Math.floor(Date.now() / 1000);
+  const feed = await readFeed<NormalizedVehicle>(context, data, 'vehicle_positions', now, signal);
+  const maxAge = data.coverage.thresholds.vehiclePositions.realtimeSeconds;
+  const candidates = new Map<string, Candidate>();
+  for (const vehicle of feed.status === 'realtime' ? feed.payload ?? [] : []) {
+    const age = vehicle.timestampSeconds === undefined ? Infinity : now - vehicle.timestampSeconds;
+    if (!vehicle.tripInstanceRef || age < 0 || age > maxAge || vehicle.vehicleId !== number && vehicle.label !== number) continue;
+    const instance = parseTransitRef(vehicle.tripInstanceRef);
+    if (!instance || instance.kind !== 'trip') continue;
+    candidates.set(vehicle.tripInstanceRef, { ref: vehicle.tripInstanceRef, kind: 'trip', name: sanitizeTransitText(`Train ${vehicle.vehicleId ?? vehicle.label}`),
+      coverage: instance.coverage, feed: instance.feed, providerId: instance.id });
+  }
+  return { candidates: [...candidates.values()].sort((a, b) => a.ref.localeCompare(b.ref)), sources: candidates.size ? realtimeSource(data, feed, 'vehicle_positions', now) : [] };
+}
+/** Rows the schedule planner and validator may use: calls of canonical trip instances. */
+export function scheduledRealtimeRows<T extends { scheduleMatch?: string }>(rows: T[] | null): T[] | null {
+  return rows && rows.filter(row => row.scheduleMatch === undefined || row.scheduleMatch === 'matched');
 }
 export function realtimeSource(_data: TransitData, feed: OwnedFeedRead<unknown>, kind: SourceStatus['kind'], now: number): SourceStatus[] {
   const scheduleVersion = feed.version?.sourceVersions[feed.feedId];

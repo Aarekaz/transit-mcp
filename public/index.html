@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Transit MCP · Live US transit data for AI</title>
-  <meta name="description" content="Free MCP server for live DC Metro and NYC Subway transit arrivals, alerts, routes, and vehicles. SF Bay support is in development. No login required.">
+  <meta name="description" content="Free MCP server for DC Metro and the NYC Subway: trip planning, live departures, service alerts and train positions. SF Bay support is in development. No login required.">
   <link rel="canonical" href="https://transitmcp.com/">
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
 
@@ -13,14 +13,14 @@
   <meta property="og:site_name" content="Transit MCP">
   <meta property="og:url" content="https://transitmcp.com/">
   <meta property="og:title" content="Transit MCP · Plug your LLM into transit">
-  <meta property="og:description" content="Live DC Metro and NYC Subway transit data through one free, anonymous MCP server. SF Bay support is in development.">
+  <meta property="og:description" content="Trip planning and live DC Metro and NYC Subway data through one free, anonymous MCP server. SF Bay support is in development.">
   <meta property="og:image" content="https://transitmcp.com/og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="Transit MCP: live DC and NYC transit data">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Transit MCP · Plug your LLM into transit">
-  <meta name="twitter:description" content="Live DC Metro and NYC Subway transit data through one free, anonymous MCP server. SF Bay support is in development.">
+  <meta name="twitter:description" content="Trip planning and live DC Metro and NYC Subway data through one free, anonymous MCP server. SF Bay support is in development.">
   <meta name="twitter:image" content="https://transitmcp.com/og-image.png">
   <script type="application/ld+json">
   {
@@ -30,7 +30,7 @@
     "name": "Transit MCP",
     "alternateName": "Metro MCP",
     "url": "https://transitmcp.com/",
-    "description": "Anonymous, read-only MCP server for real-time DC Metro and NYC Subway arrivals, incidents, stations, routes, and vehicles.",
+    "description": "Anonymous, read-only MCP server for DC Metro and NYC Subway trip planning, live departures, service alerts, stations, routes, and vehicles.",
     "applicationCategory": "DeveloperApplication",
     "areaServed": ["Washington, DC", "New York City"],
     "operatingSystem": "Any",
@@ -1329,7 +1329,14 @@
     .cta-button:hover .cta-arrow { transform: translateX(3px); }
     .cta-button:active { transform: translateY(1px); }
 
-    /* ChatGPT plugin — secondary primary path, sits right under the URL. */
+    /* Directory listings — secondary primary paths, right under the URL. */
+    .directory-links {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
     .plugin-link {
       display: inline-flex;
       align-items: center;
@@ -1724,7 +1731,7 @@
           <span class="stat">~<strong>77K</strong> requests served weekly</span>
         </p>
         <h1 class="rise" style="--i:1">Plug your LLM into <span class="accent">transit</span>.</h1>
-        <p class="subtitle rise" style="--i:2">Live arrivals, service alerts, routes, and vehicle positions across DC and NYC, right inside your AI. SF Bay support is in development.</p>
+        <p class="subtitle rise" style="--i:2">Plan trips, see live departures and check service alerts on DC Metro and the NYC Subway, right inside your AI. SF Bay support is in development.</p>
         <div class="cta-stack rise" style="--i:3">
           <div class="cta-row">
             <button type="button" class="url-pill" data-copy-url="https://transitmcp.com/mcp" aria-label="Copy MCP server URL">
@@ -1733,17 +1740,23 @@
             </button>
             <button type="button" class="cta-button" data-open-install>Connect <span class="cta-arrow" aria-hidden="true">&rarr;</span></button>
           </div>
-          <a class="plugin-link" href="https://chatgpt.com/plugins/plugin_asdk_app_6a9078f4d6dc8191be735cc1c2ff45b5" target="_blank" rel="noreferrer">
-            <span class="plugin-mark" aria-hidden="true"><img src="/client-openai.svg" alt="" width="14" height="14"></span>
-            <span>Also available as a <strong>ChatGPT plugin</strong></span>
-            <span class="plugin-arrow" aria-hidden="true">&nearr;</span>
-          </a>
+          <div class="directory-links" aria-label="Connector directories">
+            <a class="plugin-link" href="https://chatgpt.com/plugins/plugin_asdk_app_6a9078f4d6dc8191be735cc1c2ff45b5" target="_blank" rel="noreferrer">
+              <span class="plugin-mark" aria-hidden="true"><img src="/client-openai.svg" alt="" width="14" height="14"></span>
+              <span>Also available as a <strong>ChatGPT plugin</strong></span>
+              <span class="plugin-arrow" aria-hidden="true">&nearr;</span>
+            </a>
+            <a class="plugin-link" href="https://claude.ai/directory/metro-mcp" target="_blank" rel="noreferrer" aria-label="Open Transit MCP in the Claude Directory">
+              <span class="plugin-mark" aria-hidden="true"><img src="/client-claude.svg" alt="" width="14" height="14"></span>
+              <span>Add from the <strong>Claude Directory</strong></span>
+              <span class="plugin-arrow" aria-hidden="true">&nearr;</span>
+            </a>
+          </div>
           <p class="hero-tip">Or just send this link to your AI. It will figure it out.</p>
         </div>
         <p class="footnote rise" style="--i:4">
           <span>Works with any MCP-compatible LLM/client</span>
           <span class="compat-examples" aria-label="Example clients">
-            <a class="compat-item" href="https://claude.com" target="_blank" rel="noreferrer"><img class="compat-logo" src="/client-claude.svg" alt="" width="14" height="14">Claude</a>
             <a class="compat-item" href="https://grok.com" target="_blank" rel="noreferrer"><img class="compat-logo" src="/client-grok.svg" alt="" width="14" height="14">Grok Bot</a>
             <a class="compat-item" href="https://instinct.com" target="_blank" rel="noreferrer"><img class="compat-logo" src="/client-instinct.svg" alt="" width="14" height="14">Instinct</a>
             <a class="compat-item" href="https://orchid.ai/" target="_blank" rel="noreferrer"><img class="compat-logo" src="/client-orchid.svg" alt="" width="14" height="14">Orchid</a>
@@ -2036,9 +2049,9 @@
         {
           user: "I'm at Union Square. Can I make it to Grand Central in 20 min?",
           tool: {
-            name: 'get_station_predictions',
-            args: '{ <span class="json-key">"city"</span>: <span class="json-str">"nyc"</span>, <span class="json-key">"stationName"</span>: <span class="json-str">"Union Square"</span> }',
-            ms: 610
+            name: 'plan_trip',
+            args: '{ <span class="json-key">"coverage"</span>: <span class="json-str">"nyc"</span>, <span class="json-key">"origin"</span>: { <span class="json-key">"query"</span>: <span class="json-str">"Union Sq"</span> }, <span class="json-key">"destination"</span>: { <span class="json-key">"query"</span>: <span class="json-str">"Grand Central"</span> } }',
+            ms: 880
           },
           response:
             '<p class="verdict rv">Yes, you\'ll make it.</p>' +
@@ -2126,9 +2139,9 @@
         {
           user: "When's the next 1 train at Times Square?",
           tool: {
-            name: 'get_station_predictions',
-            args: '{ <span class="json-key">"city"</span>: <span class="json-str">"nyc"</span>, <span class="json-key">"stationName"</span>: <span class="json-str">"Times Square"</span> }',
-            ms: 190
+            name: 'get_departures',
+            args: '{ <span class="json-key">"stop"</span>: <span class="json-str">"Times Sq-42 St"</span>, <span class="json-key">"coverage"</span>: <span class="json-str">"nyc"</span> }',
+            ms: 420
           },
           response:
             '<p class="verdict rv">Next ' + nyc('1', '#EE352E') + ' is in 3 min, heading downtown.</p>' +

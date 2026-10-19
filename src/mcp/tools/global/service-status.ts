@@ -8,12 +8,17 @@ import { safeAlertIdentifier, safeAlertSelector, type NormalizedAlert, type Norm
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import { validateItinerary } from '../../../transit/planner/validator';
 import { loadScheduleWindow } from '../../../transit/planner/schedule-index';
+import { serviceDayOrigin } from '../../../transit/planner/service-day';
+import { parseGtfsTime } from '../../../transit/gtfs/static/time';
 import { parseTransitRef } from '../../../transit/core/refs';
 import { matchTripInstance } from '../../../transit/gtfs/realtime/trip-match';
 import type { ScheduleShard } from '../../../transit/gtfs/static/schema';
 import { AlertScopeLimitError, expandAlertScopes, matchesAlertSelector, resolveAlertSelector, type AlertScope } from '../../../transit/gtfs/realtime/alert-match';
 import { itinerarySchema } from './plan';
-import { TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, unavailable, validRef } from './shared';
+import { TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef } from './shared';
+
+/** Per-alert detail bound: a city-wide status call stays readable for a model. */
+export const ALERT_DETAIL_LIMIT = 20;
 
 export function registerServiceStatusTool(server: McpServer, context: MetroMcpContext): void {
   const absent = { coverage: z.never().optional(), ref: z.never().optional(), itinerary: z.never().optional() };
@@ -22,9 +27,11 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
   server.registerTool('get_service_status', {
     title: 'Transit service status', description: 'Check disruptions, delays, closures, accessibility alerts or revalidate a chosen itinerary without replacing it. Scope by coverage or an agency, route, stop or dated trip reference. Aggregate scopes include canonical service in the next 24 hours. Use get_vehicle_status for an observed vehicle location.',
     annotations: readOnlyLive('Transit service status'),
-    inputSchema: z.union([z.strictObject({ ...absent, coverage: coverageSchema }), z.strictObject({ ...absent, ref: boundedText }), z.strictObject({ ...absent, itinerary: itinerarySchema })]),
+    inputSchema: z.union([z.strictObject({ ...absent, coverage: coverageSchema }), z.strictObject({ ...absent, ref: boundedText }), z.strictObject({ ...absent, itinerary: z.record(z.string(), z.unknown())
+      .describe('An itinerary exactly as plan_trip returned it; validated strictly against that contract.') })]),
     outputSchema: z.strictObject({ ...resultShape, alerts: z.array(z.strictObject({ id: z.string(), agencyText: z.strictObject({ title: z.string(), description: z.string(), label: z.literal('agency_supplied') }),
-      routeIds: z.array(z.string()), stopIds: z.array(z.string()), selectors: z.array(selectorSchema), stale: z.boolean(),
+      routeIds: z.array(z.string()), stopIds: z.array(z.string()).describe(`At most ${ALERT_DETAIL_LIMIT}; stopCount is the full number.`),
+      selectors: z.array(selectorSchema).describe(`At most ${ALERT_DETAIL_LIMIT}; selectorCount is the full number.`), selectorCount: z.number().int().nonnegative(), stopCount: z.number().int().nonnegative(), stale: z.boolean(),
       activePeriods: z.array(z.strictObject({ start: instantSchema.nullable(), end: instantSchema.nullable() })).max(32) })),
       journeyValid: z.boolean().nullable(), journeyReasons: z.array(z.string()),
       legChecks: z.array(z.strictObject({ index: z.number().int(), valid: z.boolean(), reasons: z.array(z.string()) })),
@@ -32,7 +39,11 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
   }, async (args, handler) => guarded(handler, async () => {
     checkState(handler, 'get_service_status');
     const parsed = args.ref ? validRef(args.ref, ['agency', 'route', 'stop', 'trip'], true) : undefined;
-    const id = parsed?.coverage ?? args.itinerary?.coverageId ?? getCoverage(args.coverage ?? '')?.id ?? args.coverage!;
+    // The advertised input stays small; the itinerary contract is enforced here.
+    const checked = args.itinerary === undefined ? undefined : itinerarySchema.safeParse(args.itinerary);
+    if (checked && !checked.success) throw new TransitToolError('INVALID_ITINERARY');
+    const inputItinerary = checked?.data;
+    const id = parsed?.coverage ?? inputItinerary?.coverageId ?? getCoverage(args.coverage ?? '')?.id ?? args.coverage!;
     const data = await loadData(context, id, handler.mcpReq.signal);
     if (!data) return complete({ ...unavailable(id), alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] });
     if (args.ref) knownEntity(data, args.ref);
@@ -79,16 +90,19 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       catch (error) { if (error instanceof AlertScopeLimitError) return scopeUnavailable(); throw error; }
     }
     if (parsed?.kind === 'trip' && 'serviceDate' in parsed && typeof parsed.serviceDate === 'string') {
-      const day = parsed.serviceDate, instant = `${day.slice(0, 4)}-${day.slice(4, 6)}-${day.slice(6, 8)}T12:00:00Z`;
-      const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant, windowSeconds: 86400, feedIds: [parsed.feed] });
+      // A dated instance names its scheduled start: load only the timetable running then.
+      const day = parsed.serviceDate, timezone = Object.entries(data.manifest.agencyTimezones).find(([ref]) => parseTransitRef(ref)?.feed === parsed.feed)?.[1];
+      const instant = timezone && 'startTime' in parsed && typeof parsed.startTime === 'string' ? new Date(serviceDayOrigin(day, timezone) + parseGtfsTime(parsed.startTime).totalSeconds * 1000).toISOString()
+        : `${day.slice(0, 4)}-${day.slice(4, 6)}-${day.slice(6, 8)}T12:00:00Z`;
+      const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant, windowSeconds: timezone ? 1 : 86400, feedIds: [parsed.feed] });
       canonicalShards.push(...schedule.shards.map(item => item.shard));
       if (!addTrip(args.ref!, schedule.shards.map(item => item.shard))) throw new TransitToolError('ENTITY_NOT_FOUND');
     }
     const legChecks: { index: number; valid: boolean; reasons: string[] }[] = [];
     const transferChecks: { fromLegIndex: number; toLegIndex: number; valid: false; reasons: string[] }[] = [];
     let journeyValid: boolean | null = null, journeyReasons: string[] = [];
-    if (args.itinerary) {
-      const itinerary = args.itinerary;
+    if (inputItinerary) {
+      const itinerary = inputItinerary;
       const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant: itinerary.departAt, windowSeconds: itinerary.windowSeconds });
       canonicalShards.push(...schedule.shards.map(item => item.shard));
       for (const leg of itinerary.legs) if (leg.kind === 'transit') addTrip(leg.tripInstanceRef, schedule.shards.map(item => item.shard), leg.boardSequence, leg.alightSequence,
@@ -99,7 +113,7 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       const validation = await validateItinerary(itinerary as Parameters<typeof validateItinerary>[0], { manifest: data.manifest, shards: schedule.shards.map(item => item.shard), now,
         recheck: true, realtimeReasons: realtime.reasons,
         realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds,
-        realtime: realtime?.version && realtime.receivedAtSeconds !== undefined ? { ...realtime, version: realtime.version, receivedAtSeconds: realtime.receivedAtSeconds } : undefined }, handler.mcpReq.signal);
+        realtime: realtime?.version && realtime.receivedAtSeconds !== undefined ? { ...realtime, payload: scheduledRealtimeRows(realtime.payload), version: realtime.version, receivedAtSeconds: realtime.receivedAtSeconds } : undefined }, handler.mcpReq.signal);
       journeyValid = validation.valid; journeyReasons = validation.reasons;
       if (!journeyValid) resultReasons.add('VALIDATOR_REJECTED');
       itinerary.legs.forEach((_leg, index) => {
@@ -107,6 +121,15 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
         legChecks.push({ index, valid: reasons.length === 0, reasons });
       });
       transferChecks.push(...validation.transferFailures.map(failure => ({ ...failure, valid: false as const })));
+    }
+    // Alerts may name a parent station while timetables name its platforms (NYCT).
+    const parents = new Map(data.indexes.flatMap(index => index.stops).flatMap(stop => {
+      const parent = stop.parentStationRef ? parseTransitRef(stop.parentStationRef) : null;
+      return parent ? [[`${parseTransitRef(stop.ref)!.feed}\u0000${stop.providerId}`, parent.id] as const] : [];
+    }));
+    for (const scope of scopes) for (const id of [...scope.stopIds]) {
+      const parent = parents.get(`${scope.feedId}\u0000${id}`);
+      if (parent) scope.stopIds.add(parent);
     }
     const inFeed = !!args.coverage || !!feed && feeds.has(feed.feedId);
     // Older persisted snapshots lack selector groups; never reconstruct their
@@ -123,9 +146,12 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
         return resolved && (args.coverage || scopes.some(scope => scope.feedId === feed!.feedId && inWindow(scope) && matchesAlertSelector(resolved, scope)));
       });
       if (alert.selectors.length && !selectors.length) return [];
-      return [{ id: alert.id, agencyText: { title: sanitizeTransitText(alert.header), description: sanitizeTransitText(alert.description), label: 'agency_supplied' as const }, selectors,
+      // NYCT alerts name every affected platform; report exact counts and a bounded sample.
+      const stopIds = [...new Set(selectors.flatMap(selector => selector.stopId === undefined ? [] : [selector.stopId]))];
+      return [{ id: alert.id, agencyText: { title: sanitizeTransitText(alert.header), description: sanitizeTransitText(alert.description), label: 'agency_supplied' as const },
+        selectors: selectors.slice(0, ALERT_DETAIL_LIMIT), selectorCount: selectors.length,
         routeIds: [...new Set(selectors.flatMap(selector => selector.routeId === undefined ? [] : [selector.routeId]))],
-        stopIds: [...new Set(selectors.flatMap(selector => selector.stopId === undefined ? [] : [selector.stopId]))], stale: feed?.freshness !== 'fresh',
+        stopIds: stopIds.slice(0, ALERT_DETAIL_LIMIT), stopCount: stopIds.length, stale: feed?.freshness !== 'fresh',
         activePeriods: (alert.activePeriods ?? []).map(period => ({ start: period.start === undefined ? null : new Date(period.start * 1000).toISOString(), end: period.end === undefined ? null : new Date(period.end * 1000).toISOString() })) }];
     }); } catch (error) { if (error instanceof AlertScopeLimitError) return scopeUnavailable(); throw error; }
     return complete({ ...meta, sources,

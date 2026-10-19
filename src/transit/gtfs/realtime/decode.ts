@@ -18,6 +18,12 @@ export interface NormalizedStopUpdate {
   scheduledArrivalTimeSeconds?: number;
   scheduledDepartureTimeSeconds?: number;
   status?: 'realtime' | 'scheduled_only' | 'canceled' | 'skipped';
+  /** Absent or `matched`: a call of a canonical scheduled trip instance. `unscheduled_call`:
+   * an observed stop outside the matched trip's pattern (a reroute). `unmatched_trip`: an
+   * observed train with no canonical schedule. Neither has a scheduled time. */
+  scheduleMatch?: 'matched' | 'unscheduled_call' | 'unmatched_trip';
+  /** Last reported stop of the observed train, for unscheduled rows only. */
+  destinationStopId?: string;
 }
 
 export type TripRelationship = 'SCHEDULED' | 'ADDED' | 'UNSCHEDULED' | 'CANCELED' | 'REPLACEMENT' | 'DUPLICATED' | 'UNKNOWN';
@@ -30,6 +36,8 @@ export interface NormalizedTripUpdate {
   tripProperties?: { tripId?: string; startDate?: string; startTime?: string };
 }
 
+export type VehicleStopStatus = 'INCOMING_AT' | 'STOPPED_AT' | 'IN_TRANSIT_TO';
+
 export interface NormalizedVehicle {
   entityId: string;
   vehicleId?: string;
@@ -40,8 +48,15 @@ export interface NormalizedVehicle {
   scheduleRelationship?: TripRelationship;
   tripInstanceRef?: string;
   routeId?: string;
-  latitude: number;
-  longitude: number;
+  /** Absent when the producer reports only a stop (NYCT publishes no coordinates). */
+  latitude?: number;
+  longitude?: number;
+  /** The stop the vehicle is at or heading to, as the producer reports it. */
+  stopId?: string;
+  currentStatus?: VehicleStopStatus;
+  /** Set by schedule matching: headsign and the stop served before `stopId`. */
+  headsign?: string;
+  previousStopId?: string;
   bearing?: number;
   speedMetersPerSecond?: number;
   timestampSeconds?: number;
@@ -120,12 +135,68 @@ function firstTranslation(value: transit_realtime.ITranslatedString | null | und
   return sanitizeTransitText(text, 2_000);
 }
 
+/** Wire type each GTFS-Realtime Alert field must use (0 varint, 2 length-delimited). */
+const ALERT_WIRE_TYPES: Record<number, number> = { 1: 2, 5: 2, 6: 0, 7: 0, 8: 2, 10: 2, 11: 2, 12: 2, 13: 2, 14: 0, 15: 2, 16: 2, 17: 2, 18: 2 };
+
+function readVarint(bytes: Uint8Array, at: number): [number, number] {
+  let value = 0, shift = 0;
+  for (;;) {
+    if (at >= bytes.length || shift > 63) throw new Error('truncated varint');
+    const byte = bytes[at++]!;
+    value += (byte & 0x7f) * 2 ** shift; shift += 7;
+    if (byte < 0x80) return [value, at];
+  }
+}
+function writeVarint(value: number, out: number[]): void {
+  while (value >= 0x80) { out.push((value % 0x80) | 0x80); value = Math.floor(value / 0x80); }
+  out.push(value);
+}
+/** Copies a message field by field; `child` rewrites selected length-delimited fields and
+ * `keep` drops fields. Returns the number of fields dropped anywhere below. */
+function rewriteMessage(bytes: Uint8Array, out: number[], visit: (field: number, wire: number) => 'keep' | 'drop' | ((body: Uint8Array, out: number[]) => number)): number {
+  let at = 0, dropped = 0;
+  while (at < bytes.length) {
+    const start = at, [tag, afterTag] = readVarint(bytes, at), field = Math.floor(tag / 8), wire = tag % 8;
+    let end = afterTag, body: Uint8Array | undefined;
+    if (wire === 0) end = readVarint(bytes, afterTag)[1];
+    else if (wire === 1) end = afterTag + 8;
+    else if (wire === 5) end = afterTag + 4;
+    else if (wire === 2) { const [length, from] = readVarint(bytes, afterTag); end = from + length; body = bytes.subarray(from, end); }
+    else throw new Error('unsupported wire type');
+    if (end > bytes.length) throw new Error('truncated field');
+    at = end;
+    const action = visit(field, wire);
+    if (action === 'drop') { dropped++; continue; }
+    if (action === 'keep' || !body) { for (let i = start; i < end; i++) out.push(bytes[i]!); continue; }
+    const inner: number[] = [];
+    dropped += action(body, inner);
+    writeVarint(tag, out); writeVarint(inner.length, out); for (const byte of inner) out.push(byte);
+  }
+  return dropped;
+}
+/** WMATA has published alerts with severity as a varint in field 12, which GTFS-Realtime
+ * defines as tts_header_text. Drop only Alert fields whose wire type contradicts the spec. */
+function dropMistypedAlertFields(bytes: Uint8Array): { bytes: Uint8Array; dropped: number } {
+  const out: number[] = [];
+  const alert = (body: Uint8Array, inner: number[]) => rewriteMessage(body, inner, (field, wire) => ALERT_WIRE_TYPES[field] !== undefined && ALERT_WIRE_TYPES[field] !== wire ? 'drop' : 'keep');
+  const entity = (body: Uint8Array, inner: number[]) => rewriteMessage(body, inner, (field, wire) => field === 5 && wire === 2 ? alert : 'keep');
+  const dropped = rewriteMessage(bytes, out, (field, wire) => field === 2 && wire === 2 ? entity : 'keep');
+  return { bytes: Uint8Array.from(out), dropped };
+}
+
 export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
-  let message: transit_realtime.FeedMessage;
+  let message: transit_realtime.FeedMessage, repaired = false;
   try {
     message = transit_realtime.FeedMessage.decode(bytes);
   } catch {
-    throw new Error('Malformed GTFS-Realtime feed');
+    try {
+      const repair = dropMistypedAlertFields(bytes);
+      if (repair.dropped === 0) throw new Error('not repairable');
+      message = transit_realtime.FeedMessage.decode(repair.bytes);
+      repaired = true;
+    } catch {
+      throw new Error('Malformed GTFS-Realtime feed');
+    }
   }
 
   const feed: NormalizedRealtimeFeed = {
@@ -134,7 +205,7 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
     trips: [],
     vehicles: [],
     alerts: [],
-    warnings: [],
+    warnings: repaired ? ['dropped_mistyped_alert_field'] : [],
   };
 
   if (message.header.incrementality === 1) throw new Error('Unsupported differential GTFS-Realtime feed');
@@ -161,7 +232,10 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
     }
 
     const vehicle = entity.vehicle;
-    if (vehicle?.position?.latitude != null && vehicle.position.longitude != null) {
+    const positioned = vehicle?.position?.latitude != null && vehicle.position.longitude != null, stopId = identifier(vehicle?.stopId);
+    if (vehicle && (positioned || stopId)) {
+      // GTFS-Realtime: an absent current_status with a stop means IN_TRANSIT_TO.
+      const statuses: Record<number, VehicleStopStatus> = { 0: 'INCOMING_AT', 1: 'STOPPED_AT', 2: 'IN_TRANSIT_TO' };
       feed.vehicles.push({
         entityId: entity.id,
         vehicleId: vehicle.vehicle?.id ?? undefined,
@@ -171,8 +245,8 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
         startTime: identifier(vehicle.trip?.startTime),
         scheduleRelationship: vehicle.trip?.scheduleRelationship === 2 ? 'UNSCHEDULED' : vehicle.trip?.scheduleRelationship == null || vehicle.trip.scheduleRelationship === 0 ? 'SCHEDULED' : 'UNKNOWN',
         routeId: identifier(vehicle.trip?.routeId),
-        latitude: vehicle.position.latitude,
-        longitude: vehicle.position.longitude,
+        ...(positioned ? { latitude: vehicle.position!.latitude, longitude: vehicle.position!.longitude } : {}),
+        ...(stopId ? { stopId, currentStatus: statuses[vehicle.currentStatus ?? 2] } : {}),
         bearing: ownNumber(vehicle.position, 'bearing'),
         speedMetersPerSecond: ownNumber(vehicle.position, 'speed'),
         timestampSeconds: ownNumber(vehicle, 'timestamp'),
@@ -182,10 +256,13 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
     if (entity.alert) {
       const informedEntities = entity.alert.informedEntity ?? [];
       const selectors = informedEntities.map(alertSelector);
-      const activePeriods = (entity.alert.activePeriod ?? []).map(period => ({
-        ...(Object.hasOwn(period, 'start') ? { start: ownNumber(period, 'start') } : {}),
-        ...(Object.hasOwn(period, 'end') ? { end: ownNumber(period, 'end') } : {}),
-      }));
+      // Some producers (WMATA) encode an open bound as 0. The epoch can never bound a
+      // current alert, so 0 is the same open interval as an absent field.
+      const bound = (period: transit_realtime.ITimeRange, key: 'start' | 'end') => {
+        const value = Object.hasOwn(period, key) ? ownNumber(period, key) : undefined;
+        return value === 0 ? {} : Object.hasOwn(period, key) ? { [key]: value } : {};
+      };
+      const activePeriods = (entity.alert.activePeriod ?? []).map(period => ({ ...bound(period, 'start'), ...bound(period, 'end') }));
       if (!safeAlertIdentifier(entity.id) || selectors.length > 100 || selectors.some(selector => !safeAlertSelector(selector)) || activePeriods.length > 32 ||
         activePeriods.some(period => Object.values(period).some(value => value === undefined || !Number.isSafeInteger(value) || value < 0 || value > 253402300799) ||
           period.start !== undefined && period.end !== undefined && period.end <= period.start)) {

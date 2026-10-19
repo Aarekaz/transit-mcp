@@ -7,7 +7,15 @@ export type RealtimeFeedKind = 'trip_updates' | 'vehicle_positions' | 'service_a
 
 export interface RealtimeFeedSpec {
   kind: RealtimeFeedKind;
-  url: URL;
+  /** Single upstream document. Use `parts` when one kind is published as several documents. */
+  url?: URL;
+  /** Every part is required: one snapshot is published only when all parts were read
+   * in the same poll, because a missing part can hide service (e.g. a reroute onto a
+   * line whose own feed loaded). */
+  parts?: readonly { id: string; url: URL }[];
+  /** Other kinds carried in the same documents, published from the same poll with no
+   * extra upstream request (NYCT trip feeds carry each train's vehicle entity). */
+  alsoPublishes?: readonly RealtimeFeedKind[];
   weight: number;
   minIntervalSeconds: number;
   maxBytes: number;
@@ -38,4 +46,23 @@ export interface RegionManifest {
     text: string;
     url: string;
   };
+}
+
+/** Provider adapter for one coverage's realtime ingestion. Parsing differences live
+ * here, never in the global tool contract. */
+export interface RealtimeSourcePolicy {
+  /** Durable Object name of the single coordinator owning this provider credential. */
+  namespace: string;
+  /** Static feed whose schedule this realtime describes. */
+  feedId: string;
+  auth: { kind: 'query_token'; secretEnv: 'SF511_API_KEY' } | { kind: 'header'; header: string; secretEnv: 'WMATA_API_KEY' } | { kind: 'none' };
+  budget: { requestsPerHour: number; safetyFactor: number; reserveForStatic: number };
+  /** `exact`: realtime trip_id equals the static trip_id.
+   * `nyct_suffix`: NYCT realtime trip_id is the static trip_id after its first `_`;
+   * the remaining stop list of a matched trip is its complete set of future calls. */
+  tripMatching: 'exact' | 'nyct_suffix';
+  /** Provider agency IDs used by alerts that name a static agency differently. */
+  alertAgencyAliases?: Readonly<Record<string, string>>;
+  /** Timetable span loaded to match trip updates; defaults to six hours. */
+  matchWindowSeconds?: number;
 }

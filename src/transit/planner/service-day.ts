@@ -5,11 +5,18 @@ const DAY = 86_400_000;
 export const MAX_STOP_TIME_SECONDS = 2 * (999 * 3600 + 3599);
 export interface ServiceDay { serviceDate: string; startTime: string; elapsedSeconds: number }
 
+// Formatters are immutable and costly to construct; one per timezone is reused.
+const formatters = new Map<string, Intl.DateTimeFormat>();
 function formatter(timezone: string): Intl.DateTimeFormat {
-  try {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
-  } catch { throw new Error('Invalid agency timezone'); }
+  let format = formatters.get(timezone);
+  if (!format) {
+    try {
+      format = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+    } catch { throw new Error('Invalid agency timezone'); }
+    formatters.set(timezone, format);
+  }
+  return format;
 }
 
 function civilParts(milliseconds: number, format: Intl.DateTimeFormat): Record<string, string> {

@@ -21,7 +21,7 @@ export async function realtimeFixture(frequencies = '', overrides: Partial<GtfsS
 /** Storage boundaries only: normalization, hashing, partitioning and quota remain real. */
 export function memoryStorage() {
   const values = new Map<string, unknown>();
-  const objects = new Map<string, Uint8Array>();
+  const objects = new Map<string, Uint8Array>(), uploaded = new Map<string, Date>();
   const reads: string[] = [];
   const storage = {
     get: async (key: string) => structuredClone(values.get(key)),
@@ -33,15 +33,20 @@ export function memoryStorage() {
     getAlarm: async () => 1, setAlarm: async () => {},
   };
   const bucket = {
-    get: async (key: string) => {
+    get: async (key: string, options?: { range?: { offset: number; length: number } }) => {
       reads.push(key);
-      const bytes = objects.get(key);
-      if (!bytes) return null;
+      const stored = objects.get(key);
+      if (!stored) return null;
+      const bytes = options?.range ? stored.subarray(options.range.offset, options.range.offset + options.range.length) : stored;
       return { size: bytes.byteLength, body: new Response(bytes).body,
-        arrayBuffer: async () => bytes.slice().buffer, text: async () => new TextDecoder().decode(bytes) };
+        arrayBuffer: async () => bytes.slice().buffer, text: async () => new TextDecoder().decode(bytes),
+        json: async () => JSON.parse(new TextDecoder().decode(bytes)) };
     },
-    put: async (key: string, value: Uint8Array | string) => { objects.set(key, typeof value === 'string' ? new TextEncoder().encode(value) : value.slice()); },
-    delete: async (keys: string | string[]) => { for (const key of typeof keys === 'string' ? [keys] : keys) objects.delete(key); },
+    head: async (key: string) => objects.has(key) ? { key, size: objects.get(key)!.byteLength } : null,
+    put: async (key: string, value: Uint8Array | string) => { objects.set(key, typeof value === 'string' ? new TextEncoder().encode(value) : value.slice()); uploaded.set(key, new Date()); },
+    delete: async (keys: string | string[]) => { for (const key of typeof keys === 'string' ? [keys] : keys) { objects.delete(key); uploaded.delete(key); } },
+    list: async ({ prefix = '' }: { prefix?: string } = {}) => ({ truncated: false,
+      objects: [...objects.keys()].filter(key => key.startsWith(prefix)).sort().map(key => ({ key, size: objects.get(key)!.byteLength, uploaded: uploaded.get(key) ?? new Date(0) })) }),
   };
   return { values, objects, reads, storage: storage as unknown as DurableObjectStorage, bucket: bucket as unknown as R2Bucket };
 }

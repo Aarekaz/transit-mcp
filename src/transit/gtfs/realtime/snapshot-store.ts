@@ -75,6 +75,23 @@ export class StaticArtifactStore {
     return version;
   }
 
+  /** Returns the pointer to the previous version if the current one is still `expected`. */
+  async rollback(expected: string): Promise<boolean> {
+    const pointer = await this.bucket.get(this.pointerKey);
+    if (!pointer) return false;
+    const value = JSON.parse(await pointer.text()) as { current: string; previous?: string };
+    if (value.current !== expected || !value.previous) return false;
+    await this.read(value.previous); // Never point at an unreadable manifest.
+    await this.bucket.put(this.pointerKey, encode({ current: value.previous, previous: value.current }));
+    this.#resident = undefined;
+    return true;
+  }
+
+  async pointer(): Promise<{ current: string; previous?: string } | null> {
+    const pointer = await this.bucket.get(this.pointerKey);
+    return pointer ? JSON.parse(await pointer.text()) as { current: string; previous?: string } : null;
+  }
+
   async current(): Promise<{ version: StaticVersion; manifest: ArtifactManifestV2 } | null> {
     const pointer = await this.bucket.get(this.pointerKey);
     if (!pointer) return null;
@@ -97,6 +114,18 @@ export class StaticArtifactStore {
   }
 }
 
+/** R2 round trips from a Durable Object are slow; overlap a bounded number at a time
+ * so one poll finishes well inside its interval. Results keep input order. */
+const R2_CONCURRENCY = 16;
+async function bounded<T, R>(items: readonly T[], operation: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(R2_CONCURRENCY, items.length) }, async () => {
+    while (next < items.length) { const index = next++; results[index] = await operation(items[index]!); }
+  }));
+  return results;
+}
+
 function partition(key: string): number {
   let hash = 2166136261;
   for (let i = 0; i < key.length; i++) hash = Math.imul(hash ^ key.charCodeAt(i), 16777619);
@@ -108,7 +137,9 @@ function indexKey(value: unknown): string {
 }
 
 export class RealtimeSnapshotStore {
-  constructor(private readonly storage: DurableObjectStorage, private readonly bucket: R2Bucket) {}
+  constructor(private readonly storage: DurableObjectStorage, private readonly bucket: R2Bucket, private readonly coverageId = 'sfbay') {
+    if (!/^[a-z0-9_]+$/.test(coverageId)) throw new Error('Invalid coverage namespace');
+  }
 
   async publish<T>(kind: RealtimeFeedKind, snapshot: NormalizedRealtimeSnapshot<T>): Promise<void> {
     const { payload, ...base } = snapshot;
@@ -128,7 +159,7 @@ export class RealtimeSnapshotStore {
         if (!batch.length) return;
         const bytes = new TextEncoder().encode(`[${batch.join(',')}]`), hash = await sha256(bytes);
         objects.push({ bytes, descriptor: { partition: part, byteLength: bytes.length, sha256: hash,
-          key: `realtime/sfbay/${snapshot.version.artifactVersion}/${kind}/${hash}.json` } });
+          key: `realtime/${this.coverageId}/${snapshot.version.artifactVersion}/${kind}/${hash}.json` } });
         batch = []; size = 2;
       };
       for (const record of records) {
@@ -150,7 +181,7 @@ export class RealtimeSnapshotStore {
     // on restoration, while current/previous objects are never provisional garbage.
     await this.storage.put(garbageKey, objects.map(object => object.descriptor.key).filter(key => !retainedBefore.has(key)));
     // Immutable payload first; a failed write never publishes a partial snapshot.
-    for (const object of objects) await this.bucket.put(object.descriptor.key, object.bytes);
+    await bounded(objects, object => this.bucket.put(object.descriptor.key, object.bytes));
     const expired = await this.storage.transaction(async txn => {
       const current = await txn.get<SnapshotMetadata>(`realtime:${kind}`);
       const previous = await txn.get<SnapshotMetadata>(`realtime:${kind}:previous`);
@@ -170,17 +201,20 @@ export class RealtimeSnapshotStore {
     const { shards, ...base } = metadata;
     if (!sameStaticVersion(metadata.version, version)) return { ...base, payload: null, degraded: true, warnings: ['SCHEDULE_REALTIME_MISMATCH'] };
     const selected = stopIds ? new Set(stopIds.map(partition)) : null;
-    const payload: T[] = []; let total = 0;
-    for (const descriptor of shards) {
-      if (selected && !selected.has(descriptor.partition)) continue;
+    const chosen = shards.filter(descriptor => !selected || selected.has(descriptor.partition));
+    let total = 0;
+    for (const descriptor of chosen) {
       total += descriptor.byteLength;
       if (descriptor.byteLength > SHARD_BYTES || total > PAYLOAD_BYTES) throw new Error('Realtime payload byte budget exceeded');
+    }
+    // Shard order is preserved; only the fetches overlap.
+    const parts = await bounded(chosen, async descriptor => {
       const bytes = await readBoundedObject(this.bucket, descriptor.key, SHARD_BYTES);
       if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Realtime shard integrity failure');
       const records = JSON.parse(new TextDecoder().decode(bytes)) as T[];
-      payload.push(...(stopIds ? records.filter(record => stopIds.includes(indexKey(record))) : records));
-    }
-    return { ...base, payload };
+      return stopIds ? records.filter(record => stopIds.includes(indexKey(record))) : records;
+    });
+    return { ...base, payload: parts.flat() };
   }
 
   async warn(kind: RealtimeFeedKind, warning: string): Promise<void> {

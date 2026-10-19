@@ -81,7 +81,10 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
     };
     if (!validEndpoint(itinerary.origin) || !validEndpoint(itinerary.destination)) reject('ENDPOINT');
     if (!itinerary.legs.length || itinerary.legs.length > 100) return { valid: false, reasons: ['LEG_COUNT'], legFailures: [], transferFailures: [] };
-    if (!endpointEqual(itinerary.legs[0]!.from, itinerary.origin) || !endpointEqual(itinerary.legs.at(-1)!.to, itinerary.destination)) reject('ENDPOINT');
+    // A station endpoint is satisfied at any of its own platforms (GTFS location_type 1).
+    const endpointWithin = (leg: JourneyEndpoint, endpoint: JourneyEndpoint) => endpointEqual(leg, endpoint) ||
+      typeof leg === 'string' && typeof endpoint === 'string' && stop(endpoint)?.locationType === 1 && stop(leg)?.parentStationRef === endpoint;
+    if (!endpointWithin(itinerary.legs[0]!.from, itinerary.origin) || !endpointWithin(itinerary.legs.at(-1)!.to, itinerary.destination)) reject('ENDPOINT');
     let previousTime = requested, walked = 0, changes = -1, realtime = true;
     let previousRide: CheckedRide | undefined;
     const checked: CheckedRide[] = [];

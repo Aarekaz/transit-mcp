@@ -357,6 +357,41 @@ describe('GTFS realtime policy', () => {
     expect(() => decodeRealtimeFeed(new Uint8Array([255]))).toThrow('Malformed GTFS-Realtime feed');
   });
 
+  it('keeps stop-only vehicles and moves a stale STOPPED_AT train on to its predicted stop', () => {
+    const bytes = transit_realtime.FeedMessage.encode(transit_realtime.FeedMessage.fromObject({ header: { gtfsRealtimeVersion: '2.0', timestamp: 1_000 }, entity: [
+      // Reported stopped at A15N 100 s ago; the same document predicts A12N in 50 s.
+      { id: 'tu-left', tripUpdate: { trip: { tripId: 'left', startDate: '20261019' }, stopTimeUpdate: [{ stopId: 'A12N', arrival: { time: 1_050 } }] } },
+      { id: 'v-left', vehicle: { trip: { tripId: 'left', startDate: '20261019' }, stopId: 'A15N', currentStatus: 1, timestamp: 900 } },
+      // Agrees with its prediction: still at the platform.
+      { id: 'tu-here', tripUpdate: { trip: { tripId: 'here', startDate: '20261019' }, stopTimeUpdate: [{ stopId: 'A24N', arrival: { time: 990 } }] } },
+      { id: 'v-here', vehicle: { trip: { tripId: 'here', startDate: '20261019' }, stopId: 'A24N', currentStatus: 1, timestamp: 980 } },
+      // Waiting at a terminal with no prediction: left as reported.
+      { id: 'v-terminal', vehicle: { trip: { tripId: 'terminal', startDate: '20261019' }, stopId: 'H11S', currentStatus: 1, timestamp: 800 } },
+      // Neither a position nor a stop: nothing to report.
+      { id: 'v-nowhere', vehicle: { trip: { tripId: 'nowhere', startDate: '20261019' }, timestamp: 990 } },
+    ] })).finish();
+    const feed = decodeRealtimeFeed(bytes);
+    expect(feed.vehicles.map(vehicle => vehicle.entityId)).toEqual(['v-left', 'v-here', 'v-terminal']);
+    expect(feed.vehicles[0]).not.toHaveProperty('latitude');
+    expect(matching.settleStoppedVehicles(feed.vehicles, feed.trips).map(vehicle => [vehicle.stopId, vehicle.currentStatus, vehicle.previousStopId])).toEqual([
+      ['A12N', 'IN_TRANSIT_TO', 'A15N'], ['A24N', 'STOPPED_AT', undefined], ['H11S', 'STOPPED_AT', undefined]]);
+  });
+
+  it('drops alert fields whose wire type contradicts the spec instead of losing the alert', () => {
+    // WMATA rail alerts as published on 2026-10-19: severity sent as a varint in field 12 (tts_header_text).
+    const wmata = Uint8Array.from(Buffer.from([
+      '0a0d0a03322e30100018a8b7d8d60612d5010a2439633761326639302d373661332d346532332d613032622d6534633838326136643633632aac010a',
+      '0808cfabd8d60610001a0808cfabd8d60610002a051203524544300b3803520e0a0c0a0644656c6179731202656e5a790a770a71437573746f6d6572',
+      '732077696c6c20657870657269656e636520726573696475616c2064656c61797320746f20476c656e6d6f6e7420666f6c6c6f77696e6720616e2065',
+      '61726c69657220706f6c69636520696e7665737469676174696f6e2061742047616c6c65727920506c6163652e1202656e6004',
+    ].join(''), 'hex'));
+    const feed = decodeRealtimeFeed(wmata);
+    expect(feed.warnings).toEqual(['dropped_mistyped_alert_field']);
+    expect(feed.alerts).toMatchObject([{ id: '9c7a2f90-76a3-4e23-a02b-e4c882a6d63c', header: 'Delays', routeIds: ['RED'] }]);
+    // Truncation is not a typing mistake and still fails closed.
+    expect(() => decodeRealtimeFeed(wmata.subarray(0, 200))).toThrow('Malformed GTFS-Realtime feed');
+  });
+
   it('serves snapshots without extending producer freshness or fetching upstream', () => {
     const hub = new RegionalFeedHubCore({ trip_updates: 120, vehicle_positions: 300, service_alerts: 900 });
     hub.replace('trip_updates', {
@@ -377,6 +412,9 @@ describe('GTFS realtime policy', () => {
     expect(pollAttemptState('trip_updates', 1234)).toEqual({ 'polled:trip_updates': 1234 });
     expect(safePollFailureReason(new Error('fetch https://api.511.org/?api_key=secret failed'))).toBe('upstream_request_failed');
     expect(safePollFailureReason(new Error('upstream_body_too_large'))).toBe('upstream_body_too_large');
+    expect(safePollFailureReason(new Error('upstream_status_401'))).toBe('upstream_status_401');
+    expect(safePollFailureReason(new Error('upstream_status_401 api_key=secret'))).toBe('upstream_request_failed');
+    expect(safePollFailureReason(Object.assign(new Error('aborted'), { name: 'AbortError' }))).toBe('upstream_timeout');
     expect(safePollFailureReason(new Error('Malformed GTFS-Realtime feed'))).toBe('malformed_feed');
   });
 });

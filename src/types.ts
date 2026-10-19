@@ -37,6 +37,8 @@ export interface Env extends CoverageWorkerBindings {
   // API Keys
   WMATA_API_KEY: string;           // DC Metro (WMATA) API key (secret)
   REGION_FEED_HUB?: DurableObjectNamespace;
+  /** Edge schedule refresh (Cloudflare Workflow). */
+  TRANSIT_REFRESH?: Workflow;
   TRANSIT_ARTIFACTS?: R2Bucket;
 
   /**
@@ -182,7 +184,8 @@ export interface WMATAElevatorIncident {
   UnitType: string;
   UnitStatus: string | null;
   StationCode: string;
-  StationName: string;
+  /** WMATA sometimes omits the name (seen for N09, Ashburn, in October 2026). */
+  StationName: string | null;
   LocationDescription: string;
   SymptomCode: string | null;
   SymptomDescription: string;

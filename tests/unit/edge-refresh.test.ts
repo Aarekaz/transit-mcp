@@ -1,0 +1,250 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getCoverage } from '../../src/transit/core/coverage';
+import { compileSchedule } from '../../src/transit/gtfs/static/compiler';
+import { csvRecords, parseCsvRecord } from '../../src/transit/gtfs/static/csv';
+import { buildServiceDate, scanArchive, type EdgeSource } from '../../src/transit/gtfs/static/edge-build';
+import { partitionSchedule } from '../../src/transit/gtfs/static/partition';
+import { sha256 } from '../../src/transit/gtfs/static/shards';
+import { readZipDirectory, zipEntryText } from '../../src/transit/gtfs/static/zip';
+import { StaticArtifactStore } from '../../src/transit/gtfs/realtime/snapshot-store';
+import { BAND_SECONDS, checkStaticSources, guardRefresh, runRefresh, sourceKeys, type StepRunner } from '../../src/transit/gtfs/refresh/refresh';
+import type { Env } from '../../src/types';
+import { DC_FILES, NOW, NYC_FILES } from '../helpers/dc-nyc-realtime';
+import { memoryStorage } from '../helpers/realtime-fixture';
+import { zip } from '../helpers/zip';
+
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+const nyc = (): EdgeSource => ({ coverage: getCoverage('nyc')!, feedId: 'mta_subway', url: 'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip', retrievedAt: '2026-10-19T00:00:00Z' });
+const steps = (): StepRunner & { names: string[] } => {
+  const names: string[] = [];
+  return { names, do: async (name, run) => { names.push(name); return JSON.parse(JSON.stringify(await run())); }, sleep: async name => { names.push(name); } };
+};
+const chunked = (text: string, size: number) => new ReadableStream<Uint8Array>({ start(controller) {
+  const bytes = new TextEncoder().encode(text);
+  for (let at = 0; at < bytes.length; at += size) controller.enqueue(bytes.subarray(at, at + size));
+  controller.close();
+} });
+
+describe('edge GTFS reading', () => {
+  it.each([8, 0] as const)('reads deflated and stored archive entries (method %s)', async method => {
+    const archive = await zip({ 'stops.txt': 'stop_id\nA\n', 'nested/trips.txt': 'trip_id\nT\n' }, method);
+    const entries = readZipDirectory(archive);
+    expect([...entries.keys()].sort()).toEqual(['stops.txt', 'trips.txt']);
+    expect(await zipEntryText(archive, entries.get('stops.txt')!)).toBe('stop_id\nA\n');
+  });
+
+  it('refuses archives it cannot read exactly', async () => {
+    expect(() => readZipDirectory(new Uint8Array(64))).toThrow('Invalid ZIP archive');
+    const archive = await zip({ 'stops.txt': 'stop_id\nA\n' }), corrupt = archive.slice();
+    // Central entry = 46 header bytes + 'stops.txt'; its uncompressed size field is at +24.
+    new DataView(corrupt.buffer).setUint32(corrupt.length - 22 - (46 + 'stops.txt'.length) + 24, 999, true);
+    await expect(zipEntryText(corrupt, readZipDirectory(corrupt).get('stops.txt')!)).rejects.toThrow(/size|larger/);
+  });
+
+  it('streams records across chunk boundaries, keeping quoted line breaks, BOM and CRLF straight', async () => {
+    const text = '﻿trip_id,stop_headsign\r\nT1,"Line\r\nBreak, ""quoted"""\r\nT2,Plain\r\n\r\n';
+    const records: string[] = [];
+    for await (const record of csvRecords(chunked(text, 3))) records.push(record);
+    expect(records).toEqual(['trip_id,stop_headsign', 'T1,"Line\r\nBreak, ""quoted"""', 'T2,Plain']);
+    expect(parseCsvRecord(records[1]!)).toEqual(['T1', 'Line\r\nBreak, "quoted"']);
+  });
+});
+
+describe('edge schedule build', () => {
+  it('produces byte-identical artifacts to a whole-feed compile, one service date at a time', async () => {
+    const archive = await zip(NYC_FILES as Record<string, string>), source = nyc();
+    const scan = await scanArchive(archive, source, 2, Date.parse(NOW));
+    expect(scan.dates).toEqual(['20261018', '20261019', '20261020', '20261021']);
+    const edge = new Map<string, Uint8Array>([[scan.discovery.key, scan.discoveryBytes]]);
+    const descriptors = [];
+    for (const date of scan.dates) {
+      const built = await buildServiceDate(archive, source, scan.identity, date, BAND_SECONDS);
+      for (const object of built.objects) edge.set(object.key, object.bytes);
+      descriptors.push(...built.descriptors);
+    }
+    const compiled = await compileSchedule({ coverage: source.coverage, feedId: source.feedId, files: NYC_FILES, identity: scan.identity,
+      window: { startDate: scan.dates[0]!, endDate: scan.dates.at(-1)! }, source: { url: source.url, retrievedAt: source.retrievedAt } });
+    const offline = await partitionSchedule(compiled, BAND_SECONDS);
+    expect(new Map(offline.objects.map(object => [object.key, [...object.bytes].join()]))).toEqual(new Map([...edge].map(([key, bytes]) => [key, [...bytes].join()])));
+    expect(descriptors).toEqual(offline.manifest.shards);
+    expect(scan.sources).toEqual(compiled.manifest.sources);
+    expect(scan.identity).toMatchObject({ sha256: await sha256(archive), archiveSha256: await sha256(archive) });
+  });
+
+  it('does not depend on the row order of trips and stop times', async () => {
+    const shuffle = (csv: string) => { const [header, ...rows] = csv.trim().split('\n'); return [header, ...rows.reverse()].join('\n') + '\n'; };
+    const source = nyc(), archive = await zip(NYC_FILES as Record<string, string>);
+    const scan = await scanArchive(archive, source, 2, Date.parse(NOW));
+    const compile = (files: typeof NYC_FILES) => compileSchedule({ coverage: source.coverage, feedId: source.feedId, files, identity: scan.identity,
+      window: { startDate: '20261019', endDate: '20261019' }, source: { url: source.url, retrievedAt: source.retrievedAt } });
+    const ordered = await compile(NYC_FILES), reversed = await compile({ ...NYC_FILES, 'trips.txt': shuffle(NYC_FILES['trips.txt']), 'stop_times.txt': shuffle(NYC_FILES['stop_times.txt']) });
+    expect([...reversed.shardBytes].join()).toBe([...ordered.shardBytes].join());
+    expect([...reversed.discoveryBytes].join()).toBe([...ordered.discoveryBytes].join());
+  });
+
+  it('records an excluded publisher table as a derivation of the original archive', async () => {
+    const archive = await zip({ ...DC_FILES, 'pathways.txt': 'pathway_id,from_stop_id,to_stop_id,pathway_mode,is_bidirectional\nbad,PF_A03_C,PF_A02_C,7,1\n' } as Record<string, string>);
+    const source: EdgeSource = { coverage: getCoverage('dc')!, feedId: 'wmata', url: 'https://api.wmata.com/gtfs/rail-gtfs-static.zip', retrievedAt: '2026-10-19T00:00:00Z',
+      exclude: { files: ['pathways.txt'], reason: 'Publisher table fails validation.' } };
+    const scan = await scanArchive(archive, source, 1, Date.parse(NOW));
+    expect(scan.sources[0]).toMatchObject({ archiveSha256: await sha256(archive), derivedFrom: { archiveSha256: await sha256(archive), excludedFiles: ['pathways.txt'] } });
+    expect(scan.identity.sha256).not.toBe(await sha256(archive));
+    const built = await buildServiceDate(archive, source, scan.identity, '20261019', BAND_SECONDS);
+    expect(built.trips).toBe(2); // the single-stop SHUTTLE placeholder is never service
+  });
+
+  it('refuses a source whose published dates no longer cover today', async () => {
+    const archive = await zip({ ...NYC_FILES, 'feed_info.txt': 'feed_publisher_name,feed_publisher_url,feed_lang,feed_start_date,feed_end_date\nMTA,https://www.mta.info/,en,20260101,20261001\n' } as Record<string, string>);
+    await expect(scanArchive(archive, nyc(), 7, Date.parse(NOW))).rejects.toThrow('does not cover today');
+  });
+});
+
+describe('change guards', () => {
+  const stats = (trips: number, dates: Record<string, number>, stops = 100, routes = 10) => ({ trips, stops, routes, dates });
+  it('accepts ordinary publisher changes and the first publication', () => {
+    expect(guardRefresh(null, stats(10, { '20261019': 10 }))).toEqual([]);
+    expect(guardRefresh(stats(1000, { '20261019': 900 }), stats(1010, { '20261019': 880, '20261026': 500 }))).toEqual([]);
+  });
+  it('rejects truncated or emptied schedules', () => {
+    expect(guardRefresh(null, stats(0, {}))).toEqual(['EMPTY_SCHEDULE']);
+    expect(guardRefresh(stats(1000, { '20261019': 900 }, 100, 10), stats(500, { '20261019': 200 }, 80, 5)))
+      .toEqual(['STOPS_DROPPED:100->80', 'ROUTES_DROPPED:10->5', 'SERVICE_DROPPED:20261019:900->200']);
+  });
+});
+
+describe('edge refresh workflow', () => {
+  async function setup(files: Record<string, string> = NYC_FILES as Record<string, string>) {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW));
+    const db = memoryStorage(), archive = await zip(files), hash = await sha256(archive), keys = sourceKeys('nyc');
+    await db.bucket.put(keys.archive(hash), archive);
+    await db.bucket.put(keys.state, JSON.stringify({ sha256: hash, checkedAt: Date.now(), retrievedAt: '2026-10-19T00:00:00Z' }));
+    const stats: unknown[] = [];
+    const env = { TRANSIT_ARTIFACTS: db.bucket, TRANSIT_COVERAGE_MODES: '{"nyc":"on"}', REGION_FEED_HUB: { idFromName: (name: string) => name,
+      get: () => ({ fetch: async () => Response.json(stats.length > 1 ? stats.shift() : stats[0] ?? null) }) } } as unknown as Env;
+    return { db, env, hash, keys, stats, params: { coverageId: 'nyc', archiveSha256: hash, retrievedAt: '2026-10-19T00:00:00Z' } };
+  }
+
+  it('publishes one step per service date, then reports unchanged for the same archive', async () => {
+    const f = await setup(), runner = steps();
+    const result = await runRefresh(f.env, f.params, runner);
+    expect(result.outcome).toBe('published');
+    expect(runner.names.slice(0, 2)).toEqual(['scan', 'date:20261018']);
+    expect(runner.names).toContain('publish');
+    const current = await new StaticArtifactStore(f.db.bucket, 'nyc').current();
+    expect(current?.version.artifactVersion).toBe(result.artifactVersion);
+    expect(await f.db.bucket.get(f.keys.stats(result.artifactVersion!))).not.toBeNull();
+    const writes = f.db.objects.size;
+    expect(await runRefresh(f.env, f.params, steps())).toEqual({ outcome: 'unchanged', reasons: [] });
+    expect(f.db.objects.size).toBe(writes);
+  });
+
+  it('never publishes an archive superseded while it was building', async () => {
+    const f = await setup();
+    await f.db.bucket.put(f.keys.state, JSON.stringify({ sha256: 'f'.repeat(64), checkedAt: Date.now(), retrievedAt: 'x' }));
+    expect(await runRefresh(f.env, f.params, steps())).toMatchObject({ outcome: 'superseded' });
+    expect(await new StaticArtifactStore(f.db.bucket, 'nyc').current()).toBeNull();
+  });
+
+  it('rejects a refresh that removes most of a date\'s service, keeping the published version', async () => {
+    const f = await setup(), first = await runRefresh(f.env, f.params, steps());
+    const truncated = { ...NYC_FILES, 'stop_times.txt': NYC_FILES['stop_times.txt'].split('\n').filter(line => !line.includes('_1..S03R')).join('\n') } as Record<string, string>;
+    const archive = await zip(truncated), hash = await sha256(archive);
+    await f.db.bucket.put(f.keys.archive(hash), archive);
+    await f.db.bucket.put(f.keys.state, JSON.stringify({ sha256: hash, checkedAt: Date.now(), retrievedAt: 'later' }));
+    const result = await runRefresh(f.env, { ...f.params, archiveSha256: hash }, steps());
+    expect(result.outcome).toBe('rejected');
+    expect(result.reasons!.some(reason => reason.startsWith('SERVICE_DROPPED'))).toBe(true);
+    expect((await new StaticArtifactStore(f.db.bucket, 'nyc').current())?.version.artifactVersion).toBe(first.artifactVersion);
+  });
+
+  it('rolls back when live matching regresses against the version it replaced', async () => {
+    const f = await setup(), first = await runRefresh(f.env, f.params, steps());
+    const changed = { ...NYC_FILES, 'trips.txt': NYC_FILES['trips.txt'].replace('South Ferry,1\n', 'South Ferry Loop,1\n') } as Record<string, string>;
+    const archive = await zip(changed), hash = await sha256(archive);
+    await f.db.bucket.put(f.keys.archive(hash), archive);
+    await f.db.bucket.put(f.keys.state, JSON.stringify({ sha256: hash, checkedAt: Date.now(), retrievedAt: 'later' }));
+    const store = new StaticArtifactStore(f.db.bucket, 'nyc');
+    // Baseline before publishing, then the coordinator re-matches against the new version.
+    f.stats.push({ artifactVersion: first.artifactVersion, eligible: 100, matched: 80, rate: 0.8, atSeconds: 1 });
+    const runner = steps(), original = runner.do;
+    runner.do = async (name, run) => {
+      const value = await original(name, run);
+      if (name === 'publish') f.stats.splice(0, f.stats.length, { artifactVersion: value as string, eligible: 100, matched: 40, rate: 0.4, atSeconds: 2 });
+      return value;
+    };
+    const result = await runRefresh(f.env, { ...f.params, archiveSha256: hash }, runner);
+    expect(result.outcome).toBe('rolled_back');
+    expect((await store.pointer())).toEqual({ current: first.artifactVersion, previous: result.artifactVersion });
+  });
+
+  it('keeps current and previous versions and collects older, unreferenced objects', async () => {
+    const f = await setup();
+    const publish = async (headsign: string) => {
+      const archive = await zip({ ...NYC_FILES, 'trips.txt': NYC_FILES['trips.txt'].replace('South Ferry,1\n', `${headsign},1\n`) } as Record<string, string>), hash = await sha256(archive);
+      await f.db.bucket.put(f.keys.archive(hash), archive);
+      await f.db.bucket.put(f.keys.state, JSON.stringify({ sha256: hash, checkedAt: Date.now(), retrievedAt: 'x' }));
+      vi.setSystemTime(Date.now() + 3 * 3600_000); // older objects become collectable
+      return runRefresh(f.env, { ...f.params, archiveSha256: hash }, steps());
+    };
+    const first = await runRefresh(f.env, f.params, steps());
+    const firstManifest = (await new StaticArtifactStore(f.db.bucket, 'nyc').read(first.artifactVersion!)).manifest;
+    const second = await publish('South Ferry A'), third = await publish('South Ferry B');
+    expect([second.outcome, third.outcome]).toEqual(['published', 'published']);
+    const store = new StaticArtifactStore(f.db.bucket, 'nyc');
+    expect(await store.pointer()).toEqual({ current: third.artifactVersion, previous: second.artifactVersion });
+    for (const version of [second.artifactVersion!, third.artifactVersion!]) {
+      for (const object of (await store.read(version)).manifest.shards) expect(f.db.objects.has(object.key)).toBe(true);
+    }
+    // The first version's own shards are gone; its archive too. No scratch objects remain.
+    const onlyFirst = firstManifest.shards.filter(object => !(f.db.objects.has(object.key)));
+    expect(onlyFirst.length).toBeGreaterThan(0);
+    expect(f.db.objects.has(`artifacts/nyc/v2/manifests/${first.artifactVersion}.json`)).toBe(false);
+    expect(f.db.objects.has(f.keys.archive(f.hash))).toBe(false);
+    expect([...f.db.objects.keys()].some(key => key.startsWith('work/'))).toBe(false);
+  });
+
+  it('restarts a failed refresh for the current archive a bounded number of times', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW));
+    const db = memoryStorage(), archive = await zip(NYC_FILES as Record<string, string>);
+    let restarts = 0;
+    const env = { TRANSIT_ARTIFACTS: db.bucket, TRANSIT_COVERAGE_MODES: '{"nyc":"on"}', TRANSIT_REFRESH: {
+      create: async () => { throw new Error('instance already exists'); },
+      get: async () => ({ status: async () => ({ status: 'errored' }), restart: async () => { restarts++; } }) } } as unknown as Env;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(archive, { headers: { etag: '"v1"' } }));
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (let check = 0; check < 5; check++) await checkStaticSources(env, Date.now() + check * 10 * 60_000);
+    expect(restarts).toBe(3);
+    expect(warnings).toHaveBeenCalledWith(expect.stringContaining('schedule_refresh_gave_up'));
+  });
+
+  it('checks sources cheaply: conditional requests, one refresh per new archive', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW));
+    const db = memoryStorage(), archive = await zip(NYC_FILES as Record<string, string>), hash = await sha256(archive);
+    const created: { id: string; params: unknown }[] = [];
+    const env = { TRANSIT_ARTIFACTS: db.bucket, TRANSIT_COVERAGE_MODES: '{"nyc":"on"}', WMATA_API_KEY: 'k',
+      TRANSIT_REFRESH: { create: async (options: { id: string; params: unknown }) => {
+        if (created.some(item => item.id === options.id)) throw new Error('instance already exists');
+        created.push(options);
+      }, get: async () => ({ status: async () => ({ status: 'running' }), restart: async () => { throw new Error('must not restart a running refresh'); } }) } } as unknown as Env;
+    const requests: Request[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const request = new Request(input as RequestInfo, init); requests.push(request);
+      if (request.url.includes('wmata')) return new Response(null, { status: 503 });
+      return request.headers.get('if-none-match') === '"v1"' ? new Response(null, { status: 304 }) : new Response(archive, { headers: { etag: '"v1"' } });
+    });
+    vi.spyOn(console, 'info').mockImplementation(() => {}); vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await checkStaticSources(env, Date.now());
+    expect(created).toEqual([{ id: `refresh-nyc-${hash.slice(0, 32)}`, params: { coverageId: 'nyc', archiveSha256: hash, retrievedAt: new Date(NOW).toISOString() } }]);
+    expect(await db.bucket.head(sourceKeys('nyc').archive(hash))).not.toBeNull();
+    // Inside the interval: no request at all.
+    await checkStaticSources(env, Date.now() + 60_000);
+    expect(requests.filter(request => request.url.includes('rrgtfsfeeds'))).toHaveLength(1);
+    // Next interval: a 304 costs no body and starts nothing new.
+    await checkStaticSources(env, Date.now() + 10 * 60_000);
+    const conditional = requests.filter(request => request.url.includes('rrgtfsfeeds')).at(-1)!;
+    expect(conditional.headers.get('if-none-match')).toBe('"v1"');
+    expect(created).toHaveLength(1);
+    // DC is not active in this environment and is never contacted.
+    expect(requests.some(request => request.url.includes('wmata'))).toBe(false);
+  });
+});

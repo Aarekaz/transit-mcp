@@ -2,6 +2,8 @@ export interface PollingFeed {
   id: string;
   weight: number;
   minIntervalSeconds: number;
+  /** Upstream requests per poll, e.g. one per required feed part. */
+  requestsPerPoll?: number;
 }
 
 export interface PollBudget {
@@ -19,7 +21,7 @@ export function allocatePollIntervals(budget: PollBudget): Record<string, number
       (budget.reserveForStatic ?? 0),
   );
   const minimumScheduleRequests = feeds.reduce(
-    (total, feed) => total + 3600 / feed.minIntervalSeconds,
+    (total, feed) => total + (3600 / feed.minIntervalSeconds) * (feed.requestsPerPoll ?? 1),
     0,
   );
 
@@ -38,7 +40,7 @@ export function allocatePollIntervals(budget: PollBudget): Record<string, number
     feeds.map((feed) => {
       const weight = Math.max(0, feed.weight);
       const allocatedRequests =
-        totalWeight > 0 ? (availableRequests * weight) / totalWeight : 0;
+        totalWeight > 0 ? (availableRequests * weight) / totalWeight / (feed.requestsPerPoll ?? 1) : 0;
       const budgetedInterval =
         allocatedRequests > 0
           ? Math.ceil(3600 / allocatedRequests)

@@ -9,13 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- DC Metro and the NYC Subway now serve the five global tools in production: trip planning, departures, service status, and train locations. Planning uses the published WMATA and MTA timetables with live predictions; every itinerary is independently validated.
+- NYC departures read all eight subway feeds together and include rerouted trains and trains missing from the timetable, marked as observed. If any feed is missing or frozen, NYC falls back to the timetable rather than showing a partial picture.
+- Timetables refresh at the edge: the existing cron checks WMATA and MTA cheaply and a Cloudflare Workflow rebuilds only when a new timetable is published. Updates that remove most of a day's service are rejected; updates that make live matching worse roll back.
+- `get_departures` accepts a station name with `coverage`. Station complexes (for example Times Sq-42 St or Grand Central-42 St) resolve as one place; departure rows include `routeName` and `stopName`.
+
 - SF Bay support is in development. Versioned 511 SF Bay regional GTFS artifacts and the quota-aware realtime feed hub support dark validation; current authoritative-feed acceptance is still pending.
 - Dark-mode results retain freshness metadata and attribution to 511 SF Bay and participating operators.
 - Five always-registered global tools, deterministic planning, independent itinerary validation, and synthetic SF/DC/NYC corpora. The frozen local MCP conformance runner reports required failures separately from optional extensions. See `docs/global-transit-verification.md` for the unpassed launch gates.
 
 ### Changed
 
-- Checked-in production and preview configurations keep `SFBAY_MODE=dark`; no deployment is implied. This branch registers 18 tools (13 compatible plus five global) and four transit resource templates. DC/NYC global planning defaults off independently of the legacy tools.
+- Production enables DC and NYC global coverage (`TRANSIT_COVERAGE_MODES`); preview leaves it off. SF Bay stays dark (`SFBAY_MODE=dark`). The server registers 18 tools (13 compatible plus five global) and four transit resource templates; the legacy tools are unchanged.
+- Faster global tools: planner transfer rules are indexed (NYC plans about 10x faster), entity lookups are built once per timetable, and city-wide alert results report exact counts with bounded detail.
 
 - Rebranded to Transit MCP with `https://transitmcp.com` as the canonical origin. Pages, `/info` links, and the reported MCP server name (`transit-mcp`) now use the new brand.
 - MCP trust checks accept requests on the canonical origin or on any HTTPS, default-port hostname in `MCP_ALLOWED_HOSTNAMES`. Production allowlists `transitmcp.com` and `metro-mcp.anuragd.me`, so `https://metro-mcp.anuragd.me/mcp` keeps working.
@@ -30,6 +36,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Upgraded `@modelcontextprotocol/server` and `@modelcontextprotocol/client` to 2.3.1 and `agents` to 0.28.1, picking up fixes for GHSA-46jr-4wx8-v453 (memory exhaustion during validation), GHSA-f897-62hf-6gxq, and GHSA-jm63-cq47-j5jp. `@modelcontextprotocol/sdk` stays at 1.30.0 so the Transit Board app bundle is byte-identical.
+
+- `get_vehicle_status` locates NYC trains. NYCT reports each train's station and status inside the trip feeds already polled, so this adds no MTA requests. Trains are listed by line, by dated trip, or by station; each carries the station it is at or heading to, the station it last served, and its destination. A train MTA still reports as stopped after its own prediction has moved on is shown heading to the predicted station.
+
+### Fixed
+
+- NYC live predictions now reach the 7, L and Staten Island Railway, and most F and G trains. Those lines publish a short trip ID (`059150_7..S`) for the scheduled `..._059150_7..S97R`; it is matched only when it names exactly one active scheduled trip. Live matching rose from 69% to 82% of NYC trains.
+- Route names are the ones riders use: WMATA's single-letter short names become the line name ("Red", not "R").
+- A station complex now covers every station in it: departures at Times Sq-42 St include the 1/2/3, 7, N/Q/R/W and shuttle, not just the first station found.
+- Long NYC trips (Inwood-207 St to Coney Island) and plans whose window crosses into a third timetable band no longer exceed the planner budget. The router interns leg sequences instead of keeping a signature string per label, and the decoded-shard charge is measured (2.2x file size) rather than assumed (8x). Across 240 NYC plans at every half hour of a day, none is refused with the default window.
+- NYC trip planning no longer refuses rush-hour trips. The planner charged its memory budget as if it copied every live prediction; it only indexes them.
+- `get_elevator_incidents` no longer fails when WMATA omits a station name for an outage; the station code is used instead.
+- DC service alerts no longer go stale while WMATA has an active alert. WMATA sends alert severity in a field the GTFS-Realtime spec reserves for text; the decoder now drops alert fields with the wrong wire type, records a warning, and keeps the alert. Any other malformed feed is still rejected.
 
 ## [6.0.0] - 2026-08-21
 
