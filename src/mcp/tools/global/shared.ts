@@ -6,12 +6,17 @@ import { getCoverage, getCoverages, type CoverageManifest } from '../../../trans
 import { getCoverageMode } from '../../../regions/manifest';
 import { formatEntityRef, parseTransitRef, type TransitRef } from '../../../transit/core/refs';
 import { VERIFICATION_REASONS, type SourceStatus, type VerificationReason } from '../../../transit/core/results';
-import { StaticArtifactStore, readBoundedObject, sameStaticVersion, SF511_QUOTA_NAMESPACE, type StaticVersion } from '../../../transit/gtfs/realtime/snapshot-store';
+import { StaticArtifactStore, readBoundedObject, sameStaticVersion, type StaticVersion } from '../../../transit/gtfs/realtime/snapshot-store';
+import { credential, getRealtimeSource } from '../../../transit/gtfs/realtime/sources';
+import type { CoverageCapability } from '../../../transit/core/coverage';
 import { decodeDiscoveryIndex, decodeScheduleShard, sha256 } from '../../../transit/gtfs/static/shards';
 import type { ArtifactManifestV2, DiscoveryIndex } from '../../../transit/gtfs/static/schema';
 import type { FeedRead } from '../../../transit/gtfs/realtime/hub-core';
+import type { NormalizedVehicle } from '../../../transit/gtfs/realtime/decode';
 import type { RealtimeFeedKind } from '../../../regions/types';
 import { classifyManifestFreshness, sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
+import { serviceDateAtInstant } from '../../../transit/planner/service-day';
+import { parseGtfsTime } from '../../../transit/gtfs/static/time';
 
 export const boundedText = z.string().trim().min(1).max(256);
 export const coverageSchema = boundedText.describe('Runtime coverage name or identifier; use find_transit to inspect availability.');
@@ -130,6 +135,18 @@ export function ambiguityCandidate(data: TransitData, entity: Candidate, query: 
   return exactCandidate(data, entity, query) || entity.kind === 'stop' && normalizeEntityName(entity.name).includes(normalized) &&
     (data.coverage.placeAliases ?? []).some(place => place.aliases.some(alias => normalizeEntityName(alias) === normalized));
 }
+/** Matches that are all one GTFS station and its own platforms/entrances name one
+ * place: resolve them to that station. Different stations remain separate candidates. */
+export function sameStation(data: TransitData, matches: Candidate[]): Candidate[] {
+  if (matches.length < 2) return matches;
+  const stops = new Map(data.indexes.flatMap(index => index.stops).map(stop => [stop.ref as string, stop]));
+  const station = (ref: string) => { const stop = stops.get(ref); return stop?.locationType === 1 ? ref : stop?.parentStationRef; };
+  const roots = new Set(matches.map(match => match.kind === 'stop' ? station(match.ref) : undefined));
+  const [root] = roots;
+  if (roots.size !== 1 || !root) return matches;
+  const resolved = matches.find(match => match.ref === root);
+  return resolved ? [resolved] : matches;
+}
 export function knownEntity(data: TransitData, ref: string): Candidate {
   const parsed = validRef(ref, ['agency', 'route', 'stop', 'trip']);
   const base = formatEntityRef(parsed);
@@ -145,9 +162,18 @@ export async function detail(data: TransitData, ref: string) {
   const patterns: { id: string; directionId: number | null; stopRefs: string[] }[] = [];
   const calls: { stopRef: string; sequence: number; arrivalSeconds: number | null; departureSeconds: number | null; pickupType: number; dropOffType: number }[] = [];
   if (entity.kind === 'route' || entity.kind === 'trip') {
+    // Decode one shard at a time: bounded per object, never a whole artifact at once.
+    const timezone = Object.entries(data.manifest.agencyTimezones).find(([ref]) => parseTransitRef(ref)?.feed === entity.feed)?.[1];
+    const today = timezone ? serviceDateAtInstant(Date.now(), timezone) : undefined;
+    const day = 'serviceDate' in parsed ? parsed.serviceDate : today;
+    const start = 'startTime' in parsed ? parseGtfsTime(parsed.startTime).totalSeconds : undefined;
+    const descriptors = data.manifest.shards.filter(shard => shard.feedId === entity.feed && (!shard.timeRange || day === undefined || day >= shard.window.startDate && day <= shard.window.endDate) &&
+      (!('serviceDate' in parsed) || parsed.serviceDate >= shard.window.startDate && parsed.serviceDate <= shard.window.endDate) &&
+      (start === undefined || !shard.timeRange || start >= shard.timeRange.bandStart && start < shard.timeRange.bandEnd));
     let total = 0;
-    for (const descriptor of data.manifest.shards.filter(shard => shard.feedId === entity.feed && (!('serviceDate' in parsed) || parsed.serviceDate >= shard.window.startDate && parsed.serviceDate <= shard.window.endDate))) {
-      total += descriptor.byteLength; if (total > 48 * 1024 * 1024 / 8) throw new Error('Detail budget');
+    for (const descriptor of descriptors) {
+      total += descriptor.byteLength;
+      if (descriptor.byteLength > 8 * 1024 * 1024 || total > 64 * 1024 * 1024) throw new Error('Detail budget');
       const bytes = await data.readObject(descriptor.key);
       if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Detail integrity');
       const shard = decodeScheduleShard(bytes);
@@ -164,16 +190,32 @@ export async function detail(data: TransitData, ref: string) {
     coordinates: stop?.latitude != null && stop.longitude != null ? { latitude: stop.latitude, longitude: stop.longitude } : null,
     routeRefs: stop ? index.stopRoutes[stop.ref] ?? [] : [], agencyRef: route?.agencyRef ?? null, mode: route?.mode ?? null, patterns, calls };
 }
-/** This coordinator owns sf511 only; artifact membership does not imply realtime ownership. */
+/** Source support narrowed to what this deployment can serve now: realtime kinds need
+ * a bound coordinator, any required credential, and an ingested feed of that kind. */
+export function effectiveCapabilities(context: MetroMcpContext, coverage: CoverageManifest, requireCredential = true): CoverageCapability {
+  const source = getRealtimeSource(coverage.id);
+  const ingests = (kind: RealtimeFeedKind) => !!source && !!context.env.REGION_FEED_HUB && (!requireCredential || credential(source, context.env) !== null) &&
+    source.feeds.some(feed => feed.kind === kind);
+  return { ...coverage.capabilities,
+    realtimeDepartures: coverage.capabilities.realtimeDepartures && ingests('trip_updates'),
+    alerts: coverage.capabilities.alerts && ingests('service_alerts'),
+    vehicles: coverage.capabilities.vehicles && ingests('vehicle_positions') };
+}
+/** Each coverage's coordinator owns exactly one static feed's realtime. */
 export type OwnedFeedRead<T> = FeedRead<T> & { feedId: string; reasons: VerificationReason[] };
-export async function readFeed<T>(context: MetroMcpContext, data: TransitData, kind: RealtimeFeedKind, now: number, signal: AbortSignal): Promise<OwnedFeedRead<T[]>> {
-  const missing = (): OwnedFeedRead<T[]> => ({ feedId: 'sf511', freshness: 'unavailable', status: kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: null, warnings: [], reasons: ['REALTIME_UNAVAILABLE'] });
-  if (data.coverage.id !== 'sfbay' || !context.env.REGION_FEED_HUB) return missing();
+export async function readFeed<T>(context: MetroMcpContext, data: TransitData, kind: RealtimeFeedKind, now: number, signal: AbortSignal, stopIds: string[] = []): Promise<OwnedFeedRead<T[]>> {
+  const source = getRealtimeSource(data.coverage.id);
+  const feedId = source?.policy.feedId ?? data.manifest.sources[0]?.feedId ?? '';
+  const missing = (): OwnedFeedRead<T[]> => ({ feedId, freshness: 'unavailable', status: kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: null, warnings: [], reasons: ['REALTIME_UNAVAILABLE'] });
+  const capability = kind === 'trip_updates' ? 'realtimeDepartures' : kind === 'vehicle_positions' ? 'vehicles' : 'alerts';
+  if (!source || !context.env.REGION_FEED_HUB || !effectiveCapabilities(context, data.coverage, false)[capability]) return missing();
+  // Without a credential the coordinator publishes nothing, so reads degrade by freshness.
   const url = new URL(`https://region-feed-hub.internal/${kind}`);
   url.searchParams.set('now', String(now)); url.searchParams.set('artifact', data.version.artifactVersion);
+  for (const stop of kind === 'trip_updates' ? stopIds.slice(0, 200) : []) url.searchParams.append('stop', stop);
   signal.throwIfAborted();
   try {
-    const response = await context.env.REGION_FEED_HUB.get(context.env.REGION_FEED_HUB.idFromName(SF511_QUOTA_NAMESPACE)).fetch(url.href, { signal });
+    const response = await context.env.REGION_FEED_HUB.get(context.env.REGION_FEED_HUB.idFromName(source.policy.namespace)).fetch(url.href, { signal });
     signal.throwIfAborted();
     if (!response.ok) return missing();
     const feed = await response.json<FeedRead<T[]>>();
@@ -184,14 +226,37 @@ export async function readFeed<T>(context: MetroMcpContext, data: TransitData, k
     const producerTimestampSeconds = validStamp(feed.producerTimestampSeconds) ? feed.producerTimestampSeconds : undefined;
     const receivedAtSeconds = validStamp(feed.receivedAtSeconds) ? feed.receivedAtSeconds : undefined;
     const freshness = classifyManifestFreshness(producerTimestampSeconds, now, threshold, expiry);
-    const mismatch = !!feed.version && (!sameStaticVersion(feed.version, data.version) || !data.version.sourceVersions.sf511);
+    const mismatch = !!feed.version && (!sameStaticVersion(feed.version, data.version) || !data.version.sourceVersions[feedId]);
     const reasons: VerificationReason[] = mismatch || feed.warnings?.includes('SCHEDULE_REALTIME_MISMATCH') ? ['SCHEDULE_REALTIME_MISMATCH'] :
       feed.degraded || !feed.version || freshness === 'expired' || freshness === 'unavailable' || receivedAtSeconds === undefined || receivedAtSeconds < (producerTimestampSeconds ?? Infinity) || !Array.isArray(feed.payload) ? ['REALTIME_UNAVAILABLE'] :
       freshness === 'stale' ? ['REALTIME_STALE'] : [];
     const usable = reasons.length === 0 || kind === 'service_alerts' && reasons[0] === 'REALTIME_STALE';
-    return { ...feed, feedId: 'sf511', reasons, warnings: [], producerTimestampSeconds, receivedAtSeconds, freshness,
+    return { ...feed, feedId, reasons, warnings: [], producerTimestampSeconds, receivedAtSeconds, freshness,
       status: usable ? 'realtime' : kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: usable ? feed.payload : null };
   } catch (error) { signal.throwIfAborted(); if (error instanceof Error && error.name === 'AbortError') throw error; return missing(); }
+}
+/** Train numbers are observations, not schedule entities. Resolve one only from a fresh
+ * vehicle feed, to the dated trip instance that train is running; never guess. */
+export async function trainCandidates(context: MetroMcpContext, data: TransitData, query: string, signal: AbortSignal): Promise<{ candidates: Candidate[]; sources: SourceStatus[] }> {
+  const number = query.trim().replace(/^train\s+/i, '');
+  if (!/^[A-Za-z0-9-]{1,16}$/.test(number) || !effectiveCapabilities(context, data.coverage, false).vehicles) return { candidates: [], sources: [] };
+  const now = Math.floor(Date.now() / 1000);
+  const feed = await readFeed<NormalizedVehicle>(context, data, 'vehicle_positions', now, signal);
+  const maxAge = data.coverage.thresholds.vehiclePositions.realtimeSeconds;
+  const candidates = new Map<string, Candidate>();
+  for (const vehicle of feed.status === 'realtime' ? feed.payload ?? [] : []) {
+    const age = vehicle.timestampSeconds === undefined ? Infinity : now - vehicle.timestampSeconds;
+    if (!vehicle.tripInstanceRef || age < 0 || age > maxAge || vehicle.vehicleId !== number && vehicle.label !== number) continue;
+    const instance = parseTransitRef(vehicle.tripInstanceRef);
+    if (!instance || instance.kind !== 'trip') continue;
+    candidates.set(vehicle.tripInstanceRef, { ref: vehicle.tripInstanceRef, kind: 'trip', name: sanitizeTransitText(`Train ${vehicle.vehicleId ?? vehicle.label}`),
+      coverage: instance.coverage, feed: instance.feed, providerId: instance.id });
+  }
+  return { candidates: [...candidates.values()].sort((a, b) => a.ref.localeCompare(b.ref)), sources: candidates.size ? realtimeSource(data, feed, 'vehicle_positions', now) : [] };
+}
+/** Rows the schedule planner and validator may use: calls of canonical trip instances. */
+export function scheduledRealtimeRows<T extends { scheduleMatch?: string }>(rows: T[] | null): T[] | null {
+  return rows && rows.filter(row => row.scheduleMatch === undefined || row.scheduleMatch === 'matched');
 }
 export function realtimeSource(_data: TransitData, feed: OwnedFeedRead<unknown>, kind: SourceStatus['kind'], now: number): SourceStatus[] {
   const scheduleVersion = feed.version?.sourceVersions[feed.feedId];
