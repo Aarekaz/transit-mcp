@@ -72,6 +72,8 @@ export interface TransitData {
   coverage: CoverageManifest; manifest: ArtifactManifestV2; version: StaticVersion; indexes: DiscoveryIndex[];
   readObject: (key: string) => Promise<Uint8Array>;
 }
+/** Verified, content-addressed discovery indexes per bound bucket (one store never vouches for another). */
+const discoveryCaches = new WeakMap<R2Bucket, Map<string, DiscoveryIndex>>();
 /** Public mode checks belong at the data boundary; catalog registration never changes. */
 export async function loadData(context: MetroMcpContext, coverageId: string, signal: AbortSignal, version?: string): Promise<TransitData | null> {
   const coverage = getCoverage(coverageId);
@@ -86,9 +88,17 @@ export async function loadData(context: MetroMcpContext, coverageId: string, sig
   for (const descriptor of current.manifest.discoveries) {
     total += descriptor.byteLength;
     if (total > 64 * 1024 * 1024) throw new Error('Discovery budget');
-    const bytes = await readObject(descriptor.key);
-    if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Discovery integrity');
-    const index = decodeDiscoveryIndex(bytes);
+    let discoveryCache = discoveryCaches.get(bucket);
+    if (!discoveryCache) { discoveryCache = new Map(); discoveryCaches.set(bucket, discoveryCache); }
+    let index = discoveryCache.get(descriptor.sha256);
+    if (!index) {
+      const bytes = await readObject(descriptor.key);
+      if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Discovery integrity');
+      index = decodeDiscoveryIndex(bytes);
+      // Content-addressed and verified: safe to reuse across requests in this isolate.
+      discoveryCache.set(descriptor.sha256, index);
+      while (discoveryCache.size > 4) discoveryCache.delete(discoveryCache.keys().next().value!);
+    }
     if (index.coverageId !== coverage.id || index.feedId !== descriptor.feedId || index.sourceSha256 !== current.version.sourceVersions[index.feedId]) throw new Error('Discovery identity');
     indexes.push(index);
   }
