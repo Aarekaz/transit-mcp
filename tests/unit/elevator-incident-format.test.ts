@@ -46,6 +46,6 @@ describe('formatElevatorIncidentsForMcp', () => {
       TimeOutOfService: '0500', DisplayOrder: 0, DateOutOfServ: '2026-10-01T05:00:00', DateUpdated: '2026-10-19T08:00:00',
       EstimatedReturnToService: null,
     }]);
-    expect(incident.stationName).toBe('N09');
+    expect(incident?.stationName).toBe('N09');
   });
 });
