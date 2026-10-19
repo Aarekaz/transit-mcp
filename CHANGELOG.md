@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - NYC trip planning no longer refuses rush-hour trips. The planner charged its memory budget as if it copied every live prediction; it only indexes them.
 - `get_elevator_incidents` no longer fails when WMATA omits a station name for an outage; the station code is used instead.
+- DC service alerts no longer go stale while WMATA has an active alert. WMATA sends alert severity in a field the GTFS-Realtime spec reserves for text; the decoder now drops alert fields with the wrong wire type, records a warning, and keeps the alert. Any other malformed feed is still rejected.
 
 ## [6.0.0] - 2026-08-21
 

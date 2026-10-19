@@ -126,12 +126,68 @@ function firstTranslation(value: transit_realtime.ITranslatedString | null | und
   return sanitizeTransitText(text, 2_000);
 }
 
+/** Wire type each GTFS-Realtime Alert field must use (0 varint, 2 length-delimited). */
+const ALERT_WIRE_TYPES: Record<number, number> = { 1: 2, 5: 2, 6: 0, 7: 0, 8: 2, 10: 2, 11: 2, 12: 2, 13: 2, 14: 0, 15: 2, 16: 2, 17: 2, 18: 2 };
+
+function readVarint(bytes: Uint8Array, at: number): [number, number] {
+  let value = 0, shift = 0;
+  for (;;) {
+    if (at >= bytes.length || shift > 63) throw new Error('truncated varint');
+    const byte = bytes[at++]!;
+    value += (byte & 0x7f) * 2 ** shift; shift += 7;
+    if (byte < 0x80) return [value, at];
+  }
+}
+function writeVarint(value: number, out: number[]): void {
+  while (value >= 0x80) { out.push((value % 0x80) | 0x80); value = Math.floor(value / 0x80); }
+  out.push(value);
+}
+/** Copies a message field by field; `child` rewrites selected length-delimited fields and
+ * `keep` drops fields. Returns the number of fields dropped anywhere below. */
+function rewriteMessage(bytes: Uint8Array, out: number[], visit: (field: number, wire: number) => 'keep' | 'drop' | ((body: Uint8Array, out: number[]) => number)): number {
+  let at = 0, dropped = 0;
+  while (at < bytes.length) {
+    const start = at, [tag, afterTag] = readVarint(bytes, at), field = Math.floor(tag / 8), wire = tag % 8;
+    let end = afterTag, body: Uint8Array | undefined;
+    if (wire === 0) end = readVarint(bytes, afterTag)[1];
+    else if (wire === 1) end = afterTag + 8;
+    else if (wire === 5) end = afterTag + 4;
+    else if (wire === 2) { const [length, from] = readVarint(bytes, afterTag); end = from + length; body = bytes.subarray(from, end); }
+    else throw new Error('unsupported wire type');
+    if (end > bytes.length) throw new Error('truncated field');
+    at = end;
+    const action = visit(field, wire);
+    if (action === 'drop') { dropped++; continue; }
+    if (action === 'keep' || !body) { for (let i = start; i < end; i++) out.push(bytes[i]!); continue; }
+    const inner: number[] = [];
+    dropped += action(body, inner);
+    writeVarint(tag, out); writeVarint(inner.length, out); for (const byte of inner) out.push(byte);
+  }
+  return dropped;
+}
+/** WMATA has published alerts with severity as a varint in field 12, which GTFS-Realtime
+ * defines as tts_header_text. Drop only Alert fields whose wire type contradicts the spec. */
+function dropMistypedAlertFields(bytes: Uint8Array): { bytes: Uint8Array; dropped: number } {
+  const out: number[] = [];
+  const alert = (body: Uint8Array, inner: number[]) => rewriteMessage(body, inner, (field, wire) => ALERT_WIRE_TYPES[field] !== undefined && ALERT_WIRE_TYPES[field] !== wire ? 'drop' : 'keep');
+  const entity = (body: Uint8Array, inner: number[]) => rewriteMessage(body, inner, (field, wire) => field === 5 && wire === 2 ? alert : 'keep');
+  const dropped = rewriteMessage(bytes, out, (field, wire) => field === 2 && wire === 2 ? entity : 'keep');
+  return { bytes: Uint8Array.from(out), dropped };
+}
+
 export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
-  let message: transit_realtime.FeedMessage;
+  let message: transit_realtime.FeedMessage, repaired = false;
   try {
     message = transit_realtime.FeedMessage.decode(bytes);
   } catch {
-    throw new Error('Malformed GTFS-Realtime feed');
+    try {
+      const repair = dropMistypedAlertFields(bytes);
+      if (repair.dropped === 0) throw new Error('not repairable');
+      message = transit_realtime.FeedMessage.decode(repair.bytes);
+      repaired = true;
+    } catch {
+      throw new Error('Malformed GTFS-Realtime feed');
+    }
   }
 
   const feed: NormalizedRealtimeFeed = {
@@ -140,7 +196,7 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
     trips: [],
     vehicles: [],
     alerts: [],
-    warnings: [],
+    warnings: repaired ? ['dropped_mistyped_alert_field'] : [],
   };
 
   if (message.header.incrementality === 1) throw new Error('Unsupported differential GTFS-Realtime feed');
