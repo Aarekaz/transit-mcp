@@ -75,10 +75,23 @@ Real DC and NYC timetables exposed that the router kept every label it generated
 
 `tests/integration/dc-nyc-live.test.ts` repeats the live acceptance on demand: `TRANSIT_LIVE_COVERAGE=dc|nyc TRANSIT_LIVE_ARTIFACT_DIR=<built dir> WMATA_API_KEY=… bunx vitest run tests/integration/dc-nyc-live.test.ts`.
 
+## Production activation (2026-10-19 UTC)
+
+| Step | Evidence |
+| --- | --- |
+| Artifacts | Both published to `transit-mcp-artifacts`; `current.json` read back as DC `36b49029…7f063`, NYC `cbb48…85d39` (no previous version) |
+| Dark (`5dc2dbb6`) | Coordinators polled from the edge: WMATA 91/91 and 91/92 matched; NYCT 206/346 matched, remainder observed; no poll failures, no exceptions |
+| On (`e58b0b8e`) then fixes (`c14b6821`, `0b5e955f`, `bd9ba804`) | Production showed a 112 s NYC poll (sequential R2 shard writes) and DC predictions blanked by one rejected ADDED trip; fixed with bounded-parallel R2 I/O and ADDED trains as observed rows. NYC trip-update poll now ~15 s (publish ~12.7 s), alerts ~10 s |
+| Protocol probe (`scripts/probe-transit.ts https://transitmcp.com`) | 0 failures: `/info` = `tools/list` = 18 tools; DC and NYC departures realtime at three stations each (snapshot age 23–47 s); `plan_trip` validated itineraries in both; DC alerts 2, vehicles 5 (Red); NYC alerts 33, vehicles truthfully unavailable; all 13 legacy tools return data |
+| Worker CPU (tail) | departures 0.8–0.9 s (DC), 2.1–2.6 s (NYC); `plan_trip` 1.5–1.8 s (DC), ~11 s (NYC); `find_transit` up to 1.7 s |
+
+Rollback target before this rollout: Worker version `5fa5d475`.
+
 ## Not yet established
 
-- Production deployment, remote artifact publication and mode activation (require operator approval).
-- Workers CPU for NYC plans: measured 2–5.5 s Bun wall time. Confirm deployed CPU time before relying on peak-hour planning.
+- **Scheduled artifact refresh.** Not automated. NYC's match rate fell from ~75% to ~55% over three hours as the 00:46 UTC supplemented schedule aged; below 50% NYC realtime degrades to schedule-only (fail closed). DC's artifact ends at WMATA's `feed_end_date` 2026-10-23, after which DC returns `SCHEDULE_EXPIRED`. A validated rebuild must run at least hourly for NYC and daily for DC.
+- **NYC planning cost.** ~11 s Worker CPU per plan in production; acceptable under the CPU limit but expensive under load.
+- **NYC alert freshness.** MTA's alerts feed header advances only when alerts change, so alerts are often served with `REALTIME_STALE` after 20 minutes.
 - Agreement with official MTA/WMATA trip planners for current journeys.
 - NYC vehicle locations (no coordinates in the feed) and NYCT train numbers (published in an MTA protobuf extension this decoder does not read).
 - Step-free routing (not offered for any coverage).
