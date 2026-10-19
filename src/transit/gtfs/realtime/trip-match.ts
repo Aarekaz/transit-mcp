@@ -28,7 +28,7 @@ export interface AppliedTripUpdates {
   version: StaticVersion; trips: NormalizedTripUpdate[]; stopUpdates: NormalizedStopUpdate[];
   match: { eligible: number; matched: number; rate: number };
   /** Trips proven to serve no rider; never part of the match rate. */
-  excluded: { nonRevenue: number; invalidExtras: number }; degraded: boolean; warnings: string[];
+  excluded: { nonRevenue: number; invalidExtras: number; unrepresentableAdded: number }; degraded: boolean; warnings: string[];
 }
 function timeString(seconds: number): string {
   return `${String(Math.floor(seconds / 3600)).padStart(2, '0')}:${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
@@ -237,6 +237,41 @@ function nyctObservedUpdates(update: NormalizedTripUpdate, context: TripMatchCon
   return rows;
 }
 
+/** ADDED service has no canonical schedule: keep it as an observed train at real stops.
+ * Its instance identity is the provider trip, service date and start time (the reported
+ * start_time, else its first observed call); never a scheduled time. */
+function addedUpdates(update: NormalizedTripUpdate, context: TripMatchContext): NormalizedStopUpdate[] | null {
+  if (!update.tripId || !update.startDate || !update.routeId || !update.stops.length) return null;
+  try { parseServiceDate(update.startDate); } catch { return null; }
+  const shard = context.shards.find(shard => (!context.feedId || shard.feedId === context.feedId) && shard.routes.some(route => route.providerId === update.routeId));
+  if (!shard) return null;
+  const route = shard.routes.find(route => route.providerId === update.routeId)!, timezone = shard.agencyTimezones[route.agencyRef];
+  const stopIds = new Set(shard.stops.map(stop => stop.providerId));
+  let sequence = -1;
+  for (const stop of update.stops) {
+    if (!stop.stopId || !stopIds.has(stop.stopId) || stop.stopScheduleRelationship === 'UNKNOWN') return null;
+    if (stop.stopSequence !== undefined) { if (stop.stopSequence <= sequence) return null; sequence = stop.stopSequence; }
+    const timed = stop.stopScheduleRelationship === 'SKIPPED' || stop.stopScheduleRelationship === 'NO_DATA' || stop.arrivalTimeSeconds !== undefined || stop.departureTimeSeconds !== undefined;
+    if (!timed) return null;
+  }
+  let startSeconds: number;
+  try {
+    if (update.startTime) startSeconds = parseGtfsTime(update.startTime).totalSeconds;
+    else {
+      const first = update.stops.map(stop => stop.departureTimeSeconds ?? stop.arrivalTimeSeconds).find(value => value !== undefined);
+      if (first === undefined || !timezone) return null;
+      startSeconds = first - serviceDayOrigin(update.startDate, timezone) / 1000;
+      if (!Number.isInteger(startSeconds) || startSeconds < 0 || startSeconds > 48 * 3600) return null;
+    }
+  } catch { return null; }
+  const tripInstanceRef = formatTripInstanceRef({ coverage: shard.coverageId, feed: shard.feedId, id: update.tripId, serviceDate: update.startDate, startTime: timeString(startSeconds) });
+  const destinationStopId = update.stops.at(-1)?.stopId;
+  return update.stops.filter(stop => stop.stopScheduleRelationship !== 'NO_DATA').map(stop => ({ ...stop, stopId: stop.stopId!, tripId: update.tripId, routeId: update.routeId,
+    serviceDate: update.startDate, scheduleRelationship: 'ADDED' as const, tripInstanceRef, destinationStopId, scheduleMatch: 'unmatched_trip' as const,
+    status: stop.stopScheduleRelationship === 'SKIPPED' ? 'skipped' as const : 'realtime' as const,
+    ...(stop.stopScheduleRelationship === 'SKIPPED' ? { arrivalTimeSeconds: undefined, departureTimeSeconds: undefined } : {}) }));
+}
+
 /** Normalize only against shards already checked by loadScheduleWindow. Never fetches. */
 export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: TripMatchContext): Promise<AppliedTripUpdates> {
   assertIdentity(context);
@@ -255,7 +290,7 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
       descriptors[0]!.byteLength !== bytes.length || descriptors[0]!.sha256 !== await sha256(bytes)) throw new Error('Realtime discovery integrity or identity failure');
     staticIds.set(discovery.feedId, new Set(discovery.tripProviderIds));
   }
-  const stopUpdates: NormalizedStopUpdate[] = []; let eligible = 0, matched = 0, invalidExtras = 0, nonRevenue = 0;
+  const stopUpdates: NormalizedStopUpdate[] = []; let eligible = 0, matched = 0, invalidExtras = 0, nonRevenue = 0, unrepresentableAdded = 0;
   const index = tripIndex(context);
   const shardsInFeed = context.shards.filter(shard => !context.feedId || shard.feedId === context.feedId);
   const routeIds = new Set(shardsInFeed.flatMap(shard => shard.routes.map(route => route.providerId)));
@@ -275,9 +310,11 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
         const canceled = matchedUpdates({ ...update, scheduleRelationship: 'CANCELED', stops: [] }, original)!;
         stopUpdates.push(...extras, ...canceled.filter(call => !extras.some(extra => extra.stopId === call.stopId && extra.stopSequence === call.stopSequence)));
       } else {
-        const extras = extraUpdates(update, context);
-        if (!extras) { invalidExtras++; continue; }
-        stopUpdates.push(...extras);
+        // An unrepresentable added train is counted and excluded; it never blanks
+        // every other prediction.
+        const added = addedUpdates(update, context);
+        if (!added) { unrepresentableAdded++; continue; }
+        stopUpdates.push(...added);
       }
       continue;
     }
@@ -299,6 +336,6 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
   }
   const rate = eligible ? matched / eligible : 1;
   const degraded = invalidExtras > 0 || rate < (context.minimumScheduleMatchRate ?? SFBAY_COVERAGE.thresholds.minimumScheduleMatchRate);
-  return { version: context.version, trips: feed.trips, stopUpdates, match: { eligible, matched, rate }, excluded: { nonRevenue, invalidExtras }, degraded,
+  return { version: context.version, trips: feed.trips, stopUpdates, match: { eligible, matched, rate }, excluded: { nonRevenue, invalidExtras, unrepresentableAdded }, degraded,
     warnings: [...feed.warnings, ...(degraded ? ['SCHEDULE_REALTIME_MISMATCH'] : [])] };
 }

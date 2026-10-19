@@ -163,11 +163,44 @@ describe('global transit MCP boundary', () => {
     }
   });
 
-  it.each(['ADDED', 'DUPLICATED', 'REPLACEMENT', 'REPLACEMENT_NO_DATA'] as const)('explicitly refuses an incomplete departure board for accepted %s service', async relationship => {
+  it('shows an added train as observed service, without an invented schedule or a blanked board', async () => {
     const f = await fixture(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
-    const now = Date.now() / 1000, added = relationship === 'ADDED', duplicated = relationship === 'DUPLICATED';
+    const now = Date.now() / 1000;
+    // As providers publish them: departure-only at the origin, arrival-only at the terminal.
     const decoded = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: now }, entity: [{ id: 'extra', tripUpdate: {
-      trip: { tripId: added ? 'extra' : 'T', routeId: 'R', startDate: '20261019', startTime: '09:00:00', scheduleRelationship: added ? 1 : duplicated ? 6 : 5 },
+      trip: { tripId: 'extra', routeId: 'R', startDate: '20261019', scheduleRelationship: 1 },
+      stopTimeUpdate: [{ stopId: 'A', stopSequence: 1, departure: { time: Date.parse(at('09:05:00')) / 1000 } }, { stopId: 'C', stopSequence: 2, arrival: { time: Date.parse(at('09:25:00')) / 1000 } }],
+    } }] }).finish());
+    const normalized = await applyTripUpdates(decoded, { manifest: f.compiled.manifest, version: f.version, shards: [f.compiled.shard], discoveries: [f.compiled.discovery], feedId: 'sf511' });
+    expect(normalized).toMatchObject({ degraded: false, excluded: { unrepresentableAdded: 0 } });
+    f.env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version: f.version,
+      producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload: normalized.stopUpdates }) }) } as unknown as DurableObjectNamespace;
+    const result = (await call(f.env, 'get_departures', { stopRef: ref('stop', 'A') })).result.structuredContent;
+    expect(result.status).toBe('realtime');
+    const added = result.departures.find((row: Record<string, unknown>) => row.scheduleMatch === 'unmatched_trip');
+    // Identity comes from the observed first call when start_time is absent.
+    expect(added).toMatchObject({ tripInstanceRef: 'tr:sfbay:sf511:trip:ZXh0cmE:20261019:MDk6MDU6MDA', scheduledTime: null, stopSequence: null, status: 'realtime',
+      predictedTime: new Date(at('09:05:00')).toISOString(), headsign: 'Destination' });
+    expect(result.departures.some((row: Record<string, unknown>) => row.scheduleMatch === 'matched')).toBe(true);
+    // Planning never uses the observed-only train.
+    const plan = (await call(f.env, 'plan_trip', { origin: { ref: ref('stop', 'A') }, destination: { ref: ref('stop', 'C') }, maxWalkMetres: 0 })).result.structuredContent;
+    expect(plan.itineraries.every((itinerary: { legs: { kind: string; tripRef?: string }[] }) => itinerary.legs.every(leg => leg.kind !== 'transit' || !leg.tripRef!.includes('ZXh0cmE')))).toBe(true);
+  });
+
+  it('counts an unrepresentable added train without blanking other predictions', async () => {
+    const f = await fixture();
+    const decoded = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: 1 }, entity: [{ id: 'extra', tripUpdate: {
+      trip: { tripId: 'extra', routeId: 'R', startDate: '20261019', startTime: '09:00:00', scheduleRelationship: 1 },
+      stopTimeUpdate: [{ stopId: 'not-a-stop', stopSequence: 1, departure: { time: 1 } }] } }] }).finish());
+    const normalized = await applyTripUpdates(decoded, { manifest: f.compiled.manifest, version: f.version, shards: [f.compiled.shard], feedId: 'sf511' });
+    expect(normalized).toMatchObject({ degraded: false, stopUpdates: [], excluded: { unrepresentableAdded: 1 } });
+  });
+
+  it.each(['DUPLICATED', 'REPLACEMENT', 'REPLACEMENT_NO_DATA'] as const)('explicitly refuses an incomplete departure board for accepted %s service', async relationship => {
+    const f = await fixture(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
+    const now = Date.now() / 1000, duplicated = relationship === 'DUPLICATED';
+    const decoded = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: now }, entity: [{ id: 'extra', tripUpdate: {
+      trip: { tripId: 'T', routeId: 'R', startDate: '20261019', startTime: '09:00:00', scheduleRelationship: duplicated ? 6 : 5 },
       ...(duplicated ? { tripProperties: { tripId: 'duplicate', startDate: '20261019', startTime: '09:05:00' } } : {}),
       stopTimeUpdate: [{ stopId: 'A', stopSequence: 1, arrival: { time: Date.parse(at('09:05:00')) / 1000 }, departure: { time: Date.parse(at('09:05:00')) / 1000 }, scheduleRelationship: relationship === 'REPLACEMENT_NO_DATA' ? 2 : 0 }],
     } }] }).finish());

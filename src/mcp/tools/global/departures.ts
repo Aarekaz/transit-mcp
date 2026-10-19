@@ -57,10 +57,10 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     const feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', nowSeconds, handler.mcpReq.signal, relevantProviderIds);
     const meta = metadata(stop.coverage, data, now);
     const sources = [...meta.sources, ...realtimeSource(data, feed, 'trip_updates', nowSeconds)];
-    // These accepted relationships can introduce calls without a canonical static
-    // departure. The current schema requires one: refuse the whole board until
-    // that proof is available rather than hide service or resurrect replaced calls.
-    if (feed.payload?.some(update => ['ADDED', 'DUPLICATED', 'REPLACEMENT'].includes(update.scheduleRelationship ?? ''))) {
+    // Duplicated and replacement service rewrite canonical calls in ways this board
+    // cannot yet prove: refuse it rather than hide service or resurrect replaced calls.
+    // ADDED trains are shown as observed rows (scheduleMatch: unmatched_trip).
+    if (feed.payload?.some(update => ['DUPLICATED', 'REPLACEMENT'].includes(update.scheduleRelationship ?? ''))) {
       return complete({ ...meta, sources, status: 'unavailable' as const, reasons: ['REALTIME_UNAVAILABLE' as const], departures: [], frequencyWindows: [] });
     }
     const fresh = feed?.status === 'realtime' && feed.producerTimestampSeconds !== undefined && nowSeconds >= feed.producerTimestampSeconds && nowSeconds - feed.producerTimestampSeconds <= data.coverage.thresholds.tripUpdates.realtimeSeconds;
