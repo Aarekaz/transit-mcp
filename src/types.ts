@@ -184,7 +184,8 @@ export interface WMATAElevatorIncident {
   UnitType: string;
   UnitStatus: string | null;
   StationCode: string;
-  StationName: string;
+  /** WMATA sometimes omits the name (seen for N09, Ashburn, in October 2026). */
+  StationName: string | null;
   LocationDescription: string;
   SymptomCode: string | null;
   SymptomDescription: string;

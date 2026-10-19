@@ -23,7 +23,7 @@ export function formatElevatorIncidentsForMcp(
     unitName: incident.UnitName,
     unitType: incident.UnitType,
     stationCode: incident.StationCode,
-    stationName: incident.StationName,
+    stationName: incident.StationName ?? incident.StationCode,
     locationDescription: incident.LocationDescription,
     symptomDescription: incident.SymptomDescription,
     outOfServiceAt: incident.DateOutOfServ,

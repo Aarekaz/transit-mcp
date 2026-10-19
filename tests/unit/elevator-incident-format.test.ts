@@ -38,4 +38,14 @@ describe('formatElevatorIncidentsForMcp', () => {
       }
     ]);
   });
+
+  it('falls back to the station code when WMATA omits the station name', () => {
+    const [incident] = formatElevatorIncidentsForMcp([{
+      UnitName: 'N09X01', UnitType: 'ESCALATOR', UnitStatus: null, StationCode: 'N09', StationName: null,
+      LocationDescription: 'Escalator - betweeen mezzanine and platform', SymptomCode: null, SymptomDescription: 'Modernization',
+      TimeOutOfService: '0500', DisplayOrder: 0, DateOutOfServ: '2026-10-01T05:00:00', DateUpdated: '2026-10-19T08:00:00',
+      EstimatedReturnToService: null,
+    }]);
+    expect(incident.stationName).toBe('N09');
+  });
 });
