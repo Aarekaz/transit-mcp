@@ -8,7 +8,7 @@ import { formatEntityRef, parseTransitRef } from '../../../transit/core/refs';
 import { decodeScheduleShard } from '../../../transit/gtfs/static/shards';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import type { ScheduleTrip } from '../../../transit/gtfs/static/schema';
-import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, candidates, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, sameStation, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, candidates, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, sameStation, unavailable, validRef, type TransitData } from './shared';
 import { getCoverage } from '../../../transit/core/coverage';
 
 const departureShape = { tripRef: z.string(), serviceDate: z.string(), routeRef: z.string(), routeName: z.string().describe('Public route name, e.g. "1", "A" or "Red".'),
@@ -25,7 +25,7 @@ type Unnamed<T> = Omit<T, 'routeName' | 'stopName'>;
 
 export function registerDeparturesTool(server: McpServer, context: MetroMcpContext): void {
   server.registerTool('get_departures', {
-    title: 'Departures at a stop', description: 'Find what leaves a stop next, the first service or last service in a bounded window. Pass a stopRef from find_transit, or a stop name with its coverage (one station complex resolves directly; different same-named stations return candidates). Returns dated trip references for get_vehicle_status. Use plan_trip for journeys; departures cannot establish a route or connection.',
+    title: 'Departures at a stop', description: 'Find what leaves a stop next, the first service or last service in a bounded window. Pass a stopRef from find_transit, or a stop name with its coverage (one station complex resolves directly; different same-named stations return candidates). A station covers its whole complex, e.g. every line at Times Sq-42 St; a platform ref covers that platform. Returns dated trip references for get_vehicle_status. Use plan_trip for journeys; departures cannot establish a route or connection.',
     annotations: readOnlyLive('Departures at a stop'),
     inputSchema: z.strictObject({ stopRef: boundedText.optional().describe('Exact stop or station reference. Give this or stop.'),
       stop: boundedText.optional().describe('Stop or station name, with coverage. Give this or stopRef.'), coverage: coverageSchema.optional(), at: instantSchema.optional(), windowSeconds: z.number().int().default(7200).describe('Search window in seconds, 1 through 604800 (seven days).'),
@@ -56,7 +56,9 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     knownEntity(data, stopRef!);
     for (const ref of [...args.routeRefs ?? [], ...args.agencyRefs ?? []]) knownEntity(data, ref);
     const now = new Date().toISOString(), nowSeconds = Date.parse(now) / 1000;
-    const relevantStops = new Set(data.indexes.flatMap(index => index.stops).filter(stop => stop.ref === stopRef! || stop.parentStationRef === stopRef!).map(stop => stop.ref));
+    // A station is the whole complex a rider knows by that name; a platform is just itself.
+    const complex = complexStations(data, stopRef!), within = new Set([stopRef!, ...complex]);
+    const relevantStops = new Set(data.indexes.flatMap(index => index.stops).filter(stop => within.has(stop.ref) || stop.parentStationRef !== undefined && within.has(stop.parentStationRef)).map(stop => stop.ref));
     const trips = new Map<string, Pick<ScheduleTrip, 'headsign' | 'directionId' | 'routeRef' | 'stopTimes'>>();
     const pages = getScheduledDeparturePages({ manifest: data.manifest, readShard: async key => {
       const bytes = await data.readObject(key), shard = decodeScheduleShard(bytes);
@@ -65,7 +67,7 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
         if (stopTimes.length) trips.set(trip.ref, { headsign: trip.headsign, directionId: trip.directionId, routeRef: trip.routeRef, stopTimes });
       }
       return bytes;
-    }, readDiscovery: data.readObject, stopRef: asTransitRef(stopRef!),
+    }, readDiscovery: data.readObject, stopRef: asTransitRef(stopRef!), complexStationRefs: complex.map(asTransitRef),
       instant: args.at ?? now, windowSeconds: args.windowSeconds, selection: args.selection, limit: 100, routeRefs: args.routeRefs?.map(asTransitRef), agencyRefs: args.agencyRefs?.map(asTransitRef) });
     const scheduled: ScheduledDeparture[] = []; let schedule: ScheduledDepartures | undefined;
     // Predictions can reorder any scheduled page. Exhaust the bounded window before ranking.

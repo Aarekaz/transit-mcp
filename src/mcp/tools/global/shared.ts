@@ -7,10 +7,10 @@ import { getCoverageMode } from '../../../regions/manifest';
 import { formatEntityRef, parseTransitRef, type TransitRef } from '../../../transit/core/refs';
 import { VERIFICATION_REASONS, type SourceStatus, type VerificationReason } from '../../../transit/core/results';
 import { StaticArtifactStore, readBoundedObject, sameStaticVersion, type StaticVersion } from '../../../transit/gtfs/realtime/snapshot-store';
-import { credential, getRealtimeSource } from '../../../transit/gtfs/realtime/sources';
+import { credential, getRealtimeSource, publishedKinds } from '../../../transit/gtfs/realtime/sources';
 import type { CoverageCapability } from '../../../transit/core/coverage';
 import { decodeDiscoveryIndex, decodeScheduleShard, sha256 } from '../../../transit/gtfs/static/shards';
-import type { ArtifactManifestV2, DiscoveryIndex } from '../../../transit/gtfs/static/schema';
+import type { ArtifactManifestV2, DiscoveryIndex, ScheduleStop } from '../../../transit/gtfs/static/schema';
 import type { FeedRead } from '../../../transit/gtfs/realtime/hub-core';
 import type { NormalizedVehicle } from '../../../transit/gtfs/realtime/decode';
 import type { RealtimeFeedKind } from '../../../regions/types';
@@ -194,18 +194,16 @@ export function ambiguityCandidate(data: TransitData, entity: Candidate, query: 
  * same-named stations published separately within a short walk (for example the four
  * "Times Sq-42 St" stations). Same-named stations farther apart stay separate candidates. */
 export const COMPLEX_RADIUS_METRES = 200;
-export function sameStation(data: TransitData, matches: Candidate[]): Candidate[] {
-  if (matches.length < 2) return matches;
-  const stops = new Map(data.indexes.flatMap(index => index.stops).map(stop => [stop.ref as string, stop]));
-  const station = (ref: string) => { const stop = stops.get(ref); return stop?.locationType === 1 ? ref : stop?.parentStationRef; };
+/** Groups same-named stations into complexes: the publisher links them with a transfer,
+ * or they lie within a short walk of each other. Maps each station to its complex's first station. */
+function stationComplexes(data: TransitData, roots: string[]): Map<string, string> {
+  const stops = stopsByRef(data);
   const metres = (a: ScheduleStopLike, b: ScheduleStopLike) => {
     if (a.latitude === null || a.longitude === null || b.latitude === null || b.longitude === null) return Infinity;
     const radians = Math.PI / 180, x = (b.longitude - a.longitude) * radians * Math.cos((a.latitude + b.latitude) * radians / 2), y = (b.latitude - a.latitude) * radians;
     return Math.hypot(x, y) * 6_371_000;
   };
-  // Group same-named stations into complexes: the publisher links them with a transfer,
-  // or they lie within a short walk of each other.
-  const roots = [...new Set(matches.flatMap(match => { const root = match.kind === 'stop' ? station(match.ref) : undefined; return root ? [root] : []; }))].sort();
+  roots = [...new Set(roots)].sort();
   const linked = new Set(data.indexes.flatMap(index => index.stationLinks ?? []).map(([a, b]) => `${a}\n${b}`));
   const parent = new Map(roots.map(root => [root, root]));
   const find = (root: string): string => { let at = root; while (parent.get(at) !== at) at = parent.get(at)!; return at; };
@@ -217,11 +215,25 @@ export function sameStation(data: TransitData, matches: Candidate[]): Candidate[
       parent.set(y, x);
     }
   }
-  const complex = new Map(roots.map(root => [root, find(root)]));
+  return new Map(roots.map(root => [root, find(root)]));
+}
+const stopMaps = new WeakMap<TransitData['indexes'], Map<string, ScheduleStop>>();
+function stopsByRef(data: TransitData): Map<string, ScheduleStop> {
+  let stops = stopMaps.get(data.indexes);
+  if (!stops) { stops = new Map(data.indexes.flatMap(index => index.stops).map(stop => [stop.ref as string, stop])); stopMaps.set(data.indexes, stops); }
+  return stops;
+}
+function stationOf(data: TransitData, ref: string): string | undefined {
+  const stop = stopsByRef(data).get(ref);
+  return stop?.locationType === 1 ? ref : stop?.parentStationRef;
+}
+export function sameStation(data: TransitData, matches: Candidate[]): Candidate[] {
+  if (matches.length < 2) return matches;
+  const complex = stationComplexes(data, matches.flatMap(match => { const root = match.kind === 'stop' ? stationOf(data, match.ref) : undefined; return root ? [root] : []; }));
   // One candidate per place, in the original rank order; a place is its complex's first station.
   const seen = new Set<string>(), result: Candidate[] = [];
   for (const match of matches) {
-    const root = match.kind === 'stop' ? station(match.ref) : undefined;
+    const root = match.kind === 'stop' ? stationOf(data, match.ref) : undefined;
     if (!root) { result.push(match); continue; }
     const place = complex.get(root)!;
     if (seen.has(place)) continue;
@@ -229,6 +241,15 @@ export function sameStation(data: TransitData, matches: Candidate[]): Candidate[
     result.push(matches.find(candidate => candidate.ref === place) ?? match);
   }
   return result;
+}
+/** The other stations in a station's complex (Times Sq-42 St is published as four). */
+export function complexStations(data: TransitData, stationRef: string): string[] {
+  const station = stopsByRef(data).get(stationRef);
+  if (station?.locationType !== 1) return [];
+  const name = normalizeEntityName(station.name);
+  const sameName = data.indexes.flatMap(index => index.stops).filter(stop => stop.locationType === 1 && normalizeEntityName(stop.name) === name).map(stop => stop.ref as string);
+  const complex = stationComplexes(data, sameName), place = complex.get(stationRef);
+  return sameName.filter(ref => ref !== stationRef && complex.get(ref) === place).sort();
 }
 type ScheduleStopLike = { latitude: number | null; longitude: number | null };
 export function knownEntity(data: TransitData, ref: string): Candidate {
@@ -280,7 +301,7 @@ export async function detail(data: TransitData, ref: string) {
 export function effectiveCapabilities(context: MetroMcpContext, coverage: CoverageManifest, requireCredential = true): CoverageCapability {
   const source = getRealtimeSource(coverage.id);
   const ingests = (kind: RealtimeFeedKind) => !!source && !!context.env.REGION_FEED_HUB && (!requireCredential || credential(source, context.env) !== null) &&
-    source.feeds.some(feed => feed.kind === kind);
+    publishedKinds(source).has(kind);
   return { ...coverage.capabilities,
     realtimeDepartures: coverage.capabilities.realtimeDepartures && ingests('trip_updates'),
     alerts: coverage.capabilities.alerts && ingests('service_alerts'),
