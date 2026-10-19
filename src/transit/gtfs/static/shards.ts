@@ -23,7 +23,10 @@ const metadataSchema = z.object({
   schemaVersion: z.literal(2), coverageId: id, feedId: id,
   maxStopTimeSeconds: uint.max(2 * (999 * 3600 + 3599)),
   window: z.object({ startDate: date, endDate: date }).refine(value => value.startDate <= value.endDate),
-  source: z.object({ feedId: id, url: z.url(), retrievedAt: id.refine(value => Number.isFinite(Date.parse(value))), sha256: hash,
+  timeRange: z.object({ bandStart: uint, bandEnd: uint, start: uint, end: uint })
+    .refine(value => value.bandStart < value.bandEnd && value.start <= value.end).optional(),
+  source: z.object({ feedId: id, url: z.url(), retrievedAt: id.refine(value => Number.isFinite(Date.parse(value))), sha256: hash, archiveSha256: hash.optional(),
+    derivedFrom: z.object({ archiveSha256: hash, excludedFiles: z.array(id).min(1), reason: z.string().min(1).max(500) }).optional(),
     feedInfo: z.array(z.record(z.string(), z.string())), anonymousAgencyRef: agencyRef.optional() }),
   agencyTimezones: z.record(agencyRef, timezone),
   stops: z.array(z.object({ ref: stopRef, providerId: id, name: z.string(), latitude: z.number().nullable(), longitude: z.number().nullable(),
@@ -189,6 +192,15 @@ export function decodeScheduleShard(bytes: Uint8Array): ScheduleShard {
     }
     for (const boundary of shard.transferBoundaryTrips) {
       if ((boundary.firstDepartureSeconds ?? 0) > shard.maxStopTimeSeconds || (boundary.lastArrivalSeconds ?? 0) > shard.maxStopTimeSeconds) throw new Error();
+    }
+    if (shard.timeRange) {
+      // A band must contain exactly what its descriptor claims; selection relies on it.
+      if (shard.window.startDate !== shard.window.endDate || shard.frequencies.length || Object.keys(shard.blocks).length || shard.transferBoundaryTrips.length) throw new Error();
+      for (const trip of shard.trips) {
+        const first = trip.stopTimes[0]!.departureSeconds;
+        if (first === null || first < shard.timeRange.bandStart || first >= shard.timeRange.bandEnd || first < shard.timeRange.start) throw new Error();
+        if (trip.stopTimes.some(call => Math.max(call.arrivalSeconds ?? 0, call.departureSeconds ?? 0) > shard.timeRange!.end)) throw new Error();
+      }
     }
     for (const frequency of shard.frequencies) {
       const trip = trips.get(frequency.tripRef)!;

@@ -1,0 +1,12 @@
+{
+  "coverageId": "dc",
+  "warnings": [
+    { "code": "feed_expiration_date7_days", "reason": "WMATA publishes a rolling feed of about nine days. Artifacts are rebuilt within that window and never served beyond feed_end_date (SCHEDULE_EXPIRED).", "expires": "2026-11-15" },
+    { "code": "missing_feed_contact_email_and_url", "reason": "Publisher metadata only; no effect on service facts.", "expires": "2026-11-15" },
+    { "code": "missing_recommended_field", "reason": "feed_info.feed_version is absent; artifact identity uses the archive and table hashes instead.", "expires": "2026-11-15" },
+    { "code": "same_name_and_description_for_stop", "reason": "Two entrance records repeat their name as description; display text only.", "expires": "2026-11-15" },
+    { "code": "stop_too_far_from_shape", "reason": "Center-platform coordinates lie about 100 m from the drawn shape. Shapes are not used for routing or display.", "expires": "2026-11-15" },
+    { "code": "stop_too_far_from_shape_using_user_distance", "reason": "shape_dist_traveled geometry notes only. Shapes are not used for routing or display.", "expires": "2026-11-15" },
+    { "code": "unusable_trip", "reason": "Single-stop SHUTTLE placeholder trips. The compiler excludes trips with fewer than two timed stops, so they are never offered as service.", "expires": "2026-11-15" }
+  ]
+}

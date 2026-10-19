@@ -6,6 +6,9 @@ import type { TransitMode } from './modes';
 export type GtfsScheduleFiles = Record<'agency.txt' | 'stops.txt' | 'routes.txt' | 'trips.txt' | 'stop_times.txt', string>
   & Partial<Record<'calendar.txt' | 'calendar_dates.txt' | 'feed_info.txt' | 'frequencies.txt' | 'transfers.txt' | 'pathways.txt', string>>;
 export interface ServiceWindow { startDate: string; endDate: string }
+/** Seconds from the service-day origin. A banded shard holds only trips whose
+ * first departure is in [bandStart, bandEnd); start/end bound every call it holds. */
+export interface ShardTimeRange { bandStart: number; bandEnd: number; start: number; end: number }
 export interface SourceMetadata {
   feedId: string;
   /** Public credential-free endpoint, never the authenticated download URL. */
@@ -13,6 +16,10 @@ export interface SourceMetadata {
   retrievedAt: string;
   /** Hash of canonical parsed GTFS tables, independent of CSV ordering. */
   sha256: string;
+  /** Hash of the exact archive bytes the validator report describes. */
+  archiveSha256?: string;
+  /** Present when the validated archive was derived from the publisher's archive. */
+  derivedFrom?: { archiveSha256: string; excludedFiles: string[]; reason: string };
   feedInfo: Record<string, string>[];
   /** Deterministic normalization only when the single source agency omits its ID. */
   anonymousAgencyRef?: TransitRef;
@@ -57,6 +64,8 @@ export interface SchedulePathway {
 }
 export interface ScheduleShard {
   schemaVersion: 2; coverageId: string; feedId: string; window: ServiceWindow;
+  /** Absent for whole-day shards; present when a service day is split into time bands. */
+  timeRange?: ShardTimeRange;
   /** Feed-wide upper bound, including frequency-expanded calls and trips outside this window. */
   maxStopTimeSeconds: number;
   source: SourceMetadata; agencyTimezones: Record<TransitRef, string>;
@@ -88,7 +97,7 @@ export interface ArtifactManifestV2 {
   schemaVersion: 2; coverageId: string; sources: SourceMetadata[];
   agencyTimezones: Record<TransitRef, string>;
   discoveries: (ArtifactObject & { feedId: string })[];
-  shards: (ArtifactObject & { feedId: string; window: ServiceWindow; maxStopTimeSeconds: number })[];
+  shards: (ArtifactObject & { feedId: string; window: ServiceWindow; maxStopTimeSeconds: number; timeRange?: ShardTimeRange })[];
   validator?: ValidatorEvidence;
 }
 export interface CompileScheduleInput {

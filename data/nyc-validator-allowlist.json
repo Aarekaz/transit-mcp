@@ -1,0 +1,10 @@
+{
+  "coverageId": "nyc",
+  "warnings": [
+    { "code": "expired_calendar", "reason": "Summer holiday service_ids that ended 2026-09-07. Expired calendars are inactive on every published date.", "expires": "2026-11-15" },
+    { "code": "feed_expiration_date30_days", "reason": "Feed ends 2026-10-31. Dates after feed_end_date return SCHEDULE_EXPIRED; a successor feed must be rebuilt and revalidated.", "expires": "2026-11-15" },
+    { "code": "missing_feed_contact_email_and_url", "reason": "Publisher metadata only; no effect on service facts.", "expires": "2026-11-15" },
+    { "code": "stop_too_far_from_shape", "reason": "Twelve platform coordinates lie about 100 m from the drawn shape. Shapes are not used for routing or display.", "expires": "2026-11-15" },
+    { "code": "stop_without_stop_time", "reason": "Aqueduct Racetrack (H01S) has no scheduled service; it cannot appear in departures or journeys.", "expires": "2026-11-15" }
+  ]
+}

@@ -30,6 +30,9 @@ const BYTE_BUDGET = 64 * 1024 * 1024;
 function covers(descriptor: Descriptor, date: string): boolean {
   return date >= descriptor.window.startDate && date <= descriptor.window.endDate;
 }
+function sameWindow(left: Descriptor, right: Descriptor): boolean {
+  return left.window.startDate === right.window.startDate && left.window.endDate === right.window.endDate;
+}
 function withinFeed(source: SourceMetadata, date: string): boolean {
   return source.feedInfo.every(info => (!info.feed_start_date || date >= info.feed_start_date) && (!info.feed_end_date || date <= info.feed_end_date));
 }
@@ -62,6 +65,9 @@ export async function loadScheduleWindow(query: ScheduleWindowQuery): Promise<Sc
       if (!Number.isInteger(descriptor.maxStopTimeSeconds) || descriptor.maxStopTimeSeconds < 0 || descriptor.maxStopTimeSeconds > MAX_STOP_TIME_SECONDS) throw new Error('Invalid timetable bound');
       if (!Number.isSafeInteger(descriptor.byteLength) || descriptor.byteLength < 16) throw new Error('Invalid shard byte budget');
       if (parseServiceDate(descriptor.window.startDate) > parseServiceDate(descriptor.window.endDate)) throw new Error('Invalid shard service window');
+      const range = descriptor.timeRange;
+      if (range && (descriptor.window.startDate !== descriptor.window.endDate || ![range.bandStart, range.bandEnd, range.start, range.end].every(Number.isSafeInteger) ||
+        range.bandStart >= range.bandEnd || range.start > range.end || range.end > descriptor.maxStopTimeSeconds && range.end !== range.bandStart)) throw new Error('Invalid shard time band');
     }
     // Every window carries the same feed-wide bound, including excluded trips.
     const maximum = descriptors[0]!.maxStopTimeSeconds;
@@ -88,9 +94,15 @@ export async function loadScheduleWindow(query: ScheduleWindowQuery): Promise<Sc
         const chosen = [...selected.values()].find(item => item.descriptor.feedId === feed && covers(item.descriptor, date))?.descriptor
           ?? descriptors.find(descriptor => covers(descriptor, date));
         if (!chosen) return unavailable('SCHEDULE_EXPIRED');
-        let entry = selected.get(chosen.key);
-        if (!entry) { entry = { descriptor: chosen, days: [], source }; selected.set(chosen.key, entry); }
-        entry.days.push({ agencyRef: agencyRef as TransitRef, timezone, serviceDate: date, startTime: formatInstant(origin, timezone) });
+        // Time bands of one window together are that date's timetable; load only the
+        // bands whose calls can fall inside the query.
+        const group = chosen.timeRange ? descriptors.filter(descriptor => descriptor.timeRange && sameWindow(descriptor, chosen)) : [chosen];
+        for (const descriptor of group) {
+          if (descriptor.timeRange && !(origin + descriptor.timeRange.start * 1000 < end && origin + descriptor.timeRange.end * 1000 >= start)) continue;
+          let entry = selected.get(descriptor.key);
+          if (!entry) { entry = { descriptor, days: [], source }; selected.set(descriptor.key, entry); }
+          entry.days.push({ agencyRef: agencyRef as TransitRef, timezone, serviceDate: date, startTime: formatInstant(origin, timezone) });
+        }
       }
     }
   }
@@ -105,6 +117,7 @@ export async function loadScheduleWindow(query: ScheduleWindowQuery): Promise<Sc
     if (shard.coverageId !== manifest.coverageId || shard.feedId !== descriptor.feedId || shard.source.sha256 !== source.sha256 ||
       canonicalJson(shard.source) !== canonicalJson(source) || canonicalJson(shard.agencyTimezones) !== canonicalJson(agencyTimezones) ||
       shard.maxStopTimeSeconds !== descriptor.maxStopTimeSeconds || shard.window.startDate !== descriptor.window.startDate || shard.window.endDate !== descriptor.window.endDate ||
+      canonicalJson(shard.timeRange ?? null) !== canonicalJson(descriptor.timeRange ?? null) ||
       days.some(day => shard.agencyTimezones[day.agencyRef] !== day.timezone)) throw new Error('Schedule shard identity mismatch');
     result.shards.push({ shard, key: descriptor.key, serviceDays: days });
   }
