@@ -23,8 +23,8 @@ function nycDocuments(stamp = nowSeconds(), overrides: Partial<Record<string, Ui
     // Not in the published schedule at all.
     nyctTrip('055000_1..S03X001', '1', [['129S', civil('09:16:00')], ['130S', civil('09:18:00')]], '09:10:00'),
     // Where those trains are, as NYCT reports it: no coordinates.
-    nyctVehicle('054800_1..S03R', '1', '127S', 1, stamp - 20),
-    nyctVehicle('054900_2..S01R', '2', '128S', 2, stamp - 30),
+    nyctVehicle('054800_1..S03R', '1', '127S', 1, stamp - 20, SERVICE_DATE, '01 0908 242/SFT'),
+    nyctVehicle('054900_2..S01R', '2', '128S', 2, stamp - 30, SERVICE_DATE, '02 0909 241/FLA'),
     nyctVehicle('055000_1..S03X001', '1', '725S', 0, stamp - 10),
   ]);
   const documents: Record<string, Uint8Array> = { 'camsys/subway-alerts': feedBytes(stamp, []) };
@@ -62,10 +62,10 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     // By name: both published Times Sq stations are one place.
     const atTimesSq = (await callTool(f.env, 'get_vehicle_status', { stop: 'Times Sq-42 St', coverage: 'nyc' })).structuredContent;
     expect(atTimesSq).toMatchObject({ status: 'realtime', vehicles: [
-      { routeName: '1', headsign: 'South Ferry', stopStatus: 'stopped_at', stopRef: f.ref('stop', '127S'), stopName: 'Times Sq-42 St',
+      { routeName: '1', trainId: '01 0908 242/SFT', headsign: 'South Ferry', stopStatus: 'stopped_at', stopRef: f.ref('stop', '127S'), stopName: 'Times Sq-42 St',
         previousStopRef: null, coordinates: { latitude: 40.75529, longitude: -73.987495 }, coordinatesSource: 'stop', ageSeconds: 20 },
       // Not in the schedule: no trip identity or headsign is invented, and it is not stopped, so no position.
-      { routeName: '1', headsign: null, tripInstanceRef: null, stopStatus: 'incoming_at', stopRef: f.ref('stop', '725S'), coordinates: null, coordinatesSource: null },
+      { routeName: '1', trainId: null, headsign: null, tripInstanceRef: null, stopStatus: 'incoming_at', stopRef: f.ref('stop', '725S'), coordinates: null, coordinatesSource: null },
     ] });
     // A dated trip from get_departures or plan_trip: the 2 has left Times Sq for 34 St.
     const express = formatTripInstanceRef({ coverage: 'nyc', feed: 'mta_subway', id: 'AFA25GEN-2092-Weekday-00_054900_2..S01R', serviceDate: SERVICE_DATE, startTime: '09:09:00' });
@@ -73,6 +73,9 @@ describe('NYC subway through the global tools with every MTA feed', () => {
       { tripInstanceRef: express, routeName: '2', headsign: 'Flatbush Av-Brooklyn College', stopStatus: 'in_transit_to', stopName: '34 St-Penn Station',
         previousStopRef: f.ref('stop', '127S'), previousStopName: 'Times Sq-42 St', coordinates: null, coordinatesSource: null },
     ] });
+    // A train ID resolves to the trip that train is running, whatever its case or spacing.
+    const found = (await callTool(f.env, 'find_transit', { query: 'train 02  0909 241/fla', coverage: 'nyc' })).structuredContent;
+    expect(found.candidates[0]).toMatchObject({ ref: express, kind: 'trip', name: 'Train 02 0909 241/FLA' });
     // A platform covers only itself.
     expect((await callTool(f.env, 'get_vehicle_status', { ref: f.ref('stop', '725S') })).structuredContent.vehicles.map((vehicle: { stopRef: string }) => vehicle.stopRef))
       .toEqual([f.ref('stop', '725S')]);
@@ -328,7 +331,7 @@ describe('Washington Metrorail through the global tools', () => {
     const instance = formatTripInstanceRef({ coverage: 'dc', feed: 'wmata', id: '14362694_20741', serviceDate: SERVICE_DATE, startTime: '09:02:00' });
     const byTrip = (await callTool(f.env, 'get_vehicle_status', { ref: instance })).structuredContent;
     // WMATA publishes "R" as the Red Line's short name; riders say "Red".
-    expect(byTrip).toMatchObject({ status: 'realtime', vehicles: [{ id: '118', tripInstanceRef: instance, routeName: 'Red', coordinatesSource: 'vehicle' }] });
+    expect(byTrip).toMatchObject({ status: 'realtime', vehicles: [{ id: '118', trainId: '644', tripInstanceRef: instance, routeName: 'Red', coordinatesSource: 'vehicle' }] });
     // GTFS-Realtime positions are float32.
     expect(byTrip.vehicles[0].coordinates.latitude).toBeCloseTo(38.905, 5);
     expect(byTrip.vehicles[0].coordinates.longitude).toBeCloseTo(-77.041, 5);

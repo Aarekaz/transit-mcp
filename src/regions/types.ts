@@ -63,6 +63,8 @@ export interface RealtimeSourcePolicy {
   tripMatching: 'exact' | 'nyct_suffix';
   /** Provider agency IDs used by alerts that name a static agency differently. */
   alertAgencyAliases?: Readonly<Record<string, string>>;
+  /** Provider protobuf extensions to read (NYCT train IDs). */
+  extensions?: 'nyct';
   /** Timetable span loaded to match trip updates; defaults to six hours. */
   matchWindowSeconds?: number;
 }

@@ -109,6 +109,6 @@ Rollback target before this rollout: Worker version `5fa5d475`.
 - **NYC request latency.** Wall time in production is high for heavy calls (about 13 s for an NYC plan, 9 s for city-wide status) even though planning itself takes well under a second locally; R2 reads and cold isolates dominate. Worth measuring per phase before optimizing further.
 - **NYC alert freshness.** MTA's alerts feed header advances only when alerts change, so alerts are often labeled `REALTIME_STALE` after 20 minutes.
 - **Agreement with official planners.** Current MTA and WMATA trip-planner results have not been compared journey by journey.
-- **NYC train numbers and coordinates between stations.** NYCT train numbers live in an MTA protobuf extension this decoder does not read. NYC trains are located by station (stopped at, arriving, or heading to, with the station last served), never by an interpolated point.
+- **NYC coordinates between stations.** NYC trains are located by station (stopped at, arriving, or heading to, with the station last served), never by an interpolated point. Train IDs come from NYCT's TripDescriptor extension (field 1001); its track extension is not read.
 - **Step-free routing** is not offered for any coverage.
 - **Validator coverage of edge refreshes.** Edge builds rely on the compiler's checks and the change guards; the MobilityData validator is a manual check when a base timetable changes.

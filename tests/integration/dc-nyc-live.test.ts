@@ -68,14 +68,14 @@ describe.skipIf(!coverage || !directory)('live provider acceptance', () => {
     expect(vehicles.status).toBe('realtime');
     const station = (await callTool(env, 'get_vehicle_status', { ref: ref('stop', STATIONS[coverage!][0]!), limit: 100 })).structuredContent;
     evidence('vehicles:station', { status: station.status, vehicles: station.vehicles.length,
-      sample: station.vehicles.slice(0, 6).map((vehicle: Record<string, any>) => `${vehicle.routeName}>${vehicle.headsign}|${vehicle.stopStatus}@${vehicle.stopName}|from:${vehicle.previousStopName}|${vehicle.coordinatesSource}|${vehicle.ageSeconds}s`) });
+      sample: station.vehicles.slice(0, 6).map((vehicle: Record<string, any>) => `${vehicle.trainId}|${vehicle.routeName}>${vehicle.headsign}|${vehicle.stopStatus}@${vehicle.stopName}|from:${vehicle.previousStopName}|${vehicle.coordinatesSource}|${vehicle.ageSeconds}s`) });
     const matched = vehicles.vehicles.find((vehicle: Record<string, any>) => vehicle.tripInstanceRef && vehicle.stopStatus === 'in_transit_to');
     if (matched) evidence('vehicles:trip', (await callTool(env, 'get_vehicle_status', { ref: matched.tripInstanceRef })).structuredContent.vehicles[0]);
-    // NYCT publishes no train numbers (only an internal entity id), so only DC resolves one.
-    const train = coverage === 'dc' ? vehicles.vehicles.find((vehicle: Record<string, any>) => vehicle.tripInstanceRef) : undefined;
+    const train = vehicles.vehicles.find((vehicle: Record<string, any>) => vehicle.tripInstanceRef && vehicle.trainId);
+    expect(train).toBeDefined();
     if (train) {
-      const found = (await callTool(env, 'find_transit', { query: `train ${train.id}`, coverage: coverage! })).structuredContent;
-      evidence('train', { query: train.id, candidates: found.candidates.map((candidate: Record<string, any>) => `${candidate.name}:${candidate.providerId}`) });
+      const found = (await callTool(env, 'find_transit', { query: `train ${train.trainId}`, coverage: coverage! })).structuredContent;
+      evidence('train', { query: train.trainId, candidates: found.candidates.map((candidate: Record<string, any>) => `${candidate.name}:${candidate.providerId}`) });
       expect(found.candidates.map((candidate: Record<string, any>) => candidate.ref)).toContain(train.tripInstanceRef);
       const byTrip = (await callTool(env, 'get_vehicle_status', { ref: train.tripInstanceRef })).structuredContent;
       evidence('vehicle-by-trip', { status: byTrip.status, vehicles: byTrip.vehicles.length });

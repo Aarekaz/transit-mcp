@@ -13,7 +13,7 @@ const policies: Readonly<Record<string, RealtimeSourcePolicy>> = {
     // Shares the legacy tools' key: stay far below WMATA's default daily allowance.
     budget: { requestsPerHour: 600, safetyFactor: 0.8, reserveForStatic: 0 }, tripMatching: 'exact' },
   nyc: { namespace: 'nyc:mta', feedId: 'mta_subway', auth: { kind: 'none' },
-    budget: { requestsPerHour: 1500, safetyFactor: 1, reserveForStatic: 0 }, tripMatching: 'nyct_suffix', matchWindowSeconds: 4 * 3600,
+    budget: { requestsPerHour: 1500, safetyFactor: 1, reserveForStatic: 0 }, tripMatching: 'nyct_suffix', extensions: 'nyct', matchWindowSeconds: 4 * 3600,
     alertAgencyAliases: { MTASBWY: 'MTA NYCT' } },
 };
 

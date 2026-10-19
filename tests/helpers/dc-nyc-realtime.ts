@@ -80,14 +80,31 @@ export async function bandedArtifact(coverageId: 'dc' | 'nyc', db = memoryStorag
 }
 
 type Entity = transit_realtime.IFeedEntity;
-export const feedBytes = (timestamp: number, entity: Entity[]) =>
-  transit_realtime.FeedMessage.encode(transit_realtime.FeedMessage.fromObject({ header: { gtfsRealtimeVersion: '2.0', incrementality: 0, timestamp }, entity })).finish();
-export function nyctTrip(tripId: string, routeId: string, stops: [stopId: string, time: number][], startTime = '09:08:00', startDate = SERVICE_DATE): Entity {
-  return { id: tripId, tripUpdate: { trip: { tripId, routeId, startDate, startTime }, stopTimeUpdate: stops.map(([stopId, time]) => ({ stopId, arrival: { time }, departure: { time } })) } };
+const T = transit_realtime;
+const varint = (value: number) => { const out: number[] = []; while (value >= 0x80) { out.push((value % 0x80) | 0x80); value = Math.floor(value / 0x80); } out.push(value); return out; };
+const join = (...parts: (Uint8Array | number[])[]) => Uint8Array.from(parts.flatMap(part => [...part]));
+const field = (number: number, body: Uint8Array) => join(varint(number * 8 + 2), varint(body.length), body);
+/** An entity whose trip carries NYCT's train ID extension (TripDescriptor field 1001). */
+type NyctEntity = Entity & { nyctTrainId?: string };
+function entityBytes(entity: NyctEntity): Uint8Array {
+  const { nyctTrainId, ...plain } = entity;
+  if (!nyctTrainId) return T.FeedEntity.encode(T.FeedEntity.fromObject(plain)).finish();
+  const extension = field(1001, join(field(1, new TextEncoder().encode(nyctTrainId)), [2 * 8, 1]));
+  const withTrip = (trip: transit_realtime.ITripDescriptor, rest: Uint8Array) => join(field(1, join(T.TripDescriptor.encode(T.TripDescriptor.fromObject(trip)).finish(), extension)), rest);
+  const body = plain.tripUpdate
+    ? field(3, withTrip(plain.tripUpdate.trip!, T.TripUpdate.encode(T.TripUpdate.fromObject({ ...plain.tripUpdate, trip: undefined })).finish()))
+    : field(4, withTrip(plain.vehicle!.trip!, T.VehiclePosition.encode(T.VehiclePosition.fromObject({ ...plain.vehicle, trip: undefined })).finish()));
+  return join(field(1, new TextEncoder().encode(plain.id!)), body);
+}
+export const feedBytes = (timestamp: number, entity: NyctEntity[]) => join(
+  field(1, T.FeedHeader.encode(T.FeedHeader.fromObject({ gtfsRealtimeVersion: '2.0', incrementality: 0, timestamp })).finish()),
+  ...entity.map(item => field(2, entityBytes(item))));
+export function nyctTrip(tripId: string, routeId: string, stops: [stopId: string, time: number][], startTime = '09:08:00', startDate = SERVICE_DATE, nyctTrainId?: string): NyctEntity {
+  return { ...nyctTrainId ? { nyctTrainId } : {}, id: tripId, tripUpdate: { trip: { tripId, routeId, startDate, startTime }, stopTimeUpdate: stops.map(([stopId, time]) => ({ stopId, arrival: { time }, departure: { time } })) } };
 }
 /** A train as NYCT reports it: a stop and status, no coordinates. Status 0 incoming, 1 stopped, 2 in transit. */
-export function nyctVehicle(tripId: string, routeId: string, stopId: string, currentStatus: 0 | 1 | 2, timestamp: number, startDate = SERVICE_DATE): Entity {
-  return { id: `v-${tripId}`, vehicle: { trip: { tripId, routeId, startDate }, stopId, currentStatus, timestamp } };
+export function nyctVehicle(tripId: string, routeId: string, stopId: string, currentStatus: 0 | 1 | 2, timestamp: number, startDate = SERVICE_DATE, nyctTrainId?: string): NyctEntity {
+  return { ...nyctTrainId ? { nyctTrainId } : {}, id: `v-${tripId}`, vehicle: { trip: { tripId, routeId, startDate }, stopId, currentStatus, timestamp } };
 }
 
 /** Upstream documents by URL path; any path absent from `documents` answers 503. */

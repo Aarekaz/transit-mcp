@@ -21,7 +21,9 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
       stop: boundedText.optional().describe('Station name, with coverage. Give this or ref.'), coverage: coverageSchema.optional(),
       limit: z.number().int().min(1).max(100).default(20),
     }),
-    outputSchema: z.strictObject({ ...resultShape, vehicles: z.array(z.strictObject({ id: z.string(), tripInstanceRef: z.string().nullable(), routeRef: z.string().nullable(),
+    outputSchema: z.strictObject({ ...resultShape, vehicles: z.array(z.strictObject({ id: z.string(),
+      trainId: z.string().nullable().describe('The agency\'s train identifier: an NYCT train ID such as "1A 1023 207/FAR" (line, scheduled origin time, origin/destination) or the label WMATA publishes. find_transit resolves it to this train\'s trip.'),
+      tripInstanceRef: z.string().nullable(), routeRef: z.string().nullable(),
       routeName: z.string().nullable().describe('Public route name, e.g. "A" or "Red".'), headsign: z.string().nullable(),
       stopStatus: z.enum(['stopped_at', 'incoming_at', 'in_transit_to']).nullable().describe('Relation to stopRef: stopped there, arriving, or travelling towards it.'),
       stopRef: z.string().nullable(), stopName: z.string().nullable(),
@@ -74,7 +76,8 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
         const coordinates = vehicle.latitude !== undefined && vehicle.longitude !== undefined ? { coordinates: { latitude: vehicle.latitude, longitude: vehicle.longitude }, coordinatesSource: 'vehicle' as const } :
           vehicle.currentStatus === 'STOPPED_AT' && stationLatitude != null && stationLongitude != null ? { coordinates: { latitude: stationLatitude, longitude: stationLongitude }, coordinatesSource: 'stop' as const } :
           { coordinates: null, coordinatesSource: null };
-        return { id: vehicle.vehicleId ?? vehicle.entityId, tripInstanceRef: vehicle.tripInstanceRef ?? null, routeRef: route?.ref ?? null,
+        const trainId = vehicle.trainId ?? vehicle.label;
+        return { id: vehicle.vehicleId ?? vehicle.entityId, trainId: trainId ? sanitizeTransitText(trainId, 40) : null, tripInstanceRef: vehicle.tripInstanceRef ?? null, routeRef: route?.ref ?? null,
           routeName: route ? routeName(route) : null, headsign: vehicle.headsign ? sanitizeTransitText(vehicle.headsign, 200) : null,
           stopStatus: at !== null && vehicle.currentStatus ? STOP_STATUS[vehicle.currentStatus] : null, stopRef: at, stopName: stopName(at),
           previousStopRef: previous, previousStopName: stopName(previous), ...coordinates,

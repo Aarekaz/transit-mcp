@@ -54,6 +54,8 @@ export interface NormalizedVehicle {
   /** The stop the vehicle is at or heading to, as the producer reports it. */
   stopId?: string;
   currentStatus?: VehicleStopStatus;
+  /** NYCT train ID (`1A 1023 207/FAR`: line, scheduled origin time, origin/destination). */
+  trainId?: string;
   /** Set by schedule matching: headsign and the stop served before `stopId`. */
   headsign?: string;
   previousStopId?: string;
@@ -184,7 +186,48 @@ function dropMistypedAlertFields(bytes: Uint8Array): { bytes: Uint8Array; droppe
   return { bytes: Uint8Array.from(out), dropped };
 }
 
-export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
+/** Visits each field of one protobuf message; length-delimited fields carry their body. */
+function eachField(bytes: Uint8Array, visit: (field: number, wire: number, body?: Uint8Array) => void): void {
+  let at = 0;
+  while (at < bytes.length) {
+    const [tag, afterTag] = readVarint(bytes, at), field = Math.floor(tag / 8), wire = tag % 8;
+    if (wire === 0) { at = readVarint(bytes, afterTag)[1]; visit(field, wire); continue; }
+    if (wire === 1 || wire === 5) { at = afterTag + (wire === 1 ? 8 : 4); visit(field, wire); continue; }
+    if (wire !== 2) throw new Error('unsupported wire type');
+    const [length, from] = readVarint(bytes, afterTag);
+    if (from + length > bytes.length) throw new Error('truncated field');
+    at = from + length; visit(field, wire, bytes.subarray(from, at));
+  }
+}
+const NYCT_TRAIN_ID = /^[A-Za-z0-9 +/.-]{1,32}$/;
+/** NYCT's TripDescriptor extension (field 1001) names the train running a trip; the
+ * standard bindings skip it. One entry per feed entity, in feed order. */
+function nyctTrainIds(bytes: Uint8Array): (string | undefined)[] {
+  const ids: (string | undefined)[] = [];
+  eachField(bytes, (field, wire, entity) => {
+    if (field !== 2 || wire !== 2 || !entity) return;
+    let trainId: string | undefined;
+    eachField(entity, (kind, kindWire, message) => {
+      if ((kind !== 3 && kind !== 4) || kindWire !== 2 || !message) return;
+      eachField(message, (part, partWire, trip) => {
+        if (part !== 1 || partWire !== 2 || !trip) return;
+        eachField(trip, (extension, extensionWire, nyct) => {
+          if (extension !== 1001 || extensionWire !== 2 || !nyct) return;
+          eachField(nyct, (item, itemWire, value) => {
+            const text = item === 1 && itemWire === 2 && value ? new TextDecoder().decode(value).trim().replace(/\s+/g, ' ') : undefined;
+            if (text && NYCT_TRAIN_ID.test(text)) trainId ??= text;
+          });
+        });
+      });
+    });
+    ids.push(trainId);
+  });
+  return ids;
+}
+
+export interface DecodeOptions { /** Read NYCT's train IDs from its protobuf extension. */ nyct?: boolean }
+
+export function decodeRealtimeFeed(bytes: Uint8Array, options: DecodeOptions = {}): NormalizedRealtimeFeed {
   let message: transit_realtime.FeedMessage, repaired = false;
   try {
     message = transit_realtime.FeedMessage.decode(bytes);
@@ -209,7 +252,10 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
   };
 
   if (message.header.incrementality === 1) throw new Error('Unsupported differential GTFS-Realtime feed');
-  for (const entity of message.entity) {
+  // A train ID is a label beside the feed, never a reason to reject it.
+  let trainIds: (string | undefined)[] = [];
+  if (options.nyct) try { trainIds = nyctTrainIds(bytes); } catch { trainIds = []; }
+  for (const [index, entity] of message.entity.entries()) {
     if (entity.isDeleted) { feed.warnings.push('unsupported_deleted_entity'); continue; }
     if (entity.tripUpdate) {
       const update = entity.tripUpdate, descriptor = update.trip;
@@ -250,6 +296,7 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
         bearing: ownNumber(vehicle.position, 'bearing'),
         speedMetersPerSecond: ownNumber(vehicle.position, 'speed'),
         timestampSeconds: ownNumber(vehicle, 'timestamp'),
+        ...(trainIds[index] ? { trainId: trainIds[index] } : {}),
       });
     }
 

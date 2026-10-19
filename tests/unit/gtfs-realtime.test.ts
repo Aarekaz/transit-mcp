@@ -377,6 +377,16 @@ describe('GTFS realtime policy', () => {
       ['A12N', 'IN_TRANSIT_TO', 'A15N'], ['A24N', 'STOPPED_AT', undefined], ['H11S', 'STOPPED_AT', undefined]]);
   });
 
+  it('reads NYCT train IDs only when asked, and never fails a feed over one', async () => {
+    const { feedBytes, nyctVehicle } = await import('../helpers/dc-nyc-realtime');
+    const bytes = feedBytes(1_000, [nyctVehicle('054800_1..S03R', '1', '127S', 1, 990, '20261019', '01 0908 242/SFT'), nyctVehicle('054900_2..S01R', '2', '128S', 2, 990)]);
+    expect(decodeRealtimeFeed(bytes, { nyct: true }).vehicles.map(vehicle => vehicle.trainId)).toEqual(['01 0908 242/SFT', undefined]);
+    expect(decodeRealtimeFeed(bytes).vehicles.map(vehicle => vehicle.trainId)).toEqual([undefined, undefined]);
+    // An implausible ID is ignored rather than passed through.
+    const odd = feedBytes(1_000, [nyctVehicle('054800_1..S03R', '1', '127S', 1, 990, '20261019', '<script>')]);
+    expect(decodeRealtimeFeed(odd, { nyct: true }).vehicles[0]).not.toHaveProperty('trainId');
+  });
+
   it('drops alert fields whose wire type contradicts the spec instead of losing the alert', () => {
     // WMATA rail alerts as published on 2026-10-19: severity sent as a varint in field 12 (tts_header_text).
     const wmata = Uint8Array.from(Buffer.from([

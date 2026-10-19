@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- NYC train IDs. `get_vehicle_status` returns each train's `trainId` (MTA's, such as `1A 1023 207/FAR`: line, scheduled origin time, origin/destination; WMATA's number in DC), read from NYCT's protobuf extension in the documents already polled. `find_transit` resolves `train <id>` to the trip that train is running, ignoring case and spacing.
 - DC Metro and the NYC Subway now serve the five global tools in production: trip planning, departures, service status, and train locations. Planning uses the published WMATA and MTA timetables with live predictions; every itinerary is independently validated.
 - NYC departures read all eight subway feeds together and include rerouted trains and trains missing from the timetable, marked as observed. If any feed is missing or frozen, NYC falls back to the timetable rather than showing a partial picture.
 - Timetables refresh at the edge: the existing cron checks WMATA and MTA cheaply and a Cloudflare Workflow rebuilds only when a new timetable is published. Updates that remove most of a day's service are rejected; updates that make live matching worse roll back.

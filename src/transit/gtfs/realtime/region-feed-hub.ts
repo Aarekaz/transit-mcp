@@ -167,7 +167,7 @@ export class RegionFeedHub implements DurableObject {
     try {
       const response = await fetch(upstreamRequest(source, url, this.#env), { signal: controller.signal });
       if (!response.ok) throw new Error(`upstream_status_${response.status}`);
-      return decodeRealtimeFeed(await readBody(response, spec.maxBytes));
+      return decodeRealtimeFeed(await readBody(response, spec.maxBytes), { nyct: source.policy.extensions === 'nyct' });
     } finally {
       clearTimeout(timeout);
     }

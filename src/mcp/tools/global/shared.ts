@@ -350,18 +350,20 @@ export async function readFeed<T>(context: MetroMcpContext, data: TransitData, k
 /** Train numbers are observations, not schedule entities. Resolve one only from a fresh
  * vehicle feed, to the dated trip instance that train is running; never guess. */
 export async function trainCandidates(context: MetroMcpContext, data: TransitData, query: string, signal: AbortSignal): Promise<{ candidates: Candidate[]; sources: SourceStatus[] }> {
-  const number = query.trim().replace(/^train\s+/i, '');
-  if (!/^[A-Za-z0-9-]{1,16}$/.test(number) || !effectiveCapabilities(context, data.coverage, false).vehicles) return { candidates: [], sources: [] };
+  // A DC train number (`644`) or an NYCT train ID (`1A 1023 207/FAR`), compared case- and spacing-insensitively.
+  const normalize = (value: string) => value.trim().replace(/\s+/g, ' ').toUpperCase();
+  const number = normalize(query.replace(/^\s*train\s+/i, ''));
+  if (!/^[A-Z0-9 +/.-]{1,32}$/.test(number) || !effectiveCapabilities(context, data.coverage, false).vehicles) return { candidates: [], sources: [] };
   const now = Math.floor(Date.now() / 1000);
   const feed = await readFeed<NormalizedVehicle>(context, data, 'vehicle_positions', now, signal);
   const maxAge = data.coverage.thresholds.vehiclePositions.realtimeSeconds;
   const candidates = new Map<string, Candidate>();
   for (const vehicle of feed.status === 'realtime' ? feed.payload ?? [] : []) {
     const age = vehicle.timestampSeconds === undefined ? Infinity : now - vehicle.timestampSeconds;
-    if (!vehicle.tripInstanceRef || age < 0 || age > maxAge || vehicle.vehicleId !== number && vehicle.label !== number) continue;
+    if (!vehicle.tripInstanceRef || age < 0 || age > maxAge || ![vehicle.vehicleId, vehicle.label, vehicle.trainId].some(id => id !== undefined && normalize(id) === number)) continue;
     const instance = parseTransitRef(vehicle.tripInstanceRef);
     if (!instance || instance.kind !== 'trip') continue;
-    candidates.set(vehicle.tripInstanceRef, { ref: vehicle.tripInstanceRef, kind: 'trip', name: sanitizeTransitText(`Train ${vehicle.vehicleId ?? vehicle.label}`),
+    candidates.set(vehicle.tripInstanceRef, { ref: vehicle.tripInstanceRef, kind: 'trip', name: sanitizeTransitText(`Train ${vehicle.trainId ?? vehicle.vehicleId ?? vehicle.label}`),
       coverage: instance.coverage, feed: instance.feed, providerId: instance.id });
   }
   return { candidates: [...candidates.values()].sort((a, b) => a.ref.localeCompare(b.ref)), sources: candidates.size ? realtimeSource(data, feed, 'vehicle_positions', now) : [] };
