@@ -104,11 +104,19 @@ export function matchVehicles(vehicles: NormalizedVehicle[], context: TripMatchC
   });
 }
 
+/** NYCT trip IDs are `origin_route..direction` plus an optional pattern code
+ * (`040200_7..S97R`). Some lines (7, L, SIR and parts of F and G) publish only the short form. */
+const NYCT_SHORT_TRIP = /^\d{6}_[^.]+\.\.[NS]/;
+const SHORT_PREFIX = 'short:';
+
 function tripIndex(context: TripMatchContext): Map<string, { shard: ScheduleShard; trip: ScheduleTrip }[]> {
   const index = new Map<string, { shard: ScheduleShard; trip: ScheduleTrip }[]>();
+  const add = (key: string, entry: { shard: ScheduleShard; trip: ScheduleTrip }) => { const entries = index.get(key) ?? []; entries.push(entry); index.set(key, entries); };
   for (const shard of context.shards) for (const trip of shard.trips) {
     const key = realtimeTripKey(trip.providerId, context.tripMatching);
-    const entries = index.get(key) ?? []; entries.push({ shard, trip }); index.set(key, entries);
+    add(key, { shard, trip });
+    const short = context.tripMatching === 'nyct_suffix' ? NYCT_SHORT_TRIP.exec(key)?.[0] : undefined;
+    if (short) add(`${SHORT_PREFIX}${short}`, { shard, trip });
   }
   return index;
 }
@@ -118,13 +126,18 @@ function matchIndexedTrip(update: NormalizedTripUpdate, context: TripMatchContex
   try { parseServiceDate(update.startDate); } catch { return null; }
   const exact = tripCandidates(update, update.tripId, update.startDate, context, index);
   if (exact.length || context.tripMatching !== 'nyct_suffix') return exact.length === 1 ? exact[0]! : null;
+  // A short NYCT ID names the one scheduled trip it prefixes; several is ambiguous, not a match.
+  const short = (tripId: string, serviceDate: string) => NYCT_SHORT_TRIP.exec(tripId)?.[0] === tripId ? tripCandidates(update, `${SHORT_PREFIX}${tripId}`, serviceDate, context, index) : [];
+  const prefixed = short(update.tripId, update.startDate);
+  if (prefixed.length) return prefixed.length === 1 ? prefixed[0]! : null;
   // NYCT dates a trip running after midnight by calendar day, either keeping its >24h
   // origin (144000_6..N04X001) or restarting the clock (003750_J..N41R for 147750). Both
   // name the previous service day's trip; used only when the start date has no match.
   const previous = nyctPreviousDayTripId(update.tripId);
   if (!previous) return null;
-  const shifted = tripCandidates(update, previous, shiftServiceDate(update.startDate, -1), context, index);
-  return shifted.length === 1 ? shifted[0]! : null;
+  const day = shiftServiceDate(update.startDate, -1), shifted = tripCandidates(update, previous, day, context, index);
+  const candidates = shifted.length ? shifted : short(previous, day);
+  return candidates.length === 1 ? candidates[0]! : null;
 }
 
 /** NYCT trip IDs start with the origin time in hundredths of a minute (144000 = 24:00). */

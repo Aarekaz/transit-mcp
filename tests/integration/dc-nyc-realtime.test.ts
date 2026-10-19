@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { transit_realtime } from 'gtfs-realtime-bindings';
 import { NYC_TRIP_FEEDS } from '../../src/regions/nyc';
 import { formatTripInstanceRef, parseTransitRef } from '../../src/transit/core/refs';
-import { NOW, SERVICE_DATE, bandedArtifact, callTool, civil, feedBytes, liveEnv, nowSeconds, nyctTrip, nyctVehicle, upstream, wireHub } from '../helpers/dc-nyc-realtime';
+import { NOW, NYC_FILES, SERVICE_DATE, bandedArtifact, callTool, civil, feedBytes, liveEnv, nowSeconds, nyctTrip, nyctVehicle, upstream, wireHub } from '../helpers/dc-nyc-realtime';
 
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW)); });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
@@ -32,9 +32,9 @@ function nycDocuments(stamp = nowSeconds(), overrides: Partial<Record<string, Ui
   return { ...documents, ...overrides } as Record<string, Uint8Array>;
 }
 
-async function nyc(documents = nycDocuments()) {
+async function nyc(documents = nycDocuments(), files = NYC_FILES) {
   quiet();
-  const artifact = await bandedArtifact('nyc');
+  const artifact = await bandedArtifact('nyc', undefined, files);
   const env = liveEnv(artifact.db);
   const hub = wireHub(env, artifact.db, 'nyc:mta');
   const network = upstream(documents);
@@ -76,6 +76,25 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     // A platform covers only itself.
     expect((await callTool(f.env, 'get_vehicle_status', { ref: f.ref('stop', '725S') })).structuredContent.vehicles.map((vehicle: { stopRef: string }) => vehicle.stopRef))
       .toEqual([f.ref('stop', '725S')]);
+  });
+
+  it('matches a short NYCT trip ID to the one scheduled trip it prefixes, and never an ambiguous one', async () => {
+    // The 7, L and SIR publish `055400_1..S` for the scheduled `..._055400_1..S03R`.
+    // Carried in another line's document, beside the other trains.
+    const short = (stamp = nowSeconds()) => nycDocuments(stamp, { 'nyct/gtfs-l': feedBytes(stamp, [nyctTrip('055400_1..S', '1', [['129S', civil('09:18:30')]], '09:14:00')]) });
+    const matched = await nyc(short());
+    const row = (await callTool(matched.env, 'get_departures', { stopRef: matched.ref('stop', '129'), windowSeconds: 1800 })).structuredContent.departures
+      .find((departure: Row) => tripId(departure) === 'AFA25GEN-1092-Weekday-00_055400_1..S03R');
+    expect(row).toMatchObject({ scheduleMatch: 'matched', status: 'realtime', scheduledTime: expect.any(String) });
+    expect(instant(row.predictedTime)).toBe(new Date(civil('09:18:30') * 1000).toISOString());
+    // A second scheduled pattern with the same origin, line and direction: the short ID names neither.
+    const files = { ...NYC_FILES,
+      'trips.txt': NYC_FILES['trips.txt'] + '1,AFA25GEN-1092-Weekday-00_055400_1..S03X,Weekday,South Ferry,1\n',
+      'stop_times.txt': NYC_FILES['stop_times.txt'] + 'AFA25GEN-1092-Weekday-00_055400_1..S03X,09:14:00,09:14:00,127S,1\nAFA25GEN-1092-Weekday-00_055400_1..S03X,09:20:00,09:20:00,129S,2\n' };
+    const ambiguous = await nyc(short(), files);
+    const rows = (await callTool(ambiguous.env, 'get_departures', { stopRef: ambiguous.ref('stop', '129'), windowSeconds: 1800 })).structuredContent.departures;
+    expect(rows.filter((departure: Row) => instant(departure.predictedTime) === new Date(civil('09:18:30') * 1000).toISOString())
+      .map((departure: Row) => [departure.scheduleMatch, departure.scheduledTime])).toEqual([['unmatched_trip', null]]);
   });
 
   it('lists departures across every station of a complex', async () => {
@@ -308,7 +327,8 @@ describe('Washington Metrorail through the global tools', () => {
     const f = await dc({ vehicles: [vehicle] });
     const instance = formatTripInstanceRef({ coverage: 'dc', feed: 'wmata', id: '14362694_20741', serviceDate: SERVICE_DATE, startTime: '09:02:00' });
     const byTrip = (await callTool(f.env, 'get_vehicle_status', { ref: instance })).structuredContent;
-    expect(byTrip).toMatchObject({ status: 'realtime', vehicles: [{ id: '118', tripInstanceRef: instance }] });
+    // WMATA publishes "R" as the Red Line's short name; riders say "Red".
+    expect(byTrip).toMatchObject({ status: 'realtime', vehicles: [{ id: '118', tripInstanceRef: instance, routeName: 'Red', coordinatesSource: 'vehicle' }] });
     // GTFS-Realtime positions are float32.
     expect(byTrip.vehicles[0].coordinates.latitude).toBeCloseTo(38.905, 5);
     expect(byTrip.vehicles[0].coordinates.longitude).toBeCloseTo(-77.041, 5);

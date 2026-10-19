@@ -67,10 +67,10 @@ export const DC_FILES: GtfsScheduleFiles = {
   'calendar.txt': calendar,
 };
 
-export async function bandedArtifact(coverageId: 'dc' | 'nyc', db = memoryStorage()) {
+export async function bandedArtifact(coverageId: 'dc' | 'nyc', db = memoryStorage(), files: GtfsScheduleFiles = coverageId === 'dc' ? DC_FILES : NYC_FILES) {
   const coverage = getCoverage(coverageId)!;
   const feedId = coverageId === 'dc' ? 'wmata' : 'mta_subway';
-  const compiled = await compileSchedule({ coverage, feedId, files: coverageId === 'dc' ? DC_FILES : NYC_FILES,
+  const compiled = await compileSchedule({ coverage, feedId, files,
     window: { startDate: '20261018', endDate: '20261021' },
     source: { url: coverageId === 'dc' ? 'https://api.wmata.com/gtfs/rail-gtfs-static.zip' : 'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip', retrievedAt: '2026-10-18T00:00:00Z' } });
   const partitioned = await partitionSchedule(compiled, 3 * 3600);
