@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Env } from '../../src/types';
 import { createRegionalTransitService } from '../../src/transit/gtfs/realtime/service';
 import { RegionFeedHub } from '../../src/transit/gtfs/realtime/region-feed-hub';
+import { getRealtimeSources } from '../../src/transit/gtfs/realtime/sources';
 import { RealtimeSnapshotStore, StaticArtifactStore, SF511_QUOTA_NAMESPACE } from '../../src/transit/gtfs/realtime/snapshot-store';
 import { memoryStorage, realtimeFixture } from '../helpers/realtime-fixture';
 import { transit_realtime } from 'gtfs-realtime-bindings';
@@ -17,7 +18,10 @@ async function setup(fixture?: Awaited<ReturnType<typeof realtimeFixture>>) {
   const artifacts = new StaticArtifactStore(db.bucket), version = await artifacts.publish(f.manifest);
   const env = { TRANSIT_ARTIFACTS: db.bucket, SFBAY_MODE: 'dark', SF511_API_KEY: 'test-credential' } as Env;
   const hub = new RegionFeedHub({ storage: db.storage, blockConcurrencyWhile: async (run: () => Promise<void>) => run() } as unknown as DurableObjectState, env);
-  env.REGION_FEED_HUB = { idFromName: (name: string) => { expect(name).toBe(SF511_QUOTA_NAMESPACE); return {}; }, get: () => ({ fetch: (request: string | Request) => hub.fetch(typeof request === 'string' ? new Request(request) : request) }) } as unknown as DurableObjectNamespace;
+  // Coordinators are addressed only by registered names; SF keeps its original one.
+  const namespaces = getRealtimeSources().map(source => source.policy.namespace);
+  expect(namespaces).toContain(SF511_QUOTA_NAMESPACE);
+  env.REGION_FEED_HUB = { idFromName: (name: string) => { expect(namespaces).toContain(name); return { toString: () => name }; }, get: () => ({ fetch: (request: string | Request) => hub.fetch(typeof request === 'string' ? new Request(request) : request) }) } as unknown as DurableObjectNamespace;
   const store = new RealtimeSnapshotStore(db.storage, db.bucket);
   return { db, f, env, hub, store, version, artifacts, service: createRegionalTransitService(env) };
 }

@@ -18,6 +18,12 @@ export interface NormalizedStopUpdate {
   scheduledArrivalTimeSeconds?: number;
   scheduledDepartureTimeSeconds?: number;
   status?: 'realtime' | 'scheduled_only' | 'canceled' | 'skipped';
+  /** Absent or `matched`: a call of a canonical scheduled trip instance. `unscheduled_call`:
+   * an observed stop outside the matched trip's pattern (a reroute). `unmatched_trip`: an
+   * observed train with no canonical schedule. Neither has a scheduled time. */
+  scheduleMatch?: 'matched' | 'unscheduled_call' | 'unmatched_trip';
+  /** Last reported stop of the observed train, for unscheduled rows only. */
+  destinationStopId?: string;
 }
 
 export type TripRelationship = 'SCHEDULED' | 'ADDED' | 'UNSCHEDULED' | 'CANCELED' | 'REPLACEMENT' | 'DUPLICATED' | 'UNKNOWN';
@@ -182,10 +188,13 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
     if (entity.alert) {
       const informedEntities = entity.alert.informedEntity ?? [];
       const selectors = informedEntities.map(alertSelector);
-      const activePeriods = (entity.alert.activePeriod ?? []).map(period => ({
-        ...(Object.hasOwn(period, 'start') ? { start: ownNumber(period, 'start') } : {}),
-        ...(Object.hasOwn(period, 'end') ? { end: ownNumber(period, 'end') } : {}),
-      }));
+      // Some producers (WMATA) encode an open bound as 0. The epoch can never bound a
+      // current alert, so 0 is the same open interval as an absent field.
+      const bound = (period: transit_realtime.ITimeRange, key: 'start' | 'end') => {
+        const value = Object.hasOwn(period, key) ? ownNumber(period, key) : undefined;
+        return value === 0 ? {} : Object.hasOwn(period, key) ? { [key]: value } : {};
+      };
+      const activePeriods = (entity.alert.activePeriod ?? []).map(period => ({ ...bound(period, 'start'), ...bound(period, 'end') }));
       if (!safeAlertIdentifier(entity.id) || selectors.length > 100 || selectors.some(selector => !safeAlertSelector(selector)) || activePeriods.length > 32 ||
         activePeriods.some(period => Object.values(period).some(value => value === undefined || !Number.isSafeInteger(value) || value < 0 || value > 253402300799) ||
           period.start !== undefined && period.end !== undefined && period.end <= period.start)) {

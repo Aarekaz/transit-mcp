@@ -377,6 +377,9 @@ describe('GTFS realtime policy', () => {
     expect(pollAttemptState('trip_updates', 1234)).toEqual({ 'polled:trip_updates': 1234 });
     expect(safePollFailureReason(new Error('fetch https://api.511.org/?api_key=secret failed'))).toBe('upstream_request_failed');
     expect(safePollFailureReason(new Error('upstream_body_too_large'))).toBe('upstream_body_too_large');
+    expect(safePollFailureReason(new Error('upstream_status_401'))).toBe('upstream_status_401');
+    expect(safePollFailureReason(new Error('upstream_status_401 api_key=secret'))).toBe('upstream_request_failed');
+    expect(safePollFailureReason(Object.assign(new Error('aborted'), { name: 'AbortError' }))).toBe('upstream_timeout');
     expect(safePollFailureReason(new Error('Malformed GTFS-Realtime feed'))).toBe('malformed_feed');
   });
 });

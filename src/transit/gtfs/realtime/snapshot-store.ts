@@ -108,7 +108,9 @@ function indexKey(value: unknown): string {
 }
 
 export class RealtimeSnapshotStore {
-  constructor(private readonly storage: DurableObjectStorage, private readonly bucket: R2Bucket) {}
+  constructor(private readonly storage: DurableObjectStorage, private readonly bucket: R2Bucket, private readonly coverageId = 'sfbay') {
+    if (!/^[a-z0-9_]+$/.test(coverageId)) throw new Error('Invalid coverage namespace');
+  }
 
   async publish<T>(kind: RealtimeFeedKind, snapshot: NormalizedRealtimeSnapshot<T>): Promise<void> {
     const { payload, ...base } = snapshot;
@@ -128,7 +130,7 @@ export class RealtimeSnapshotStore {
         if (!batch.length) return;
         const bytes = new TextEncoder().encode(`[${batch.join(',')}]`), hash = await sha256(bytes);
         objects.push({ bytes, descriptor: { partition: part, byteLength: bytes.length, sha256: hash,
-          key: `realtime/sfbay/${snapshot.version.artifactVersion}/${kind}/${hash}.json` } });
+          key: `realtime/${this.coverageId}/${snapshot.version.artifactVersion}/${kind}/${hash}.json` } });
         batch = []; size = 2;
       };
       for (const record of records) {
