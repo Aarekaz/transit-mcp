@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Transit MCP docs · Live DC and NYC data</title>
-  <meta name="description" content="Connect any MCP client to free DC Metro and NYC Subway tools. Global capabilities report coverage availability; SF Bay support is in development.">
+  <meta name="description" content="Connect any MCP client to free DC Metro and NYC Subway tools. Trip planning, live departures, and service alerts; SF Bay support is in development.">
   <link rel="canonical" href="https://transitmcp.com/docs/">
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
 
@@ -13,14 +13,14 @@
   <meta property="og:site_name" content="Transit MCP">
   <meta property="og:url" content="https://transitmcp.com/docs/">
   <meta property="og:title" content="Transit MCP docs · Live DC and NYC data">
-  <meta property="og:description" content="Connect any MCP client to free DC Metro and NYC Subway tools. Global capabilities report coverage availability; SF Bay support is in development.">
+  <meta property="og:description" content="Connect any MCP client to free DC Metro and NYC Subway tools. Trip planning, live departures, and service alerts; SF Bay support is in development.">
   <meta property="og:image" content="https://transitmcp.com/og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="Transit MCP: live DC and NYC transit data">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Transit MCP docs · Live DC and NYC data">
-  <meta name="twitter:description" content="Connect any MCP client to free DC Metro and NYC Subway tools. Global capabilities report coverage availability; SF Bay support is in development.">
+  <meta name="twitter:description" content="Connect any MCP client to free DC Metro and NYC Subway tools. Trip planning, live departures, and service alerts; SF Bay support is in development.">
   <meta name="twitter:image" content="https://transitmcp.com/og-image.png">
   <script type="application/ld+json">
   {
@@ -30,7 +30,7 @@
     "headline": "Transit MCP docs",
     "url": "https://transitmcp.com/docs/",
     "mainEntityOfPage": "https://transitmcp.com/docs/",
-    "description": "Client setup, endpoints, 13 compatible DC/NYC tools and five global capabilities with explicit coverage availability.",
+    "description": "Client setup, endpoints, 13 compatible DC/NYC tools, and five global tools for trip planning, departures, service status, and vehicles.",
     "image": "https://transitmcp.com/og-image.png",
     "inLanguage": "en",
     "author": {
@@ -704,9 +704,14 @@
               <p><code>get_route_info</code> returns route names and service descriptions. <code>get_station_transfers</code> returns platform and nearby transfers with walk times in seconds and minutes.</p>
             </div>
             <div class="tool-card">
+              <h3>Trip planning and departures</h3>
+              <p>DC Metro and the NYC Subway serve the five global tools: <code>find_transit</code>, <code>plan_trip</code>, <code>get_departures</code>, <code>get_service_status</code>, and <code>get_vehicle_status</code>. Trips are planned from the published WMATA and MTA timetables with live predictions applied, and every itinerary is checked by an independent validator before it is returned.</p>
+              <p><code>get_departures</code> takes a station name or a reference. A station complex such as Times Sq-42 St counts as one place; different stations that share a name, like the several 86 St stations, come back as choices. NYC departures include rerouted trains and trains missing from the timetable, marked as observed. Train locations are available for DC only, because MTA's subway feed does not publish them.</p>
+              <p>Results say whether they are <code>realtime</code>, <code>scheduled_only</code>, or <code>unavailable</code>, with source timestamps and reasons. Never piece a journey together from departure boards; use <code>plan_trip</code>. The Transit Board enhancement covers only the 13 legacy tools.</p>
+            </div>
+            <div class="tool-card">
               <h3>San Francisco Bay Area</h3>
-              <p>SF Bay support is in development. Five global tools are always registered: <code>find_transit</code>, <code>plan_trip</code>, <code>get_departures</code>, <code>get_service_status</code>, and <code>get_vehicle_status</code>. Availability depends on validated data and rollout gates; SF remains dark and DC/NYC global planning defaults off. The 13 legacy DC/NYC tools remain supported. Data attribution remains with 511 SF Bay and participating operators.</p>
-              <p>Use <code>plan_trip</code> for journeys. Results distinguish realtime, scheduled-only, and unavailable data, with source timestamps and explicit reasons. Never infer a journey from departure boards. Global tools have text and structured results; the Transit Board enhancement covers only the 13 legacy tools.</p>
+              <p>SF Bay support is in development. The global tools report it as unavailable until its data passes the same checks. Data attribution remains with 511 SF Bay and participating operators.</p>
             </div>
             <div class="tool-card">
               <h3>Progress and safety hints</h3>
@@ -717,7 +722,7 @@
 
         <section id="data">
           <h2>Data sources and cache windows</h2>
-          <p class="section-copy">Transit MCP normalizes official agency data into MCP-friendly JSON. DC uses WMATA APIs and NYC uses MTA feeds. The dark SF Bay development pipeline validates 511 SF Bay regional GTFS static and realtime data without exposing it on the production MCP surface.</p>
+          <p class="section-copy">Transit MCP normalizes official agency data into MCP-friendly JSON. The legacy tools call WMATA APIs and MTA feeds directly. The global tools use each agency's published GTFS timetable, rebuilt automatically when a new one appears, plus GTFS-realtime feeds polled every 30 seconds to a few minutes. The dark SF Bay development pipeline validates 511 SF Bay regional GTFS static and realtime data without exposing it on the production MCP surface.</p>
           <div class="source-grid">
             <article class="source-card">
               <header>
@@ -737,6 +742,8 @@
                     <tr><td>Bus routes</td><td><code>/Bus.svc/json/jRoutes</code></td><td>1 hour</td></tr>
                     <tr><td>Bus stops</td><td><code>/Bus.svc/json/jStops</code></td><td>30 min</td></tr>
                     <tr><td>Bus positions</td><td><code>/Bus.svc/json/jBusPositions</code></td><td>10 sec</td></tr>
+                    <tr><td>Timetable (global tools)</td><td><code>/gtfs/rail-gtfs-static.zip</code></td><td>Checked every 6 hours, rebuilt on change</td></tr>
+                    <tr><td>Live trips, trains, alerts (global tools)</td><td><code>/gtfs/rail-gtfsrt-*.pb</code></td><td>30 sec to 2 min polling</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -768,6 +775,8 @@
                     <tr><td>Stations</td><td>Bundled <code>NYC_STATIONS</code> metadata</td><td>Static asset in code</td></tr>
                     <tr><td>Routes</td><td>Bundled <code>NYC_ROUTES</code> metadata</td><td>Static asset in code</td></tr>
                     <tr><td>Transfers</td><td>Bundled station transfer records</td><td>Static asset in code</td></tr>
+                    <tr><td>Timetable (global tools)</td><td>MTA supplemented subway GTFS, which includes planned service changes</td><td>Checked every 5 min, rebuilt on change</td></tr>
+                    <tr><td>Live trips (global tools)</td><td>All eight <code>nyct/gtfs*</code> feeds, read together; if one is missing, departures fall back to the timetable</td><td>30 sec polling</td></tr>
                   </tbody>
                 </table>
               </div>

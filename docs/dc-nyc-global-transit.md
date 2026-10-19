@@ -18,26 +18,37 @@ Provider rules live in `src/transit/gtfs/realtime/sources.ts` (server-side; publ
 ## Result contract additions
 
 - `get_departures` rows carry `scheduleMatch`: `matched` (a call of a canonical scheduled trip instance), `unscheduled_call` (an observed stop outside that trip's pattern) or `unmatched_trip` (an observed train with no published schedule). Observed rows have `scheduledTime: null` and `stopSequence: null`; their headsign is the last reported stop.
-- `plan_trip` and itinerary revalidation use only `matched` rows. Journeys are never built from predictions. Station (`location_type` 1) endpoints are satisfied at their own platforms; a name matching one station and its platforms resolves to the station, while different stations with one name (for example the four "Times Sq-42 St" complexes) stay `ENTITY_AMBIGUOUS`.
+- `plan_trip` and itinerary revalidation use only `matched` rows. Journeys are never built from predictions. Station (`location_type` 1) endpoints are satisfied at their own platforms. Names resolve to places: a station with its platforms and entrances is one place, and so are same-named stations the publisher links with a transfer or that sit within 200 m of each other (the four Times Sq-42 St stations, or Grand Central's 4/5/6 and shuttle). Different places with one name, like the six 86 St stations, return `ENTITY_AMBIGUOUS` with one candidate per place.
+- `get_departures` accepts `stop` (a name) with `coverage` instead of `stopRef`, resolved by the same rules, and every row carries `routeName` and `stopName` beside the opaque references.
+- `get_service_status` reports each alert's `selectorCount` and `stopCount` and returns at most 20 selectors and stop IDs per alert; a city-wide NYC call fell from 65 KB to a few KB. Its `itinerary` input is advertised loosely and validated strictly, so a hand-edited itinerary gets `INVALID_ITINERARY`.
 - `find_transit` reports effective capabilities: realtime kinds are true only when the coordinator is bound, any required credential is configured, and that feed kind is ingested. A train number resolves only from a fresh vehicle observation, to the dated trip it is running (DC); every train carrying the number is listed.
 
 ## Schedule artifacts
 
 Artifacts are immutable and content-addressed. Each service date is split into three-hour first-departure bands (`timeRange` on every shard and descriptor), so a query decodes only the bands whose calls can overlap it. Partitioning refuses inputs a band boundary could cut (frequency templates, block continuations, trip-specific transfers) and drops GTFS-unusable trips (fewer than two timed stops).
 
-### Rebuild and publish
+### Edge refresh
 
-WMATA republishes a rolling window of about nine days; the MTA supplemented feed changes as planned work is scheduled. Rebuild each coverage at least daily and before `feed_end_date`.
+Nothing runs between changes. The existing five-minute cron asks each source whether it changed: MTA answers a conditional request (`If-None-Match`), almost always with an empty 304; WMATA does not support that, so its 3.8 MB archive is fetched and hashed every six hours. Only a new archive hash starts work.
 
-1. Download the archive; record its SHA-256 and UTC retrieval time. Never record a key-bearing request.
-2. Validate those exact bytes with MobilityData GTFS Validator 8.0.1 (`java -jar gtfs-validator-8.0.1-cli.jar -i source.zip -o validation -c us`). Any ERROR, system error, unallowlisted WARNING or expired allowlist entry blocks publication. Allowlists: `data/<coverage>-validator-allowlist.json`.
-3. If a publisher table must be excluded, build a derived archive without it (never edit rows), validate the derived archive, and pass `TRANSIT_DERIVED_FROM_SHA256`, `TRANSIT_DERIVED_EXCLUDED_FILES`, `TRANSIT_DERIVED_REASON` so the manifest records the derivation.
-4. `bun scripts/build-transit-artifact.ts <out>` with `TRANSIT_COVERAGE`, `TRANSIT_FEED`, `TRANSIT_SOURCE_ARCHIVE`, `TRANSIT_GTFS_DIRECTORY`, `TRANSIT_SOURCE_URL`, `TRANSIT_SOURCE_RETRIEVED_AT`, `TRANSIT_VALIDATOR_REPORT`, `TRANSIT_VALIDATOR_SYSTEM_ERRORS`, `TRANSIT_WINDOW_START`, `TRANSIT_WINDOW_END`. The window may not exceed the publisher's feed dates.
-5. `bun scripts/publish-transit-artifact.ts <out>/ <bucket> --remote` verifies every object, uploads objects, then the manifest, and moves `artifacts/<coverage>/v2/current.json` last (keeping `previous`). Use `--dry-run` first.
+The work is a Cloudflare Workflow (`transit-refresh`), one durable, retried step at a time:
+
+1. **scan**: read the archive from R2, compute the feed identity (archive SHA-256, plus any excluded file), the feed-wide latest stop time, the discovery index and the service window (yesterday, for overnight trips, through 7 days for NYC and 9 for DC, clipped to the publisher's dates). It also stores the uncompressed `stop_times.txt` and each trip's byte ranges under `work/`.
+2. **date:YYYYMMDD**, one per service day: range-read only that day's trips (about a tenth of NYC's table, in 6 or 7 requests) and compile each three-hour band with the unchanged compiler and partitioner. Content-addressed objects that already exist are not uploaded again.
+3. **guard**: refuse to publish if stops or routes drop sharply or any day loses more than 30% of its trips against the published version, and stand down if a newer archive arrived meanwhile.
+4. **publish**: write the manifest, then move `current.json`, keeping `previous`.
+5. **canary**: after the coordinator re-matches live trips against the new version, roll back to `previous` if the match rate is more than 5 points worse than before.
+6. **cleanup**: delete this run's `work/` objects and collect objects that neither the current nor the previous version uses, never touching anything younger than two hours.
+
+The edge output is byte-identical to the offline compiler on the real WMATA and MTA archives. Edge refreshes rely on the compiler's strict checks and the guards above instead of running the Java validator, so run the MobilityData validator by hand when a publisher's base timetable changes:
+
+1. Download the archive; record its SHA-256 and retrieval time. Never record a key-bearing request.
+2. Run MobilityData GTFS Validator 8.0.1 on those bytes (`java -jar gtfs-validator-8.0.1-cli.jar -i source.zip -o validation -c us`). Allowlists live in `data/<coverage>-validator-allowlist.json`.
+3. To publish by hand instead of waiting for the edge, use `bun scripts/build-transit-artifact.ts` and `bun scripts/publish-transit-artifact.ts <out>/ <bucket> --remote` (try `--dry-run` first). Both refuse a report with errors or unreviewed warnings.
 
 ### Current DC exception
 
-WMATA's `pathways.txt` (station accessibility graph) fails MobilityData 8.0.1 with ERROR `bidirectional_exit_gate` (one exit gate marked bidirectional) and `number_out_of_range` (four pathways with `traversal_time` 0). The DC artifact is built from a derived archive that excludes that optional table, validated with zero errors, and records the derivation. Consequences: DC transfers appear as `unverified` walks rather than pathway-verified ones, and no step-free routing is offered (it is not offered for any coverage). Revisit when WMATA corrects the table.
+WMATA's `pathways.txt` (station accessibility graph) fails MobilityData 8.0.1 with ERROR `bidirectional_exit_gate` (one exit gate marked bidirectional) and `number_out_of_range` (four pathways with `traversal_time` 0). Every DC build, offline or at the edge, leaves that optional table out and records the exclusion in the manifest; the remaining tables validated with zero errors. Consequences: DC transfers appear as `unverified` walks rather than pathway-verified ones, and no step-free routing is offered (it is not offered for any coverage). Revisit when WMATA corrects the table.
 
 ## Activation and rollback
 

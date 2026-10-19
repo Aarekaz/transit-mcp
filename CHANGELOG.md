@@ -9,13 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- DC Metro and the NYC Subway now serve the five global tools in production: trip planning, departures, service status, and (DC only) train locations. Planning uses the published WMATA and MTA timetables with live predictions; every itinerary is independently validated.
+- NYC departures read all eight subway feeds together and include rerouted trains and trains missing from the timetable, marked as observed. If any feed is missing or frozen, NYC falls back to the timetable rather than showing a partial picture.
+- Timetables refresh at the edge: the existing cron checks WMATA and MTA cheaply and a Cloudflare Workflow rebuilds only when a new timetable is published. Updates that remove most of a day's service are rejected; updates that make live matching worse roll back.
+- `get_departures` accepts a station name with `coverage`. Station complexes (for example Times Sq-42 St or Grand Central-42 St) resolve as one place; departure rows include `routeName` and `stopName`.
+
 - SF Bay support is in development. Versioned 511 SF Bay regional GTFS artifacts and the quota-aware realtime feed hub support dark validation; current authoritative-feed acceptance is still pending.
 - Dark-mode results retain freshness metadata and attribution to 511 SF Bay and participating operators.
 - Five always-registered global tools, deterministic planning, independent itinerary validation, and synthetic SF/DC/NYC corpora. The frozen local MCP conformance runner reports required failures separately from optional extensions. See `docs/global-transit-verification.md` for the unpassed launch gates.
 
 ### Changed
 
-- Checked-in production and preview configurations keep `SFBAY_MODE=dark`; no deployment is implied. This branch registers 18 tools (13 compatible plus five global) and four transit resource templates. DC/NYC global planning defaults off independently of the legacy tools.
+- Production enables DC and NYC global coverage (`TRANSIT_COVERAGE_MODES`); preview leaves it off. SF Bay stays dark (`SFBAY_MODE=dark`). The server registers 18 tools (13 compatible plus five global) and four transit resource templates; the legacy tools are unchanged.
+- Faster global tools: planner transfer rules are indexed (NYC plans about 10x faster), entity lookups are built once per timetable, and city-wide alert results report exact counts with bounded detail.
 
 - Rebranded to Transit MCP with `https://transitmcp.com` as the canonical origin. Pages, `/info` links, and the reported MCP server name (`transit-mcp`) now use the new brand.
 - MCP trust checks accept requests on the canonical origin or on any HTTPS, default-port hostname in `MCP_ALLOWED_HOSTNAMES`. Production allowlists `transitmcp.com` and `metro-mcp.anuragd.me`, so `https://metro-mcp.anuragd.me/mcp` keeps working.
