@@ -30,7 +30,9 @@ export const NYC_FILES: GtfsScheduleFiles = {
     '130,23 St,40.744081,-73.995657,1,', '130S,23 St,40.744081,-73.995657,,130',
     '131,18 St,40.74104,-73.997871,1,', '131S,18 St,40.74104,-73.997871,,131',
     '132,14 St,40.737826,-74.000201,1,', '132S,14 St,40.737826,-74.000201,,132',
-    'D19,14 St,40.738228,-73.996209,1,', 'D19S,14 St,40.738228,-73.996209,,D19'].join('\n') + '\n',
+    'D19,14 St,40.738228,-73.996209,1,', 'D19S,14 St,40.738228,-73.996209,,D19',
+    // A second station of the Times Sq complex, published separately (as MTA does), 26 m away.
+    '725,Times Sq-42 St,40.755477,-73.987691,1,', '725S,Times Sq-42 St,40.755477,-73.987691,,725'].join('\n') + '\n',
   'routes.txt': 'agency_id,route_id,route_short_name,route_long_name,route_type\nMTA NYCT,1,1,Broadway - 7 Avenue Local,1\nMTA NYCT,2,2,7 Avenue Express,1\nMTA NYCT,F,F,Queens Blvd Express/6 Av Local,1\n',
   'trips.txt': ['route_id,trip_id,service_id,trip_headsign,direction_id',
     '1,AFA25GEN-1092-Weekday-00_054800_1..S03R,Weekday,South Ferry,1',

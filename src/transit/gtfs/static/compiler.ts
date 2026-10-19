@@ -5,7 +5,7 @@ import { parseGtfsTime, parseServiceDate } from './time';
 import type { ServiceCalendar } from './artifact';
 import { formatEntityRef, type TransitEntityKind, type TransitRef } from '../../core/refs';
 import { canonicalJson, encodeScheduleShard, sha256 } from './shards';
-import type { CompileScheduleInput, CompiledSchedule, SchedulePattern, ScheduleShard, ScheduleTrip, ServiceWindow } from './schema';
+import type { CompileScheduleInput, CompiledSchedule, SchedulePattern, ScheduleShard, ScheduleStop, ScheduleTransfer, ScheduleTrip, ServiceWindow } from './schema';
 
 export type GtfsStaticFiles = Record<'stops.txt' | 'routes.txt' | 'trips.txt' | 'stop_times.txt', string> & Partial<Record<'calendar.txt' | 'calendar_dates.txt', string>>;
 
@@ -211,7 +211,8 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     transfers, transferBoundaryTrips, pathways };
   const discovery = { schemaVersion: 2 as const, coverageId: coverage.id, feedId, sourceSha256: source.sha256, stops: stops.filter(s => s.locationType !== 3), routes,
     tripProviderIds: trips.map(trip => trip.providerId).sort(),
-    stopRoutes: Object.fromEntries(Object.entries(stopRoutes).map(([key, values]) => [key, [...new Set(values)].sort()])) };
+    stopRoutes: Object.fromEntries(Object.entries(stopRoutes).map(([key, values]) => [key, [...new Set(values)].sort()])),
+    stationLinks: stationLinks(stops, transfers) };
   const shardBytes = encodeScheduleShard(shard);
   const discoveryBytes = new TextEncoder().encode(canonicalJson(discovery));
   const shardHash = await sha256(shardBytes), discoveryHash = await sha256(discoveryBytes);
@@ -244,6 +245,24 @@ export function buildServiceCalendars(calendarRows: GtfsCsvRow[], calendarDateRo
     calendar.exceptions[date] = type;
   }
   return calendars;
+}
+
+/** Stations joined by a published stop-level transfer: one complex published as several. */
+function stationLinks(stops: ScheduleStop[], transfers: ScheduleTransfer[]): [TransitRef, TransitRef][] {
+  const byRef = new Map(stops.map(stop => [stop.ref, stop]));
+  const station = (ref: TransitRef | undefined) => {
+    const stop = ref ? byRef.get(ref) : undefined;
+    return stop?.locationType === 1 ? stop.ref : stop?.parentStationRef;
+  };
+  const pairs = new Map<string, [TransitRef, TransitRef]>();
+  for (const transfer of transfers) {
+    if (transfer.fromTripRef || transfer.toTripRef || transfer.transferType === 3) continue;
+    const from = station(transfer.fromStopRef), to = station(transfer.toStopRef);
+    if (!from || !to || from === to) continue;
+    const pair = (from < to ? [from, to] : [to, from]) as [TransitRef, TransitRef];
+    pairs.set(pair.join('\n'), pair);
+  }
+  return [...pairs.values()].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
 }
 
 function finiteNumber(row: GtfsCsvRow, name: string): number {

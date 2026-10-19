@@ -150,6 +150,36 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     expect(plan.structuredContent.candidates.length).toBeGreaterThan(1);
   });
 
+  it('answers "next train at <station>" in one call, resolving one station complex but never two places', async () => {
+    const f = await nyc();
+    const byName = (await callTool(f.env, 'get_departures', { stop: 'Times Sq-42 St', coverage: 'nyc', windowSeconds: 1800 })).structuredContent;
+    expect(byName.status).toBe('realtime');
+    expect(byName.departures[0]).toMatchObject({ stopName: 'Times Sq-42 St', routeName: expect.stringMatching(/^[12]$/) });
+    expect(byName.departures.every((row: { routeName: string; stopName: string }) => row.routeName && row.stopName)).toBe(true);
+    const ambiguous = await callTool(f.env, 'get_departures', { stop: '14 St', coverage: 'nyc' });
+    expect(ambiguous).toMatchObject({ isError: true, structuredContent: { code: 'ENTITY_AMBIGUOUS' } });
+    expect(new Set(ambiguous.structuredContent.candidates.map((c: { providerId: string }) => c.providerId))).toEqual(new Set(['132', 'D19']));
+    expect(await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '127'), stop: 'Times Sq-42 St', coverage: 'nyc' })).toMatchObject({ isError: true, structuredContent: { code: 'INVALID_TRANSIT_REF' } });
+    const plan = (await callTool(f.env, 'plan_trip', { coverage: 'nyc', origin: { query: 'Times Sq-42 St' }, destination: { query: '23 St' } })).structuredContent;
+    expect(plan.itineraries.length).toBeGreaterThan(0);
+  });
+
+  it('keeps a city-wide alert readable: bounded detail with exact counts', async () => {
+    const stamp = nowSeconds(), stops = ['127', '128', '129', '130', '131', '132', 'D19'];
+    const informedEntity = Array.from({ length: 30 }, (_, index) => ({ agencyId: 'MTASBWY', routeId: '1', stopId: stops[index % stops.length], directionId: index % 2 }));
+    const f = await nyc(nycDocuments(stamp, { 'camsys/subway-alerts': feedBytes(stamp, [{ id: 'wide', alert: { informedEntity, headerText: { translation: [{ text: '[1] planned work', language: 'en' }] } } }]) }));
+    const [alert] = (await callTool(f.env, 'get_service_status', { coverage: 'nyc' })).structuredContent.alerts;
+    expect(alert).toMatchObject({ selectorCount: 30, stopCount: 7, routeIds: ['1'] });
+    expect(alert.selectors).toHaveLength(20);
+    expect(alert.stopIds).toHaveLength(7);
+  });
+
+  it('rejects an edited itinerary instead of revalidating something plan_trip never returned', async () => {
+    const f = await nyc();
+    const result = await callTool(f.env, 'get_service_status', { itinerary: { coverageId: 'nyc', legs: 'not legs' } });
+    expect(result).toMatchObject({ isError: true, structuredContent: { code: 'INVALID_ITINERARY' } });
+  });
+
   it('serves schedules but no realtime claims when the coordinator has not polled', async () => {
     quiet();
     const artifact = await bandedArtifact('nyc');

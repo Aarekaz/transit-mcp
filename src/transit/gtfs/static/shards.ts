@@ -54,6 +54,7 @@ const discoverySchema = metadataSchema.pick({ schemaVersion: true, coverageId: t
   sourceSha256: hash,
   tripProviderIds: z.array(id).refine(ids => ids.every((value, index) => index === 0 || ids[index - 1]! < value)),
   stopRoutes: z.record(stopRef, z.array(routeRef)),
+  stationLinks: z.array(z.tuple([stopRef, stopRef])).optional(),
 });
 
 /** The caller verifies descriptor hash/length and manifest source identity. */

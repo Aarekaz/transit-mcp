@@ -87,6 +87,9 @@ export interface DiscoveryIndex {
   /** Sorted unique IDs from all trips.txt rows, including trips outside the loaded window. */
   tripProviderIds: string[];
   stops: ScheduleStop[]; routes: ScheduleRoute[]; stopRoutes: Record<TransitRef, TransitRef[]>;
+  /** Distinct stations the publisher links with a stop-level transfer (one station complex
+   * published as several stations), as sorted [a, b] pairs. Absent in older artifacts. */
+  stationLinks?: [TransitRef, TransitRef][];
 }
 export interface ArtifactObject { key: string; sha256: string; byteLength: number }
 export interface ValidatorEvidence {

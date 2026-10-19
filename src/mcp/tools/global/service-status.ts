@@ -17,6 +17,9 @@ import { AlertScopeLimitError, expandAlertScopes, matchesAlertSelector, resolveA
 import { itinerarySchema } from './plan';
 import { TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef } from './shared';
 
+/** Per-alert detail bound: a city-wide status call stays readable for a model. */
+export const ALERT_DETAIL_LIMIT = 20;
+
 export function registerServiceStatusTool(server: McpServer, context: MetroMcpContext): void {
   const absent = { coverage: z.never().optional(), ref: z.never().optional(), itinerary: z.never().optional() };
   const selectorSchema = z.strictObject({ agencyId: z.string().optional(), routeId: z.string().optional(), routeType: z.number().int().optional(), stopId: z.string().optional(), directionId: z.number().int().optional(),
@@ -24,9 +27,11 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
   server.registerTool('get_service_status', {
     title: 'Transit service status', description: 'Check disruptions, delays, closures, accessibility alerts or revalidate a chosen itinerary without replacing it. Scope by coverage or an agency, route, stop or dated trip reference. Aggregate scopes include canonical service in the next 24 hours. Use get_vehicle_status for an observed vehicle location.',
     annotations: readOnlyLive('Transit service status'),
-    inputSchema: z.union([z.strictObject({ ...absent, coverage: coverageSchema }), z.strictObject({ ...absent, ref: boundedText }), z.strictObject({ ...absent, itinerary: itinerarySchema })]),
+    inputSchema: z.union([z.strictObject({ ...absent, coverage: coverageSchema }), z.strictObject({ ...absent, ref: boundedText }), z.strictObject({ ...absent, itinerary: z.record(z.string(), z.unknown())
+      .describe('An itinerary exactly as plan_trip returned it; validated strictly against that contract.') })]),
     outputSchema: z.strictObject({ ...resultShape, alerts: z.array(z.strictObject({ id: z.string(), agencyText: z.strictObject({ title: z.string(), description: z.string(), label: z.literal('agency_supplied') }),
-      routeIds: z.array(z.string()), stopIds: z.array(z.string()), selectors: z.array(selectorSchema), stale: z.boolean(),
+      routeIds: z.array(z.string()), stopIds: z.array(z.string()).describe(`At most ${ALERT_DETAIL_LIMIT}; stopCount is the full number.`),
+      selectors: z.array(selectorSchema).describe(`At most ${ALERT_DETAIL_LIMIT}; selectorCount is the full number.`), selectorCount: z.number().int().nonnegative(), stopCount: z.number().int().nonnegative(), stale: z.boolean(),
       activePeriods: z.array(z.strictObject({ start: instantSchema.nullable(), end: instantSchema.nullable() })).max(32) })),
       journeyValid: z.boolean().nullable(), journeyReasons: z.array(z.string()),
       legChecks: z.array(z.strictObject({ index: z.number().int(), valid: z.boolean(), reasons: z.array(z.string()) })),
@@ -34,7 +39,11 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
   }, async (args, handler) => guarded(handler, async () => {
     checkState(handler, 'get_service_status');
     const parsed = args.ref ? validRef(args.ref, ['agency', 'route', 'stop', 'trip'], true) : undefined;
-    const id = parsed?.coverage ?? args.itinerary?.coverageId ?? getCoverage(args.coverage ?? '')?.id ?? args.coverage!;
+    // The advertised input stays small; the itinerary contract is enforced here.
+    const checked = args.itinerary === undefined ? undefined : itinerarySchema.safeParse(args.itinerary);
+    if (checked && !checked.success) throw new TransitToolError('INVALID_ITINERARY');
+    const inputItinerary = checked?.data;
+    const id = parsed?.coverage ?? inputItinerary?.coverageId ?? getCoverage(args.coverage ?? '')?.id ?? args.coverage!;
     const data = await loadData(context, id, handler.mcpReq.signal);
     if (!data) return complete({ ...unavailable(id), alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] });
     if (args.ref) knownEntity(data, args.ref);
@@ -92,8 +101,8 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
     const legChecks: { index: number; valid: boolean; reasons: string[] }[] = [];
     const transferChecks: { fromLegIndex: number; toLegIndex: number; valid: false; reasons: string[] }[] = [];
     let journeyValid: boolean | null = null, journeyReasons: string[] = [];
-    if (args.itinerary) {
-      const itinerary = args.itinerary;
+    if (inputItinerary) {
+      const itinerary = inputItinerary;
       const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant: itinerary.departAt, windowSeconds: itinerary.windowSeconds });
       canonicalShards.push(...schedule.shards.map(item => item.shard));
       for (const leg of itinerary.legs) if (leg.kind === 'transit') addTrip(leg.tripInstanceRef, schedule.shards.map(item => item.shard), leg.boardSequence, leg.alightSequence,
@@ -137,9 +146,12 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
         return resolved && (args.coverage || scopes.some(scope => scope.feedId === feed!.feedId && inWindow(scope) && matchesAlertSelector(resolved, scope)));
       });
       if (alert.selectors.length && !selectors.length) return [];
-      return [{ id: alert.id, agencyText: { title: sanitizeTransitText(alert.header), description: sanitizeTransitText(alert.description), label: 'agency_supplied' as const }, selectors,
+      // NYCT alerts name every affected platform; report exact counts and a bounded sample.
+      const stopIds = [...new Set(selectors.flatMap(selector => selector.stopId === undefined ? [] : [selector.stopId]))];
+      return [{ id: alert.id, agencyText: { title: sanitizeTransitText(alert.header), description: sanitizeTransitText(alert.description), label: 'agency_supplied' as const },
+        selectors: selectors.slice(0, ALERT_DETAIL_LIMIT), selectorCount: selectors.length,
         routeIds: [...new Set(selectors.flatMap(selector => selector.routeId === undefined ? [] : [selector.routeId]))],
-        stopIds: [...new Set(selectors.flatMap(selector => selector.stopId === undefined ? [] : [selector.stopId]))], stale: feed?.freshness !== 'fresh',
+        stopIds: stopIds.slice(0, ALERT_DETAIL_LIMIT), stopCount: stopIds.length, stale: feed?.freshness !== 'fresh',
         activePeriods: (alert.activePeriods ?? []).map(period => ({ start: period.start === undefined ? null : new Date(period.start * 1000).toISOString(), end: period.end === undefined ? null : new Date(period.end * 1000).toISOString() })) }];
     }); } catch (error) { if (error instanceof AlertScopeLimitError) return scopeUnavailable(); throw error; }
     return complete({ ...meta, sources,

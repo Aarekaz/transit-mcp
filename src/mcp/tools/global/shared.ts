@@ -33,7 +33,7 @@ export const candidateSchema = z.strictObject({ ref: z.string(), kind: z.enum(['
 export type Candidate = z.infer<typeof candidateSchema>;
 /** Per endpoint/query; two-endpoint elicitation is therefore at most 100 choices. */
 export const MAX_DISCOVERY_CANDIDATES = 50;
-export const errorSchema = z.strictObject({ code: z.enum(['ENTITY_NOT_FOUND', 'ENTITY_AMBIGUOUS', 'INVALID_TRANSIT_REF', 'TIME_OUTSIDE_WINDOW', 'SELECTION_DECLINED']),
+export const errorSchema = z.strictObject({ code: z.enum(['ENTITY_NOT_FOUND', 'ENTITY_AMBIGUOUS', 'INVALID_TRANSIT_REF', 'INVALID_ITINERARY', 'TIME_OUTSIDE_WINDOW', 'SELECTION_DECLINED']),
   message: z.string(), candidates: z.array(candidateSchema).max(2 * MAX_DISCOVERY_CANDIDATES) });
 export class TransitToolError extends Error {
   constructor(readonly code: z.infer<typeof errorSchema>['code'], readonly candidates: Candidate[] = []) { super(code); }
@@ -42,6 +42,7 @@ const messages = {
   ENTITY_NOT_FOUND: 'No matching transit entity was found. Use find_transit to choose a reference.',
   ENTITY_AMBIGUOUS: 'Choose an exact reference from the candidates and retry.',
   INVALID_TRANSIT_REF: 'Use a reference of the kind required by this tool, returned by find_transit or get_departures.',
+  INVALID_ITINERARY: 'Pass an itinerary exactly as plan_trip returned it, without edits.',
   TIME_OUTSIDE_WINDOW: 'Narrow the search window or filters; the window must be between one second and seven days and within the candidate budget.',
   SELECTION_DECLINED: 'Transit entity selection was declined or cancelled.',
 };
@@ -188,18 +189,48 @@ export function ambiguityCandidate(data: TransitData, entity: Candidate, query: 
   return exactCandidate(data, entity, query) || entity.kind === 'stop' && normalizeEntityName(entity.name).includes(normalized) &&
     (data.coverage.placeAliases ?? []).some(place => place.aliases.some(alias => normalizeEntityName(alias) === normalized));
 }
-/** Matches that are all one GTFS station and its own platforms/entrances name one
- * place: resolve them to that station. Different stations remain separate candidates. */
+/** Matches that all belong to one station complex name one place, and resolve to its
+ * station. A complex is a GTFS station with its platforms and entrances, together with
+ * same-named stations published separately within a short walk (for example the four
+ * "Times Sq-42 St" stations). Same-named stations farther apart stay separate candidates. */
+export const COMPLEX_RADIUS_METRES = 200;
 export function sameStation(data: TransitData, matches: Candidate[]): Candidate[] {
   if (matches.length < 2) return matches;
   const stops = new Map(data.indexes.flatMap(index => index.stops).map(stop => [stop.ref as string, stop]));
   const station = (ref: string) => { const stop = stops.get(ref); return stop?.locationType === 1 ? ref : stop?.parentStationRef; };
-  const roots = new Set(matches.map(match => match.kind === 'stop' ? station(match.ref) : undefined));
-  const [root] = roots;
-  if (roots.size !== 1 || !root) return matches;
-  const resolved = matches.find(match => match.ref === root);
-  return resolved ? [resolved] : matches;
+  const metres = (a: ScheduleStopLike, b: ScheduleStopLike) => {
+    if (a.latitude === null || a.longitude === null || b.latitude === null || b.longitude === null) return Infinity;
+    const radians = Math.PI / 180, x = (b.longitude - a.longitude) * radians * Math.cos((a.latitude + b.latitude) * radians / 2), y = (b.latitude - a.latitude) * radians;
+    return Math.hypot(x, y) * 6_371_000;
+  };
+  // Group same-named stations into complexes: the publisher links them with a transfer,
+  // or they lie within a short walk of each other.
+  const roots = [...new Set(matches.flatMap(match => { const root = match.kind === 'stop' ? station(match.ref) : undefined; return root ? [root] : []; }))].sort();
+  const linked = new Set(data.indexes.flatMap(index => index.stationLinks ?? []).map(([a, b]) => `${a}\n${b}`));
+  const parent = new Map(roots.map(root => [root, root]));
+  const find = (root: string): string => { let at = root; while (parent.get(at) !== at) at = parent.get(at)!; return at; };
+  for (const [index, a] of roots.entries()) for (const b of roots.slice(index + 1)) {
+    const left = stops.get(a)!, right = stops.get(b)!;
+    if (normalizeEntityName(left.name) !== normalizeEntityName(right.name)) continue;
+    if (linked.has(`${a}\n${b}`) || metres(left, right) <= COMPLEX_RADIUS_METRES) {
+      const [x, y] = [find(a), find(b)].sort() as [string, string];
+      parent.set(y, x);
+    }
+  }
+  const complex = new Map(roots.map(root => [root, find(root)]));
+  // One candidate per place, in the original rank order; a place is its complex's first station.
+  const seen = new Set<string>(), result: Candidate[] = [];
+  for (const match of matches) {
+    const root = match.kind === 'stop' ? station(match.ref) : undefined;
+    if (!root) { result.push(match); continue; }
+    const place = complex.get(root)!;
+    if (seen.has(place)) continue;
+    seen.add(place);
+    result.push(matches.find(candidate => candidate.ref === place) ?? match);
+  }
+  return result;
 }
+type ScheduleStopLike = { latitude: number | null; longitude: number | null };
 export function knownEntity(data: TransitData, ref: string): Candidate {
   const parsed = validRef(ref, ['agency', 'route', 'stop', 'trip']);
   const base = formatEntityRef(parsed);
