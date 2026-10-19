@@ -73,8 +73,14 @@ for (const coverage of ['dc', 'nyc'] as const) {
   if (route) {
     const vehicles = await call('get_vehicle_status', { ref: route.ref, limit: 5 });
     log(`get_vehicle_status:${coverage}:${route.name}`, { ms: vehicles.ms, ...summary(vehicles.result.structuredContent), vehicles: vehicles.result.structuredContent?.vehicles?.length });
-    check(coverage === 'nyc' ? vehicles.result.structuredContent?.status === 'unavailable' : !vehicles.result.isError, `${coverage} vehicle status contract`);
+    check(!vehicles.result.isError && vehicles.result.structuredContent?.status === 'realtime', `${coverage} vehicle status by line`);
   }
+  const station = coverage === 'dc' ? 'Metro Center' : 'Times Sq-42 St';
+  const atStation = await call('get_vehicle_status', { stop: station, coverage, limit: 20 });
+  const trains: Record<string, any>[] = atStation.result.structuredContent?.vehicles ?? [];
+  log(`get_vehicle_status:${coverage}:${station}`, { ms: atStation.ms, ...summary(atStation.result.structuredContent), vehicles: trains.length,
+    sample: trains.slice(0, 5).map(train => `${train.routeName}>${train.headsign}|${train.stopStatus}@${train.stopName}|from:${train.previousStopName}|${train.coordinatesSource}`) });
+  check(!atStation.result.isError && atStation.result.structuredContent?.status === 'realtime', `${coverage} vehicle status at a station`);
 }
 
 const legacy: [string, Record<string, unknown>][] = [
