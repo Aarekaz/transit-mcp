@@ -148,6 +148,17 @@ describe('depart-at transit routing', () => {
     expect((await planJourney({ ...f.query, origin: { latitude: 37.01, longitude: -122 }, maxWalkMetres: 1000 })).candidates).toEqual([]);
   });
 
+  it('ends street walks only where riders can board, never at nodes or station records', async () => {
+    const input = plannerInput();
+    input.files['stops.txt'] = 'stop_id,stop_name,stop_lat,stop_lon,location_type\nA,Origin,37,-122,0\nB,Interchange,37.02,-122,0\nC,Destination,37.04,-122,0\n' +
+      'D,Nearby platform,37.0205,-122,0\nN1,Node,37.0002,-122,3\nS1,Station record,37.0003,-122,1\nE1,Entrance,37.0004,-122,2\n';
+    const f = await plannerFixture(input);
+    const result = await planJourney({ ...f.query, origin: { latitude: 37.0001, longitude: -122 }, departAt: at('08:55:00'), maxWalkMetres: 800 });
+    const walked = result.candidates.flatMap(candidate => candidate.legs.flatMap(leg => leg.kind === 'walk' ? [leg.to] : []));
+    expect(walked.length).toBeGreaterThan(0);
+    for (const id of ['N1', 'S1', 'E1']) expect(walked).not.toContain(ref('stop', id));
+  });
+
   it('returns at most three stable exact-frequency alternatives and exposes approximate-only limitations', async () => {
     const input = plannerInput();
     input.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\nT,09:00:00,10:00:00,600,1\n';
@@ -232,12 +243,18 @@ describe('depart-at transit routing', () => {
     await expect(planJourney({ ...f.query, realtime })).rejects.toThrow(/working-set budget/i);
   });
 
-  it('charges retained variable-length leg text before it can exceed the working-set budget', async () => {
-    const input = plannerInput();
-    input.files['trips.txt'] = input.files['trips.txt'].replace('Destination', 'D'.repeat(250000));
-    input.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\nT,09:00:00,10:00:00,600,1\n';
-    const f = await plannerFixture(input);
-    await expect(planJourney(f.query)).rejects.toThrow(/working-set budget.*Durable Object/i);
+  it('charges retained variable-length leg text in the working-set estimate', async () => {
+    const plan = async (headsign: string) => {
+      const input = plannerInput();
+      input.files['trips.txt'] = input.files['trips.txt'].replace('Destination', headsign);
+      input.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\nT,09:00:00,10:00:00,600,1\n';
+      const f = await plannerFixture(input);
+      return planJourney(f.query);
+    };
+    const short = await plan('D'), long = await plan('D'.repeat(250000));
+    expect(long.candidates.length).toBe(short.candidates.length);
+    // Each retained leg carries the text; a leg shared by labels is one object, charged once.
+    expect(long.diagnostics.estimatedWorkingSetBytes - short.diagnostics.estimatedWorkingSetBytes).toBeGreaterThanOrEqual(250000 * 2);
   });
 
   it('budgets normalized realtime identity strings before building routing indexes', async () => {
