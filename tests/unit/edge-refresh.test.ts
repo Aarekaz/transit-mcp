@@ -71,6 +71,17 @@ describe('edge schedule build', () => {
     expect(scan.identity).toMatchObject({ sha256: await sha256(archive), archiveSha256: await sha256(archive) });
   });
 
+  it('does not depend on the row order of trips and stop times', async () => {
+    const shuffle = (csv: string) => { const [header, ...rows] = csv.trim().split('\n'); return [header, ...rows.reverse()].join('\n') + '\n'; };
+    const source = nyc(), archive = await zip(NYC_FILES as Record<string, string>);
+    const scan = await scanArchive(archive, source, 2, Date.parse(NOW));
+    const compile = (files: typeof NYC_FILES) => compileSchedule({ coverage: source.coverage, feedId: source.feedId, files, identity: scan.identity,
+      window: { startDate: '20261019', endDate: '20261019' }, source: { url: source.url, retrievedAt: source.retrievedAt } });
+    const ordered = await compile(NYC_FILES), reversed = await compile({ ...NYC_FILES, 'trips.txt': shuffle(NYC_FILES['trips.txt']), 'stop_times.txt': shuffle(NYC_FILES['stop_times.txt']) });
+    expect([...reversed.shardBytes].join()).toBe([...ordered.shardBytes].join());
+    expect([...reversed.discoveryBytes].join()).toBe([...ordered.discoveryBytes].join());
+  });
+
   it('records an excluded publisher table as a derivation of the original archive', async () => {
     const archive = await zip({ ...DC_FILES, 'pathways.txt': 'pathway_id,from_stop_id,to_stop_id,pathway_mode,is_bidirectional\nbad,PF_A03_C,PF_A02_C,7,1\n' } as Record<string, string>);
     const source: EdgeSource = { coverage: getCoverage('dc')!, feedId: 'wmata', url: 'https://api.wmata.com/gtfs/rail-gtfs-static.zip', retrievedAt: '2026-10-19T00:00:00Z',
@@ -164,6 +175,32 @@ describe('edge refresh workflow', () => {
     const result = await runRefresh(f.env, { ...f.params, archiveSha256: hash }, runner);
     expect(result.outcome).toBe('rolled_back');
     expect((await store.pointer())).toEqual({ current: first.artifactVersion, previous: result.artifactVersion });
+  });
+
+  it('keeps current and previous versions and collects older, unreferenced objects', async () => {
+    const f = await setup();
+    const publish = async (headsign: string) => {
+      const archive = await zip({ ...NYC_FILES, 'trips.txt': NYC_FILES['trips.txt'].replace('South Ferry,1\n', `${headsign},1\n`) } as Record<string, string>), hash = await sha256(archive);
+      await f.db.bucket.put(f.keys.archive(hash), archive);
+      await f.db.bucket.put(f.keys.state, JSON.stringify({ sha256: hash, checkedAt: Date.now(), retrievedAt: 'x' }));
+      vi.setSystemTime(Date.now() + 3 * 3600_000); // older objects become collectable
+      return runRefresh(f.env, { ...f.params, archiveSha256: hash }, steps());
+    };
+    const first = await runRefresh(f.env, f.params, steps());
+    const firstManifest = (await new StaticArtifactStore(f.db.bucket, 'nyc').read(first.artifactVersion!)).manifest;
+    const second = await publish('South Ferry A'), third = await publish('South Ferry B');
+    expect([second.outcome, third.outcome]).toEqual(['published', 'published']);
+    const store = new StaticArtifactStore(f.db.bucket, 'nyc');
+    expect(await store.pointer()).toEqual({ current: third.artifactVersion, previous: second.artifactVersion });
+    for (const version of [second.artifactVersion!, third.artifactVersion!]) {
+      for (const object of (await store.read(version)).manifest.shards) expect(f.db.objects.has(object.key)).toBe(true);
+    }
+    // The first version's own shards are gone; its archive too. No scratch objects remain.
+    const onlyFirst = firstManifest.shards.filter(object => !(f.db.objects.has(object.key)));
+    expect(onlyFirst.length).toBeGreaterThan(0);
+    expect(f.db.objects.has(`artifacts/nyc/v2/manifests/${first.artifactVersion}.json`)).toBe(false);
+    expect(f.db.objects.has(f.keys.archive(f.hash))).toBe(false);
+    expect([...f.db.objects.keys()].some(key => key.startsWith('work/'))).toBe(false);
   });
 
   it('checks sources cheaply: conditional requests, one refresh per new archive', async () => {

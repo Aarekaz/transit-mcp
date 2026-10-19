@@ -1,7 +1,8 @@
 import type { Env } from '../../../types';
 import { getCoverageMode } from '../../../regions/manifest';
 import { canonicalJson, sha256 } from '../static/shards';
-import { buildServiceDate, scanArchive, type EdgeSource, type FeedIdentity, type ScanResult } from '../static/edge-build';
+import { buildServiceDate, rangedStopTimes, scanArchive, type EdgeSource, type FeedIdentity, type ScanResult, type TripRanges } from '../static/edge-build';
+import { readZipDirectory, zipEntryStream } from '../static/zip';
 import type { ArtifactManifestV2 } from '../static/schema';
 import { StaticArtifactStore, readBoundedObject, staticVersion } from '../realtime/snapshot-store';
 import { getRealtimeSource } from '../realtime/sources';
@@ -27,7 +28,11 @@ export const sourceKeys = (coverageId: string) => ({
   state: `sources/${coverageId}/state.json`,
   archive: (sha: string) => `sources/${coverageId}/${sha}.zip`,
   stats: (version: string) => `artifacts/${coverageId}/v2/stats/${version}.json`,
+  /** Scratch for one run: the uncompressed stop_times and each trip's byte ranges. */
+  work: (sha: string) => ({ prefix: `work/${coverageId}/${sha}/`, stopTimes: `work/${coverageId}/${sha}/stop_times.txt`, ranges: `work/${coverageId}/${sha}/trip-ranges.json` }),
 });
+/** Objects younger than this are never collected: a concurrent run may not have published yet. */
+export const GARBAGE_MIN_AGE_MS = 2 * 3600_000;
 
 async function readJson<T>(bucket: R2Bucket, key: string): Promise<T | null> {
   const object = await bucket.get(key);
@@ -77,15 +82,30 @@ export async function runRefresh(env: Env, params: RefreshParams, step: StepRunn
     if (await sha256(bytes) !== params.archiveSha256) throw new Error('Source archive integrity failure');
     return bytes;
   };
-  const scan = await step.do('scan', async (): Promise<Omit<ScanResult, 'discoveryBytes'>> => {
-    const { discoveryBytes, ...result } = await scanArchive(await archive(), source, policy.windowDays, Date.now());
+  const work = keys.work(params.archiveSha256);
+  const scan = await step.do('scan', async (): Promise<Omit<ScanResult, 'discoveryBytes' | 'stopTimes'>> => {
+    const bytes = await archive();
+    const { discoveryBytes, stopTimes, ...result } = await scanArchive(bytes, source, policy.windowDays, Date.now());
     await putAbsent(bucket, result.discovery.key, discoveryBytes);
+    // Day steps read only their trips' byte ranges from an uncompressed copy, instead of
+    // inflating and parsing the whole table once per day.
+    const entry = readZipDirectory(bytes).get('stop_times.txt')!, inflated = zipEntryStream(bytes, entry);
+    await bucket.put(work.stopTimes, typeof FixedLengthStream === 'function' ? inflated.pipeThrough(new FixedLengthStream(entry.size)) : new Uint8Array(await new Response(inflated).arrayBuffer()));
+    await bucket.put(work.ranges, JSON.stringify({ header: stopTimes.header, size: stopTimes.size, tripRanges: stopTimes.tripRanges }));
     return result;
   });
   const dates: DateSummary[] = [];
   for (const date of scan.dates) {
     dates.push(await step.do(`date:${date}`, async () => {
-      const built = await buildServiceDate(await archive(), source, scan.identity as FeedIdentity, date, BAND_SECONDS);
+      const index = await readJson<{ header: string; size: number; tripRanges: TripRanges }>(bucket, work.ranges);
+      if (!index) throw new Error('Missing stop_times range index');
+      const read = async (offset: number, length: number) => {
+        const object = await bucket.get(work.stopTimes, { range: { offset, length } });
+        if (!object) throw new Error('Missing stop_times work copy');
+        return new Uint8Array(await object.arrayBuffer());
+      };
+      const built = await buildServiceDate(await archive(), source, scan.identity as FeedIdentity, date, BAND_SECONDS,
+        { header: index.header, rows: trips => rangedStopTimes(read, index.header, index.tripRanges, trips) });
       for (const object of built.objects) await putAbsent(bucket, object.key, object.bytes);
       return { date, descriptors: built.descriptors, trips: built.trips };
     }));
@@ -106,8 +126,13 @@ export async function runRefresh(env: Env, params: RefreshParams, step: StepRunn
     return { publish: reasons.length === 0, outcome: reasons.length ? 'rejected' as const : 'published' as const, reasons,
       baseline: await coordinatorStats(env, policy.coverageId) };
   });
+  const cleanup = () => step.do('cleanup', async () => {
+    await deletePrefix(bucket, work.prefix);
+    return collectGarbage(bucket, policy.coverageId, params.archiveSha256, Date.now());
+  });
   if (!decision.publish) {
     console.warn(JSON.stringify({ event: 'schedule_refresh', coverage: policy.coverageId, outcome: decision.outcome, reasons: decision.reasons, archive: params.archiveSha256 }));
+    await cleanup();
     return { outcome: decision.outcome, reasons: decision.reasons };
   }
   const published = await step.do('publish', async () => {
@@ -121,7 +146,7 @@ export async function runRefresh(env: Env, params: RefreshParams, step: StepRunn
   // Canary: the coordinator re-matches live trips against the new version on its next
   // polls. A clear regression against the version it replaced is rolled back.
   const realtime = getRealtimeSource(policy.coverageId);
-  if (!realtime || getCoverageMode(policy.coverageId, env) === 'off') return { outcome: 'published', artifactVersion: published };
+  if (!realtime || getCoverageMode(policy.coverageId, env) === 'off') { await cleanup(); return { outcome: 'published', artifactVersion: published }; }
   for (let attempt = 1; attempt <= 3; attempt++) {
     await step.sleep(`settle:${attempt}`, 3 * 60_000);
     const verdict = await step.do(`canary:${attempt}`, async () => {
@@ -135,10 +160,53 @@ export async function runRefresh(env: Env, params: RefreshParams, step: StepRunn
         rate: current.rate, baseline: baseline?.rate ?? null, rolledBack }));
       return rolledBack ? 'rolled_back' as const : 'healthy' as const;
     });
-    if (verdict === 'rolled_back') return { outcome: 'rolled_back', artifactVersion: published };
+    if (verdict === 'rolled_back') { await cleanup(); return { outcome: 'rolled_back', artifactVersion: published }; }
     if (verdict === 'healthy') break;
   }
+  await cleanup();
   return { outcome: 'published', artifactVersion: published };
+}
+
+async function listAll(bucket: R2Bucket, prefix: string): Promise<R2Object[]> {
+  const objects: R2Object[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await bucket.list({ prefix, cursor });
+    objects.push(...page.objects);
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return objects;
+}
+
+async function deleteKeys(bucket: R2Bucket, keys: string[]): Promise<void> {
+  for (let index = 0; index < keys.length; index += 1000) await bucket.delete(keys.slice(index, index + 1000));
+}
+
+async function deletePrefix(bucket: R2Bucket, prefix: string): Promise<void> {
+  await deleteKeys(bucket, (await listAll(bucket, prefix)).map(object => object.key));
+}
+
+/** Keeps every object the current and previous versions reference (rollback target), the
+ * archives they and this run came from, and anything younger than GARBAGE_MIN_AGE_MS. */
+export async function collectGarbage(bucket: R2Bucket, coverageId: string, runArchive: string, now: number): Promise<{ deleted: number }> {
+  const store = new StaticArtifactStore(bucket, coverageId), pointer = await store.pointer();
+  if (!pointer) return { deleted: 0 };
+  const keep = new Set<string>(), archives = new Set([runArchive]), keys = sourceKeys(coverageId);
+  for (const version of [pointer.current, pointer.previous].filter((value): value is string => !!value)) {
+    const { manifest } = await store.read(version);
+    for (const object of [...manifest.shards, ...manifest.discoveries]) keep.add(object.key);
+    keep.add(`artifacts/${coverageId}/v2/manifests/${version}.json`); keep.add(keys.stats(version));
+    for (const source of manifest.sources) archives.add(source.derivedFrom?.archiveSha256 ?? source.archiveSha256 ?? '');
+  }
+  const state = await readJson<SourceState>(bucket, keys.state);
+  if (state?.sha256) archives.add(state.sha256);
+  for (const sha of archives) if (sha) keep.add(keys.archive(sha));
+  keep.add(`artifacts/${coverageId}/v2/current.json`); keep.add(keys.state);
+  const old = (object: R2Object) => now - object.uploaded.getTime() >= GARBAGE_MIN_AGE_MS;
+  const candidates = [...await listAll(bucket, `artifacts/${coverageId}/v2/`), ...await listAll(bucket, `sources/${coverageId}/`), ...await listAll(bucket, `work/${coverageId}/`)];
+  const garbage = candidates.filter(object => old(object) && !keep.has(object.key) && !object.key.startsWith(keys.work(runArchive).prefix)).map(object => object.key);
+  await deleteKeys(bucket, garbage);
+  return { deleted: garbage.length };
 }
 
 /** Cron: cheap change detection. A conditional GET usually answers 304 with no body;

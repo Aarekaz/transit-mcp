@@ -2,7 +2,7 @@ import type { CoverageManifest } from '../../core/coverage';
 import { formatEntityRef, type TransitRef } from '../../core/refs';
 import { isServiceActive, serviceDateAtInstant, shiftServiceDate } from '../../planner/service-day';
 import { buildServiceCalendars, compileSchedule } from './compiler';
-import { csvRecords, parseCsvRecord, parseGtfsCsv } from './csv';
+import { csvRecordSpans, csvRecords, parseCsvRecord, parseGtfsCsv } from './csv';
 import { partitionSchedule } from './partition';
 import type { ArtifactManifestV2, CompileScheduleInput, DiscoveryIndex, GtfsScheduleFiles } from './schema';
 import { canonicalJson, sha256 } from './shards';
@@ -22,6 +22,8 @@ export interface ScanResult {
   sources: ArtifactManifestV2['sources']; agencyTimezones: ArtifactManifestV2['agencyTimezones'];
   discovery: ArtifactManifestV2['discoveries'][number]; discoveryBytes: Uint8Array;
   stats: { trips: number; stops: number; routes: number };
+  /** For ranged per-date reads of a stored uncompressed copy; never a step result. */
+  stopTimes: { header: string; size: number; tripRanges: TripRanges };
 }
 export interface DateBuild { date: string; objects: { key: string; bytes: Uint8Array }[]; descriptors: ArtifactManifestV2['shards']; trips: number }
 
@@ -38,24 +40,47 @@ async function open(archive: Uint8Array, source: EdgeSource) {
   return { stopTimes: entries.get('stop_times.txt')!, text };
 }
 
-/** Streams stop_times once, yielding parsed fields by column name. */
-async function* stopTimeRows(archive: Uint8Array, entry: ZipEntry): AsyncGenerator<{ raw: string; field: (name: string) => string }> {
+export type StopTimeRow = { raw: string; field: (name: string) => string; offset: number; end: number };
+/** Parses stop_times records (header first) into rows with field access and byte spans. */
+async function* stopTimeRecords(records: AsyncIterable<{ record: string; offset: number; end: number }>, header?: string): AsyncGenerator<StopTimeRow & { header?: true }> {
   let columns: Map<string, number> | undefined;
-  for await (const raw of csvRecords(zipEntryStream(archive, entry))) {
+  const setColumns = (raw: string) => {
     const fields = parseCsvRecord(raw);
-    if (!columns) {
-      columns = new Map(fields.map((name, index) => [name, index]));
-      if (columns.size !== fields.length) throw new Error('Duplicate GTFS header');
-      for (const name of ['trip_id', 'stop_id', 'stop_sequence']) if (!columns.has(name)) throw new Error(`Missing required GTFS field: ${name}`);
-      yield { raw, field: () => '' }; // header
-      continue;
-    }
+    columns = new Map(fields.map((name, index) => [name, index]));
+    if (columns.size !== fields.length) throw new Error('Duplicate GTFS header');
+    for (const name of ['trip_id', 'stop_id', 'stop_sequence']) if (!columns.has(name)) throw new Error(`Missing required GTFS field: ${name}`);
+  };
+  if (header !== undefined) setColumns(header);
+  for await (const { record: raw, offset, end } of records) {
+    if (!columns) { setColumns(raw); yield { raw, field: () => '', offset, end, header: true }; continue; }
+    const fields = parseCsvRecord(raw);
     if (fields.length !== columns.size) throw new Error(`stop_times.txt row has ${fields.length} columns; expected ${columns.size}`);
     const index = columns;
-    yield { raw, field: name => { const at = index.get(name); return at === undefined ? '' : fields[at]!; } };
+    yield { raw, offset, end, field: name => { const at = index.get(name); return at === undefined ? '' : fields[at]!; } };
   }
 }
+const stopTimeRows = (archive: Uint8Array, entry: ZipEntry) => stopTimeRecords(csvRecordSpans(zipEntryStream(archive, entry)));
 
+/** Each trip's byte ranges in the uncompressed stop_times.txt; feeds group a trip's rows,
+ * and trip IDs that share a service usually sort together, so a day reads a few runs. */
+export type TripRanges = Record<string, [start: number, end: number][]>;
+/** Reads only the given trips' rows from a stored uncompressed stop_times.txt. Nearby
+ * ranges are coalesced so a day needs few requests; rows of other trips are dropped. */
+export async function* rangedStopTimes(read: (offset: number, length: number) => Promise<Uint8Array>, header: string, ranges: TripRanges,
+  trips: ReadonlySet<string>, gapBytes = 256 * 1024): AsyncGenerator<StopTimeRow> {
+  const wanted = [...trips].flatMap(trip => ranges[trip] ?? []).sort((a, b) => a[0] - b[0]);
+  const blocks: [number, number][] = [];
+  for (const [start, end] of wanted) {
+    const last = blocks.at(-1);
+    if (last && start - last[1] <= gapBytes) last[1] = Math.max(last[1], end); else blocks.push([start, end]);
+  }
+  for (const [start, end] of blocks) {
+    const bytes = await read(start, end - start);
+    if (bytes.length !== end - start) throw new Error('Short stop_times range read');
+    const records = csvRecordSpans(new Blob([bytes]).stream());
+    for await (const row of stopTimeRecords(records, header)) if (trips.has(row.field('trip_id'))) yield row;
+  }
+}
 function filesFor(text: Awaited<ReturnType<typeof open>>['text'], trips: string, stopTimes: string): GtfsScheduleFiles {
   const files: Record<string, string> = {};
   for (const [name, value] of Object.entries(text)) if (value !== undefined) files[name] = value;
@@ -91,10 +116,13 @@ export async function scanArchive(archive: Uint8Array, source: EdgeSource, windo
     return value;
   };
   const stopRoutes = new Map<TransitRef, Set<TransitRef>>();
-  let maxStopTimeSeconds = 0, header = true;
+  let maxStopTimeSeconds = 0, stopTimesHeader = '';
+  const tripRanges: TripRanges = {};
   for await (const row of stopTimeRows(archive, stopTimes)) {
-    if (header) { header = false; continue; }
-    const route = tripRoutes.get(row.field('trip_id')), stop = row.field('stop_id');
+    if (row.header) { stopTimesHeader = row.raw; continue; }
+    const trip = row.field('trip_id'), ranges = tripRanges[trip] ??= [], last = ranges.at(-1);
+    if (last && last[1] === row.offset) last[1] = row.end; else ranges.push([row.offset, row.end]);
+    const route = tripRoutes.get(trip), stop = row.field('stop_id');
     if (!route) throw new Error('unknown trip reference');
     if (!parents.has(stop)) throw new Error('unknown stop reference');
     const departure = row.field('departure_time');
@@ -120,7 +148,6 @@ export async function scanArchive(archive: Uint8Array, source: EdgeSource, windo
   // Stops, routes and agencies compile without timetable rows; discovery's trip IDs and
   // stop routes are feed-wide, exactly as a whole-feed compile reports them.
   const tripsHeader = text['trips.txt']!.slice(0, text['trips.txt']!.search(/\r?\n/));
-  const stopTimesHeader = (await csvRecords(zipEntryStream(archive, stopTimes)).next()).value as string;
   const skeleton = await compileSchedule({ coverage: source.coverage, feedId: source.feedId, files: filesFor(text, `${tripsHeader}\n`, `${stopTimesHeader}\n`),
     window: { startDate: start, endDate: end }, source: { url: source.url, retrievedAt: source.retrievedAt }, identity });
   const discovery: DiscoveryIndex = { ...skeleton.discovery, tripProviderIds: [...tripRoutes.keys()].sort(),
@@ -128,12 +155,14 @@ export async function scanArchive(archive: Uint8Array, source: EdgeSource, windo
   const discoveryBytes = new TextEncoder().encode(canonicalJson(discovery)), discoveryHash = await sha256(discoveryBytes);
   return { identity, dates, sources: skeleton.manifest.sources, agencyTimezones: skeleton.manifest.agencyTimezones,
     discovery: { feedId: source.feedId, key: `artifacts/${source.coverage.id}/v2/${source.feedId}/discovery/${discoveryHash}.json`, sha256: discoveryHash, byteLength: discoveryBytes.length },
-    discoveryBytes, stats: { trips: tripRoutes.size, stops: discovery.stops.length, routes: discovery.routes.length } };
+    discoveryBytes, stats: { trips: tripRoutes.size, stops: discovery.stops.length, routes: discovery.routes.length },
+    stopTimes: { header: stopTimesHeader, size: stopTimes.size, tripRanges } };
 }
 
 /** One service date: stream stop_times keeping only that date's trips, then compile each
  * first-departure band separately. Output equals partitioning a whole-feed compile. */
-export async function buildServiceDate(archive: Uint8Array, source: EdgeSource, identity: FeedIdentity, date: string, bandSeconds: number): Promise<DateBuild> {
+export async function buildServiceDate(archive: Uint8Array, source: EdgeSource, identity: FeedIdentity, date: string, bandSeconds: number,
+  ranged?: { header: string; rows: (trips: ReadonlySet<string>) => AsyncIterable<StopTimeRow> }): Promise<DateBuild> {
   const { stopTimes, text } = await open(archive, source);
   const calendars = buildServiceCalendars(text['calendar.txt'] ? parseGtfsCsv(text['calendar.txt']) : [], text['calendar_dates.txt'] ? parseGtfsCsv(text['calendar_dates.txt']) : []);
   const tripRecords = new Map<string, string>();
@@ -147,8 +176,11 @@ export async function buildServiceDate(archive: Uint8Array, source: EdgeSource, 
   }
   const active = new Map<string, { lines: string[]; firstSequence: number; firstDeparture: number | null; timed: number }>();
   let stopTimesHeader = '';
-  for await (const row of stopTimeRows(archive, stopTimes)) {
-    if (!stopTimesHeader) { stopTimesHeader = row.raw; continue; }
+  const tripIds = new Set(tripRecords.keys());
+  if (ranged) stopTimesHeader = ranged.header;
+  const rows: AsyncIterable<StopTimeRow & { header?: true }> = ranged ? ranged.rows(tripIds) : stopTimeRows(archive, stopTimes);
+  for await (const row of rows) {
+    if (row.header) { stopTimesHeader = row.raw; continue; }
     const trip = row.field('trip_id');
     if (!tripRecords.has(trip)) continue;
     const entry = active.get(trip) ?? { lines: [], firstSequence: Infinity, firstDeparture: null, timed: 0 };

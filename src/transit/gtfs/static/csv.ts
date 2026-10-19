@@ -58,6 +58,48 @@ export async function* csvRecords(stream: ReadableStream<Uint8Array>): AsyncGene
   if (pending) yield pending;
 }
 
+/** Streams raw records with their byte span [offset, end) in the source, end including the
+ * terminator. Splitting on bytes is exact: UTF-8 never encodes a newline or quote inside a
+ * multibyte character. */
+export async function* csvRecordSpans(stream: ReadableStream<Uint8Array>): AsyncGenerator<{ record: string; offset: number; end: number }> {
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+  const reader = stream.getReader();
+  let pending: Uint8Array = new Uint8Array(0), pendingOffset = 0, quoted = false, first = true;
+  const emit = (bytes: Uint8Array, offset: number, end: number) => {
+    let length = bytes.length;
+    if (length && bytes[length - 1] === 13) length--;
+    let record = decoder.decode(bytes.subarray(0, length));
+    if (first) { first = false; if (record.charCodeAt(0) === 0xfeff) record = record.slice(1); }
+    return { record, offset, end };
+  };
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const chunk = pending.length ? concat(pending, value) : value;
+      let start = 0;
+      // Resume scanning after the bytes already examined in the pending prefix.
+      for (let index = pending.length; index < chunk.length; index++) {
+        const byte = chunk[index]!;
+        if (byte === 34) quoted = !quoted;
+        else if (byte === 10 && !quoted) {
+          if (index > start && !(index - start === 1 && chunk[start] === 13)) yield emit(chunk.subarray(start, index), pendingOffset + start, pendingOffset + index + 1);
+          start = index + 1;
+        }
+      }
+      pending = chunk.slice(start); pendingOffset += start;
+    }
+  } finally { reader.releaseLock(); }
+  if (quoted) throw new Error('Unterminated quoted GTFS field');
+  if (pending.length) yield emit(pending, pendingOffset, pendingOffset + pending.length);
+}
+
+function concat(left: Uint8Array, right: Uint8Array): Uint8Array {
+  const bytes = new Uint8Array(left.length + right.length);
+  bytes.set(left); bytes.set(right, left.length);
+  return bytes;
+}
+
 function parseRows(source: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];

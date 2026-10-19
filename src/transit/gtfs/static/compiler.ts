@@ -52,9 +52,19 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
   const url = new URL(input.source.url);
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Invalid public source URL');
   if (!Number.isFinite(Date.parse(input.source.retrievedAt))) throw new Error('Invalid source retrieval timestamp');
-  const ref = (kind: TransitEntityKind, id: string) => formatEntityRef({ coverage: coverage.id, feed: feedId, kind, id });
-  // Serialize each row once, then sort: the same canonical order without re-serializing per comparison.
-  const tables = Object.fromEntries(Object.entries(files).map(([name, csv]) => [name, parseGtfsCsv(csv)
+  // Millions of rows name thousands of entities: format (and validate) each reference once.
+  const refs = new Map<string, TransitRef>();
+  const ref = (kind: TransitEntityKind, id: string) => {
+    const key = `${kind}\u0000${id}`;
+    let value = refs.get(key);
+    if (!value) { value = formatEntityRef({ coverage: coverage.id, feed: feedId, kind, id }); refs.set(key, value); }
+    return value;
+  };
+  // Canonical row order makes the source hash and order-sensitive outputs deterministic.
+  // Trips and stop times are re-ordered by trip reference and stop sequence below, so when
+  // the feed identity is supplied (no hash to compute) their rows need no canonical sort.
+  const orderFree = new Set(input.identity ? ['trips.txt', 'stop_times.txt'] : []);
+  const tables = Object.fromEntries(Object.entries(files).map(([name, csv]) => [name, orderFree.has(name) ? parseGtfsCsv(csv) : parseGtfsCsv(csv)
     .map(row => [canonicalJson(row), row] as const).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, row]) => row)]));
   const rows = (name: string) => tables[name] ?? [];
   const agencyRows = rows('agency.txt');
