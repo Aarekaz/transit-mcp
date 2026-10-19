@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { transit_realtime } from 'gtfs-realtime-bindings';
 import { NYC_TRIP_FEEDS } from '../../src/regions/nyc';
 import { formatTripInstanceRef, parseTransitRef } from '../../src/transit/core/refs';
-import { NOW, SERVICE_DATE, bandedArtifact, callTool, civil, feedBytes, liveEnv, nowSeconds, nyctTrip, upstream, wireHub } from '../helpers/dc-nyc-realtime';
+import { NOW, SERVICE_DATE, bandedArtifact, callTool, civil, feedBytes, liveEnv, nowSeconds, nyctTrip, nyctVehicle, upstream, wireHub } from '../helpers/dc-nyc-realtime';
 
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW)); });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
@@ -22,6 +22,10 @@ function nycDocuments(stamp = nowSeconds(), overrides: Partial<Record<string, Ui
     nyctTrip('054900_2..S01R', '2', [['127S', civil('09:09:00')], ['128S', civil('09:11:00')], ['129S', civil('09:13:00')], ['130S', civil('09:15:00')], ['132S', civil('09:19:00')]], '09:09:00'),
     // Not in the published schedule at all.
     nyctTrip('055000_1..S03X001', '1', [['129S', civil('09:16:00')], ['130S', civil('09:18:00')]], '09:10:00'),
+    // Where those trains are, as NYCT reports it: no coordinates.
+    nyctVehicle('054800_1..S03R', '1', '127S', 1, stamp - 20),
+    nyctVehicle('054900_2..S01R', '2', '128S', 2, stamp - 30),
+    nyctVehicle('055000_1..S03X001', '1', '725S', 0, stamp - 10),
   ]);
   const documents: Record<string, Uint8Array> = { 'camsys/subway-alerts': feedBytes(stamp, []) };
   for (const id of NYC_TRIP_FEEDS) documents[`nyct/${id}`] = id === 'gtfs' ? lines : feedBytes(stamp, []);
@@ -40,16 +44,46 @@ async function nyc(documents = nycDocuments()) {
 }
 
 describe('NYC subway through the global tools with every MTA feed', () => {
-  it('reports truthful NYC capabilities: live departures and alerts, no vehicle coordinates', async () => {
+  it('reports truthful NYC capabilities: live departures, alerts and train locations', async () => {
     const f = await nyc();
     const found = (await callTool(f.env, 'find_transit', { query: 'nyc' })).structuredContent;
     expect(found.coverages[0]).toMatchObject({ id: 'nyc', available: true,
-      capabilities: { schedules: true, planning: true, realtimeDepartures: true, alerts: true, vehicles: false, accessibility: false } });
+      capabilities: { schedules: true, planning: true, realtimeDepartures: true, alerts: true, vehicles: true, accessibility: false } });
     const vehicles = (await callTool(f.env, 'get_vehicle_status', { ref: f.ref('route', '1') })).structuredContent;
-    expect(vehicles).toMatchObject({ status: 'unavailable', reasons: ['REALTIME_UNAVAILABLE'], vehicles: [] });
-    // Polled all nine documents with no credential attached.
+    expect(vehicles).toMatchObject({ status: 'realtime', reasons: [] });
+    expect(vehicles.vehicles.map((vehicle: { stopName: string; stopStatus: string }) => `${vehicle.stopName}:${vehicle.stopStatus}`)).toEqual(['Times Sq-42 St:stopped_at', 'Times Sq-42 St:incoming_at']);
+    // Polled all nine documents with no credential attached; vehicles ride in the trip documents.
     expect(f.network.requests.map(request => decodeURIComponent(new URL(request.url).pathname).split('/').at(-1)).sort())
       .toEqual([...NYC_TRIP_FEEDS, 'subway-alerts'].sort());
+  });
+
+  it('shows which trains are at a station and where a dated train is, without inventing coordinates', async () => {
+    const f = await nyc();
+    // By name: both published Times Sq stations are one place.
+    const atTimesSq = (await callTool(f.env, 'get_vehicle_status', { stop: 'Times Sq-42 St', coverage: 'nyc' })).structuredContent;
+    expect(atTimesSq).toMatchObject({ status: 'realtime', vehicles: [
+      { routeName: '1', headsign: 'South Ferry', stopStatus: 'stopped_at', stopRef: f.ref('stop', '127S'), stopName: 'Times Sq-42 St',
+        previousStopRef: null, coordinates: { latitude: 40.75529, longitude: -73.987495 }, coordinatesSource: 'stop', ageSeconds: 20 },
+      // Not in the schedule: no trip identity or headsign is invented, and it is not stopped, so no position.
+      { routeName: '1', headsign: null, tripInstanceRef: null, stopStatus: 'incoming_at', stopRef: f.ref('stop', '725S'), coordinates: null, coordinatesSource: null },
+    ] });
+    // A dated trip from get_departures or plan_trip: the 2 has left Times Sq for 34 St.
+    const express = formatTripInstanceRef({ coverage: 'nyc', feed: 'mta_subway', id: 'AFA25GEN-2092-Weekday-00_054900_2..S01R', serviceDate: SERVICE_DATE, startTime: '09:09:00' });
+    expect((await callTool(f.env, 'get_vehicle_status', { ref: express })).structuredContent).toMatchObject({ status: 'realtime', vehicles: [
+      { tripInstanceRef: express, routeName: '2', headsign: 'Flatbush Av-Brooklyn College', stopStatus: 'in_transit_to', stopName: '34 St-Penn Station',
+        previousStopRef: f.ref('stop', '127S'), previousStopName: 'Times Sq-42 St', coordinates: null, coordinatesSource: null },
+    ] });
+    // A platform covers only itself.
+    expect((await callTool(f.env, 'get_vehicle_status', { ref: f.ref('stop', '725S') })).structuredContent.vehicles.map((vehicle: { stopRef: string }) => vehicle.stopRef))
+      .toEqual([f.ref('stop', '725S')]);
+  });
+
+  it('lists departures across every station of a complex', async () => {
+    const f = await nyc();
+    // 725 has no scheduled service of its own; the 1 and 2 leave from 127 in the same complex.
+    const rows = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '725'), windowSeconds: 1800 })).structuredContent.departures;
+    expect(new Set(rows.map((row: { routeName: string }) => row.routeName))).toEqual(new Set(['1', '2']));
+    expect(rows.every((row: { stopName: string }) => row.stopName === 'Times Sq-42 St')).toBe(true);
   });
 
   it('keeps rerouted and unscheduled trains, and drops scheduled calls a train will not make', async () => {
@@ -282,8 +316,10 @@ describe('Washington Metrorail through the global tools', () => {
     expect(byRoute.vehicles).toHaveLength(1);
     const other = formatTripInstanceRef({ coverage: 'dc', feed: 'wmata', id: '14362719_20741', serviceDate: SERVICE_DATE, startTime: '09:12:00' });
     expect((await callTool(f.env, 'get_vehicle_status', { ref: other })).structuredContent).toMatchObject({ status: 'unavailable', vehicles: [] });
-    // A bare stop or train number is not a vehicle identity.
-    expect((await callTool(f.env, 'get_vehicle_status', { ref: f.ref('stop', 'STN_A02') })).structuredContent).toMatchObject({ code: 'INVALID_TRANSIT_REF' });
+    // A station lists trains reported at or heading to it; this one reports no stop.
+    expect((await callTool(f.env, 'get_vehicle_status', { ref: f.ref('stop', 'STN_A02') })).structuredContent).toMatchObject({ status: 'realtime', vehicles: [] });
+    // A bare train number is not a vehicle identity.
+    expect((await callTool(f.env, 'get_vehicle_status', { ref: '118' })).structuredContent).toMatchObject({ code: 'INVALID_TRANSIT_REF' });
   });
 
   it('resolves a train number only through a fresh observation, listing every train that carries it', async () => {

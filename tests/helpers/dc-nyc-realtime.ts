@@ -85,6 +85,10 @@ export const feedBytes = (timestamp: number, entity: Entity[]) =>
 export function nyctTrip(tripId: string, routeId: string, stops: [stopId: string, time: number][], startTime = '09:08:00', startDate = SERVICE_DATE): Entity {
   return { id: tripId, tripUpdate: { trip: { tripId, routeId, startDate, startTime }, stopTimeUpdate: stops.map(([stopId, time]) => ({ stopId, arrival: { time }, departure: { time } })) } };
 }
+/** A train as NYCT reports it: a stop and status, no coordinates. Status 0 incoming, 1 stopped, 2 in transit. */
+export function nyctVehicle(tripId: string, routeId: string, stopId: string, currentStatus: 0 | 1 | 2, timestamp: number, startDate = SERVICE_DATE): Entity {
+  return { id: `v-${tripId}`, vehicle: { trip: { tripId, routeId, startDate }, stopId, currentStatus, timestamp } };
+}
 
 /** Upstream documents by URL path; any path absent from `documents` answers 503. */
 export function upstream(documents: Record<string, Uint8Array | (() => Uint8Array)>) {

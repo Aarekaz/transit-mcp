@@ -7,7 +7,7 @@ DC (WMATA Metrorail) and NYC (MTA subway) serve the five global tools (`find_tra
 | Coverage | Schedule (static) | Realtime | Vehicles |
 | --- | --- | --- | --- |
 | `dc` / feed `wmata` | `https://api.wmata.com/gtfs/rail-gtfs-static.zip` (key header) | Trip Updates, Vehicle Positions, Alerts from `api.wmata.com/gtfs/rail-gtfsrt-*.pb` (key header) | Yes: positions carry coordinates |
-| `nyc` / feed `mta_subway` | MTA supplemented subway GTFS `https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip` (planned service changes for the coming days) | All eight NYCT trip-update documents (`gtfs`, `-ace`, `-bdfm`, `-g`, `-jz`, `-nqrw`, `-l`, `-si`) and `camsys/subway-alerts` | No: NYCT vehicle entities have a stop and status, not coordinates |
+| `nyc` / feed `mta_subway` | MTA supplemented subway GTFS `https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip` (planned service changes for the coming days) | All eight NYCT trip-update documents (`gtfs`, `-ace`, `-bdfm`, `-g`, `-jz`, `-nqrw`, `-l`, `-si`) and `camsys/subway-alerts` | Yes, by station: NYCT vehicle entities ride in the trip documents with a stop and status, not coordinates |
 
 Provider rules live in `src/transit/gtfs/realtime/sources.ts` (server-side; public manifests never name credentials):
 
@@ -109,6 +109,6 @@ Rollback target before this rollout: Worker version `5fa5d475`.
 - **NYC request latency.** Wall time in production is high for heavy calls (about 13 s for an NYC plan, 9 s for city-wide status) even though planning itself takes well under a second locally; R2 reads and cold isolates dominate. Worth measuring per phase before optimizing further.
 - **NYC alert freshness.** MTA's alerts feed header advances only when alerts change, so alerts are often labeled `REALTIME_STALE` after 20 minutes.
 - **Agreement with official planners.** Current MTA and WMATA trip-planner results have not been compared journey by journey.
-- **NYC vehicle locations and train numbers.** The feed has no coordinates, and NYCT train numbers live in an MTA protobuf extension this decoder does not read.
+- **NYC train numbers and coordinates between stations.** NYCT train numbers live in an MTA protobuf extension this decoder does not read. NYC trains are located by station (stopped at, arriving, or heading to, with the station last served), never by an interpolated point.
 - **Step-free routing** is not offered for any coverage.
 - **Validator coverage of edge refreshes.** Edge builds rely on the compiler's checks and the change guards; the MobilityData validator is a manual check when a base timetable changes.

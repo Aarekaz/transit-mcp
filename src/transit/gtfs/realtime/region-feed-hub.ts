@@ -5,9 +5,9 @@ import { decodeRealtimeFeed, type NormalizedAlert, type NormalizedRealtimeFeed }
 import { RegionalFeedHubCore } from './hub-core';
 import { ApiKeyQuota, RealtimeSnapshotStore, StaticArtifactStore, readBoundedObject } from './snapshot-store';
 import { loadScheduleWindow } from '../../planner/schedule-index';
-import { applyTripUpdates, applyVehiclePositions } from './trip-match';
+import { applyTripUpdates, applyVehiclePositions, matchVehicles, settleStoppedVehicles } from './trip-match';
 import { decodeDiscoveryIndex, sha256 } from '../static/shards';
-import { feedParts, getRealtimeSource, getRealtimeSources, ingestionActive, upstreamRequest, type RealtimeSource } from './sources';
+import { feedParts, getRealtimeSource, getRealtimeSources, ingestionActive, publishedKinds, upstreamRequest, type RealtimeSource } from './sources';
 
 const POLLED_PREFIX = 'polled:';
 
@@ -116,7 +116,7 @@ export class RegionFeedHub implements DurableObject {
       return Response.json({ allowed: await this.#quota!.claim('static', Math.floor(Date.now() / 1000)) });
     }
     const kind = url.pathname.slice(1) as RealtimeFeedKind;
-    if (!source.feeds.some(feed => feed.kind === kind)) {
+    if (!publishedKinds(source).has(kind)) {
       return Response.json({ error: 'not_found' }, { status: 404 });
     }
     const now = Number(url.searchParams.get('now')) || Math.floor(Date.now() / 1_000);
@@ -193,7 +193,7 @@ export class RegionFeedHub implements DurableObject {
       }
       const decoded = mergeRealtimeParts(settled.map(result => (result as PromiseFulfilledResult<NormalizedRealtimeFeed>).value));
       lap('fetched');
-      let payload = payloadFor(spec.kind, decoded), warnings = decoded.warnings, degraded = false;
+      let payload = payloadFor(spec.kind, decoded), warnings = decoded.warnings, degraded = false, vehicles: unknown[] | undefined;
       const readShard = (key: string) => readBoundedObject(this.#env.TRANSIT_ARTIFACTS!, key, 64 * 1024 * 1024);
       const matchWindow = () => loadScheduleWindow({ manifest: current.manifest, instant: new Date(nowSeconds * 1000).toISOString(),
         windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [policy.feedId] });
@@ -212,6 +212,8 @@ export class RegionFeedHub implements DurableObject {
         const applied = await applyTripUpdates(decoded, { ...matching, shards: window.shards.map(entry => entry.shard), discoveries: [discovery] });
         lap('matched');
         payload = applied.stopUpdates; degraded = applied.degraded || window.status === 'unavailable'; warnings = [...applied.warnings, ...window.reasons];
+        // Same documents, same verified shards: no second fetch or integrity pass.
+        if (spec.alsoPublishes?.includes('vehicle_positions')) vehicles = matchVehicles(settleStoppedVehicles(decoded.vehicles, decoded.trips), { ...matching, shards: window.shards.map(entry => entry.shard) });
         Object.assign(timings, { rows: payload.length });
         console.info(JSON.stringify({ event: 'regional_trip_match', region: coverage.id, ...applied.match, ...applied.excluded }));
         // The schedule refresh compares this before and after publishing a new artifact.
@@ -228,6 +230,11 @@ export class RegionFeedHub implements DurableObject {
         receivedAtSeconds: Math.floor(Date.now() / 1000),
         payload, warnings, degraded,
       });
+      if (vehicles) {
+        await this.#snapshots.publish('vehicle_positions', { version: current.version, producerTimestampSeconds: decoded.producerTimestampSeconds,
+          receivedAtSeconds: Math.floor(Date.now() / 1000), payload: vehicles, warnings: decoded.warnings, degraded });
+        Object.assign(timings, { vehicles: vehicles.length });
+      }
       lap('published');
       console.info(JSON.stringify({ event: 'regional_feed_polled', region: coverage.id, feed: spec.kind, ...timings }));
     } catch (error) {

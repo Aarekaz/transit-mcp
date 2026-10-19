@@ -63,12 +63,44 @@ export async function applyVehiclePositions(vehicles: NormalizedVehicle[], conte
     const bytes = encodeScheduleShard(shard), hash = await sha256(bytes);
     if (!context.manifest.shards.some(descriptor => descriptor.feedId === shard.feedId && descriptor.sha256 === hash && descriptor.byteLength === bytes.length)) throw new Error('Realtime schedule integrity failure');
   }
+  return matchVehicles(vehicles, context);
+}
+
+/** NYCT can leave a vehicle STOPPED_AT the station it last dwelt at after the train has
+ * left; the trip update in the same document already predicts a later stop. When that
+ * first remaining stop differs and is still ahead of the observation, the train is
+ * between the two: heading to the predicted stop, having last served the reported one. */
+export function settleStoppedVehicles(vehicles: NormalizedVehicle[], trips: NormalizedTripUpdate[]): NormalizedVehicle[] {
+  const next = new Map<string, NormalizedTripUpdate['stops'][number]>();
+  for (const trip of trips) {
+    const first = trip.stops.find(stop => stop.stopId && stop.stopScheduleRelationship !== 'SKIPPED');
+    if (trip.tripId && first) next.set(`${trip.tripId}\n${trip.startDate ?? ''}`, first);
+  }
+  return vehicles.map(vehicle => {
+    const first = vehicle.tripId ? next.get(`${vehicle.tripId}\n${vehicle.startDate ?? ''}`) : undefined;
+    const arrives = first?.arrivalTimeSeconds ?? first?.departureTimeSeconds;
+    if (vehicle.currentStatus !== 'STOPPED_AT' || !first?.stopId || first.stopId === vehicle.stopId || arrives === undefined ||
+      vehicle.timestampSeconds === undefined || arrives <= vehicle.timestampSeconds) return vehicle;
+    return { ...vehicle, stopId: first.stopId, currentStatus: 'IN_TRANSIT_TO', previousStopId: vehicle.stopId };
+  });
+}
+
+/** Matches vehicles against shards the caller has already verified (see applyTripUpdates).
+ * A matched vehicle also gets its trip's headsign and, unless it is stopped, the stop it
+ * last served: observed (settleStoppedVehicles) or else the scheduled stop before the
+ * reported one; a stop off the scheduled pattern gets none. */
+export function matchVehicles(vehicles: NormalizedVehicle[], context: TripMatchContext): NormalizedVehicle[] {
   const index = tripIndex(context);
   return vehicles.map(vehicle => {
     const match = matchIndexedTrip({ entityId: vehicle.entityId, tripId: vehicle.tripId, routeId: vehicle.routeId,
       startDate: vehicle.startDate, startTime: vehicle.startTime, scheduleRelationship: vehicle.scheduleRelationship ?? 'UNKNOWN', rawScheduleRelationship: 0, stops: [] }, context, index);
-    const { tripInstanceRef: _unverified, ...base } = vehicle;
-    return match ? { ...base, tripInstanceRef: match.tripInstanceRef, routeId: match.shard.routes.find(route => route.ref === match.trip.routeRef)!.providerId } : base;
+    const { tripInstanceRef: _unverified, headsign: _headsign, ...base } = vehicle;
+    if (!match) return base;
+    const stopIds = new Map(match.shard.stops.map(stop => [stop.ref as string, stop.providerId]));
+    const at = vehicle.stopId === undefined ? -1 : match.trip.stopTimes.findIndex(call => stopIds.get(call.stopRef) === vehicle.stopId);
+    const previous = vehicle.previousStopId ?? (at > 0 && vehicle.currentStatus !== 'STOPPED_AT' ? stopIds.get(match.trip.stopTimes[at - 1]!.stopRef) : undefined);
+    return { ...base, tripInstanceRef: match.tripInstanceRef, routeId: match.shard.routes.find(route => route.ref === match.trip.routeRef)!.providerId,
+      ...(match.trip.headsign ? { headsign: match.trip.headsign } : {}), ...(previous ? { previousStopId: previous } : {}) };
   });
 }
 

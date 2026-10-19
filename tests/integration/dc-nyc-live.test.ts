@@ -62,9 +62,17 @@ describe.skipIf(!coverage || !directory)('live provider acceptance', () => {
     evidence(`alerts:${route}`, { status: routeAlerts.status, alerts: routeAlerts.alerts.length });
     const vehicles = (await callTool(env, 'get_vehicle_status', { ref: ref('route', route), limit: 100 })).structuredContent;
     evidence('vehicles', { status: vehicles.status, reasons: vehicles.reasons, vehicles: vehicles.vehicles.length,
-      onDatedTrip: vehicles.vehicles.filter((vehicle: Record<string, any>) => vehicle.tripInstanceRef).length });
-    if (coverage === 'nyc') expect(vehicles).toMatchObject({ status: 'unavailable', vehicles: [] });
-    const train = vehicles.vehicles.find((vehicle: Record<string, any>) => vehicle.tripInstanceRef);
+      onDatedTrip: vehicles.vehicles.filter((vehicle: Record<string, any>) => vehicle.tripInstanceRef).length,
+      withStop: vehicles.vehicles.filter((vehicle: Record<string, any>) => vehicle.stopRef).length,
+      withPrevious: vehicles.vehicles.filter((vehicle: Record<string, any>) => vehicle.previousStopRef).length });
+    expect(vehicles.status).toBe('realtime');
+    const station = (await callTool(env, 'get_vehicle_status', { ref: ref('stop', STATIONS[coverage!][0]!), limit: 100 })).structuredContent;
+    evidence('vehicles:station', { status: station.status, vehicles: station.vehicles.length,
+      sample: station.vehicles.slice(0, 6).map((vehicle: Record<string, any>) => `${vehicle.routeName}>${vehicle.headsign}|${vehicle.stopStatus}@${vehicle.stopName}|from:${vehicle.previousStopName}|${vehicle.coordinatesSource}|${vehicle.ageSeconds}s`) });
+    const matched = vehicles.vehicles.find((vehicle: Record<string, any>) => vehicle.tripInstanceRef && vehicle.stopStatus === 'in_transit_to');
+    if (matched) evidence('vehicles:trip', (await callTool(env, 'get_vehicle_status', { ref: matched.tripInstanceRef })).structuredContent.vehicles[0]);
+    // NYCT publishes no train numbers (only an internal entity id), so only DC resolves one.
+    const train = coverage === 'dc' ? vehicles.vehicles.find((vehicle: Record<string, any>) => vehicle.tripInstanceRef) : undefined;
     if (train) {
       const found = (await callTool(env, 'find_transit', { query: `train ${train.id}`, coverage: coverage! })).structuredContent;
       evidence('train', { query: train.id, candidates: found.candidates.map((candidate: Record<string, any>) => `${candidate.name}:${candidate.providerId}`) });

@@ -13,6 +13,9 @@ export interface RealtimeFeedSpec {
    * in the same poll, because a missing part can hide service (e.g. a reroute onto a
    * line whose own feed loaded). */
   parts?: readonly { id: string; url: URL }[];
+  /** Other kinds carried in the same documents, published from the same poll with no
+   * extra upstream request (NYCT trip feeds carry each train's vehicle entity). */
+  alsoPublishes?: readonly RealtimeFeedKind[];
   weight: number;
   minIntervalSeconds: number;
   maxBytes: number;

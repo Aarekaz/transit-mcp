@@ -39,7 +39,7 @@ export function verifyPlanChoices(state: z.infer<typeof planState>, inputRespons
 
 export function registerPlanTool(server: McpServer, context: MetroMcpContext, codec: RequestStateCodec<TransitRequestState>): void {
   server.registerTool('plan_trip', {
-    title: 'Plan a transit journey', description: 'Plan an origin-to-destination journey when find_transit reports available coverage with planning enabled. Returns up to three independently validated itineraries and resolves named endpoints together; departure defaults to now. Never assemble or repair journeys from get_departures.',
+    title: 'Plan a transit journey', description: 'Plan an origin-to-destination journey when find_transit reports available coverage with planning enabled. Returns up to three independently validated itineraries and resolves named endpoints together; departure defaults to now. The whole journey must finish within windowSeconds (default two hours): if none is found for a long trip, retry with a larger window. Each transit leg carries a tripInstanceRef; pass it to get_vehicle_status to see where that train is now. Never assemble or repair journeys from get_departures.',
     annotations: readOnlyLive('Plan a transit journey'),
     inputSchema: planInput,
     outputSchema: z.strictObject({ ...resultShape, itineraries: z.array(itinerarySchema).max(3) }),

@@ -357,6 +357,26 @@ describe('GTFS realtime policy', () => {
     expect(() => decodeRealtimeFeed(new Uint8Array([255]))).toThrow('Malformed GTFS-Realtime feed');
   });
 
+  it('keeps stop-only vehicles and moves a stale STOPPED_AT train on to its predicted stop', () => {
+    const bytes = transit_realtime.FeedMessage.encode(transit_realtime.FeedMessage.fromObject({ header: { gtfsRealtimeVersion: '2.0', timestamp: 1_000 }, entity: [
+      // Reported stopped at A15N 100 s ago; the same document predicts A12N in 50 s.
+      { id: 'tu-left', tripUpdate: { trip: { tripId: 'left', startDate: '20261019' }, stopTimeUpdate: [{ stopId: 'A12N', arrival: { time: 1_050 } }] } },
+      { id: 'v-left', vehicle: { trip: { tripId: 'left', startDate: '20261019' }, stopId: 'A15N', currentStatus: 1, timestamp: 900 } },
+      // Agrees with its prediction: still at the platform.
+      { id: 'tu-here', tripUpdate: { trip: { tripId: 'here', startDate: '20261019' }, stopTimeUpdate: [{ stopId: 'A24N', arrival: { time: 990 } }] } },
+      { id: 'v-here', vehicle: { trip: { tripId: 'here', startDate: '20261019' }, stopId: 'A24N', currentStatus: 1, timestamp: 980 } },
+      // Waiting at a terminal with no prediction: left as reported.
+      { id: 'v-terminal', vehicle: { trip: { tripId: 'terminal', startDate: '20261019' }, stopId: 'H11S', currentStatus: 1, timestamp: 800 } },
+      // Neither a position nor a stop: nothing to report.
+      { id: 'v-nowhere', vehicle: { trip: { tripId: 'nowhere', startDate: '20261019' }, timestamp: 990 } },
+    ] })).finish();
+    const feed = decodeRealtimeFeed(bytes);
+    expect(feed.vehicles.map(vehicle => vehicle.entityId)).toEqual(['v-left', 'v-here', 'v-terminal']);
+    expect(feed.vehicles[0]).not.toHaveProperty('latitude');
+    expect(matching.settleStoppedVehicles(feed.vehicles, feed.trips).map(vehicle => [vehicle.stopId, vehicle.currentStatus, vehicle.previousStopId])).toEqual([
+      ['A12N', 'IN_TRANSIT_TO', 'A15N'], ['A24N', 'STOPPED_AT', undefined], ['H11S', 'STOPPED_AT', undefined]]);
+  });
+
   it('drops alert fields whose wire type contradicts the spec instead of losing the alert', () => {
     // WMATA rail alerts as published on 2026-10-19: severity sent as a varint in field 12 (tts_header_text).
     const wmata = Uint8Array.from(Buffer.from([

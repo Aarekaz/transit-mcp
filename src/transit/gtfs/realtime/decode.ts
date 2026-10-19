@@ -36,6 +36,8 @@ export interface NormalizedTripUpdate {
   tripProperties?: { tripId?: string; startDate?: string; startTime?: string };
 }
 
+export type VehicleStopStatus = 'INCOMING_AT' | 'STOPPED_AT' | 'IN_TRANSIT_TO';
+
 export interface NormalizedVehicle {
   entityId: string;
   vehicleId?: string;
@@ -46,8 +48,15 @@ export interface NormalizedVehicle {
   scheduleRelationship?: TripRelationship;
   tripInstanceRef?: string;
   routeId?: string;
-  latitude: number;
-  longitude: number;
+  /** Absent when the producer reports only a stop (NYCT publishes no coordinates). */
+  latitude?: number;
+  longitude?: number;
+  /** The stop the vehicle is at or heading to, as the producer reports it. */
+  stopId?: string;
+  currentStatus?: VehicleStopStatus;
+  /** Set by schedule matching: headsign and the stop served before `stopId`. */
+  headsign?: string;
+  previousStopId?: string;
   bearing?: number;
   speedMetersPerSecond?: number;
   timestampSeconds?: number;
@@ -223,7 +232,10 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
     }
 
     const vehicle = entity.vehicle;
-    if (vehicle?.position?.latitude != null && vehicle.position.longitude != null) {
+    const positioned = vehicle?.position?.latitude != null && vehicle.position.longitude != null, stopId = identifier(vehicle?.stopId);
+    if (vehicle && (positioned || stopId)) {
+      // GTFS-Realtime: an absent current_status with a stop means IN_TRANSIT_TO.
+      const statuses: Record<number, VehicleStopStatus> = { 0: 'INCOMING_AT', 1: 'STOPPED_AT', 2: 'IN_TRANSIT_TO' };
       feed.vehicles.push({
         entityId: entity.id,
         vehicleId: vehicle.vehicle?.id ?? undefined,
@@ -233,8 +245,8 @@ export function decodeRealtimeFeed(bytes: Uint8Array): NormalizedRealtimeFeed {
         startTime: identifier(vehicle.trip?.startTime),
         scheduleRelationship: vehicle.trip?.scheduleRelationship === 2 ? 'UNSCHEDULED' : vehicle.trip?.scheduleRelationship == null || vehicle.trip.scheduleRelationship === 0 ? 'SCHEDULED' : 'UNKNOWN',
         routeId: identifier(vehicle.trip?.routeId),
-        latitude: vehicle.position.latitude,
-        longitude: vehicle.position.longitude,
+        ...(positioned ? { latitude: vehicle.position!.latitude, longitude: vehicle.position!.longitude } : {}),
+        ...(stopId ? { stopId, currentStatus: statuses[vehicle.currentStatus ?? 2] } : {}),
         bearing: ownNumber(vehicle.position, 'bearing'),
         speedMetersPerSecond: ownNumber(vehicle.position, 'speed'),
         timestampSeconds: ownNumber(vehicle, 'timestamp'),

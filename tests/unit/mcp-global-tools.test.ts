@@ -551,11 +551,11 @@ describe('global transit MCP boundary', () => {
     expect(JSON.parse(resource.contents[0].text)).toEqual(detail);
     expect((await wire(env, 'resources/read', { uri: `transit://entity/${ref('route', 'R')}?version=${'0'.repeat(64)}` })).error).toBeDefined();
   });
-  it('returns scheduled departures with dated identities and refuses vehicle queries for bare numbers or stops', async () => {
+  it('returns scheduled departures with dated identities and refuses vehicle queries for bare numbers or undated trips', async () => {
     const { env } = await fixture();
     const departures = (await call(env, 'get_departures', { stopRef: ref('stop', 'A'), at: at('08:59:00') })).result;
     expect(departures.structuredContent).toMatchObject({ status: 'scheduled_only', departures: [{ scheduledTime: at('09:00:00'), tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDA6MDA' }] });
-    for (const value of ['91', ref('stop', 'A'), ref('trip', 'T')]) {
+    for (const value of ['91', ref('trip', 'T')]) {
       expect((await call(env, 'get_vehicle_status', { ref: value })).result).toMatchObject({ isError: true, structuredContent: { code: 'INVALID_TRANSIT_REF' } });
     }
     expect((await call(env, 'get_vehicle_status', { ref: ref('route', 'R') })).result.structuredContent).toMatchObject({ status: 'unavailable', reasons: ['REALTIME_UNAVAILABLE'], vehicles: [] });

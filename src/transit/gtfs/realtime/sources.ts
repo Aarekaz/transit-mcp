@@ -1,5 +1,5 @@
 import { SFBAY_REGION } from '../../../regions/sfbay';
-import type { RealtimeFeedSpec, RealtimeSourcePolicy } from '../../../regions/types';
+import type { RealtimeFeedKind, RealtimeFeedSpec, RealtimeSourcePolicy } from '../../../regions/types';
 import { getCoverage, type CoverageManifest } from '../../core/coverage';
 import { getCoverageMode } from '../../../regions/manifest';
 import type { Env } from '../../../types';
@@ -41,6 +41,11 @@ export function credential(source: RealtimeSource, env: Env): string | undefined
   if (source.policy.auth.kind === 'none') return undefined;
   const value = env[source.policy.auth.secretEnv];
   return typeof value === 'string' && value.trim() ? value : null;
+}
+
+/** Every kind the coordinator publishes, including kinds read from another kind's documents. */
+export function publishedKinds(source: RealtimeSource): ReadonlySet<RealtimeFeedKind> {
+  return new Set(source.feeds.flatMap(feed => [feed.kind, ...feed.alsoPublishes ?? []]));
 }
 
 export function feedParts(spec: RealtimeFeedSpec): readonly { id: string; url: URL }[] {
