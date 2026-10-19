@@ -1329,7 +1329,14 @@
     .cta-button:hover .cta-arrow { transform: translateX(3px); }
     .cta-button:active { transform: translateY(1px); }
 
-    /* ChatGPT plugin — secondary primary path, sits right under the URL. */
+    /* Directory listings — secondary primary paths, right under the URL. */
+    .directory-links {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
     .plugin-link {
       display: inline-flex;
       align-items: center;
@@ -1733,17 +1740,23 @@
             </button>
             <button type="button" class="cta-button" data-open-install>Connect <span class="cta-arrow" aria-hidden="true">&rarr;</span></button>
           </div>
-          <a class="plugin-link" href="https://chatgpt.com/plugins/plugin_asdk_app_6a9078f4d6dc8191be735cc1c2ff45b5" target="_blank" rel="noreferrer">
-            <span class="plugin-mark" aria-hidden="true"><img src="/client-openai.svg" alt="" width="14" height="14"></span>
-            <span>Also available as a <strong>ChatGPT plugin</strong></span>
-            <span class="plugin-arrow" aria-hidden="true">&nearr;</span>
-          </a>
+          <div class="directory-links" aria-label="Connector directories">
+            <a class="plugin-link" href="https://chatgpt.com/plugins/plugin_asdk_app_6a9078f4d6dc8191be735cc1c2ff45b5" target="_blank" rel="noreferrer">
+              <span class="plugin-mark" aria-hidden="true"><img src="/client-openai.svg" alt="" width="14" height="14"></span>
+              <span>Also available as a <strong>ChatGPT plugin</strong></span>
+              <span class="plugin-arrow" aria-hidden="true">&nearr;</span>
+            </a>
+            <a class="plugin-link" href="https://claude.ai/directory/metro-mcp" target="_blank" rel="noreferrer" aria-label="Open Transit MCP in the Claude Directory">
+              <span class="plugin-mark" aria-hidden="true"><img src="/client-claude.svg" alt="" width="14" height="14"></span>
+              <span>Add from the <strong>Claude Directory</strong></span>
+              <span class="plugin-arrow" aria-hidden="true">&nearr;</span>
+            </a>
+          </div>
           <p class="hero-tip">Or just send this link to your AI. It will figure it out.</p>
         </div>
         <p class="footnote rise" style="--i:4">
           <span>Works with any MCP-compatible LLM/client</span>
           <span class="compat-examples" aria-label="Example clients">
-            <a class="compat-item" href="https://claude.com" target="_blank" rel="noreferrer"><img class="compat-logo" src="/client-claude.svg" alt="" width="14" height="14">Claude</a>
             <a class="compat-item" href="https://grok.com" target="_blank" rel="noreferrer"><img class="compat-logo" src="/client-grok.svg" alt="" width="14" height="14">Grok Bot</a>
             <a class="compat-item" href="https://instinct.com" target="_blank" rel="noreferrer"><img class="compat-logo" src="/client-instinct.svg" alt="" width="14" height="14">Instinct</a>
             <a class="compat-item" href="https://orchid.ai/" target="_blank" rel="noreferrer"><img class="compat-logo" src="/client-orchid.svg" alt="" width="14" height="14">Orchid</a>

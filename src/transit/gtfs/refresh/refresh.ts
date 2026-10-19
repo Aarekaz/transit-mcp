@@ -13,7 +13,9 @@ import { getStaticSource, getStaticSources, type StaticSourcePolicy } from './po
  * the published version, publishes (pointer last), and rolls back if live matching drops. */
 export const BAND_SECONDS = 3 * 3600;
 export interface RefreshParams { coverageId: string; archiveSha256: string; retrievedAt: string }
-export interface SourceState { sha256?: string; etag?: string; checkedAt: number; retrievedAt?: string }
+export interface SourceState { sha256?: string; etag?: string; checkedAt: number; retrievedAt?: string; restarts?: number }
+/** A failed run for the current archive is retried this many times, then left for a human. */
+export const MAX_REFRESH_RESTARTS = 3;
 export interface StepRunner {
   do<T>(name: string, run: () => Promise<T>): Promise<T>;
   sleep(name: string, milliseconds: number): Promise<void>;
@@ -237,7 +239,8 @@ export async function checkStaticSources(env: Env, now: number): Promise<void> {
         const hash = await sha256(bytes);
         if (hash !== state.sha256) await putAbsent(bucket, keys.archive(hash), bytes);
         next = { sha256: hash, etag: response.headers.get('etag') ?? undefined, checkedAt: now,
-          retrievedAt: hash === state.sha256 ? state.retrievedAt : new Date(now).toISOString() };
+          retrievedAt: hash === state.sha256 ? state.retrievedAt : new Date(now).toISOString(),
+          ...(hash === state.sha256 && state.restarts ? { restarts: state.restarts } : {}) };
       }
       await bucket.put(keys.state, encode(next));
       // Start (or keep) a refresh until the published version came from this archive.
@@ -249,8 +252,18 @@ export async function checkStaticSources(env: Env, now: number): Promise<void> {
           await workflow.create({ id, params: { coverageId: policy.coverageId, archiveSha256: next.sha256, retrievedAt: next.retrievedAt } satisfies RefreshParams });
           console.info(JSON.stringify({ event: 'schedule_refresh_started', coverage: policy.coverageId, id }));
         } catch (error) {
-          // An instance per archive: an existing one (running, done or failed) is not repeated.
           if (!(error instanceof Error && /already exists|exists/i.test(error.message))) throw error;
+          // One instance per archive. A run that failed (not one that is running, waiting or
+          // decided not to publish) is restarted a bounded number of times.
+          const instance = await workflow.get(id), { status } = await instance.status();
+          if ((status === 'errored' || status === 'terminated') && (next.restarts ?? 0) < MAX_REFRESH_RESTARTS) {
+            await instance.restart();
+            next = { ...next, restarts: (next.restarts ?? 0) + 1 };
+            await bucket.put(keys.state, encode(next));
+            console.warn(JSON.stringify({ event: 'schedule_refresh_restarted', coverage: policy.coverageId, id, restarts: next.restarts }));
+          } else if (status === 'errored' || status === 'terminated') {
+            console.warn(JSON.stringify({ event: 'schedule_refresh_gave_up', coverage: policy.coverageId, id }));
+          }
         }
       }
     } catch (error) {

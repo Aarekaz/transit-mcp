@@ -352,9 +352,9 @@ describe('public page discoverability', () => {
   it('tells readers that Metro MCP was renamed and the legacy endpoint keeps working', () => {
     for (const file of ['public/docs/index.html', 'README.md']) {
       const source = readRequiredProjectFile(file);
-      expect(source).toMatch(/Metro MCP is now Transit MCP/);
+      expect(source).toMatch(/(?:Metro MCP is now Transit MCP|Previously known as \*\*Metro MCP\*\*)/);
       expect(source).toContain('https://metro-mcp.anuragd.me/mcp');
-      expect(source).toMatch(/continue to be supported/);
+      expect(source).toMatch(/(?:continue to be supported|remains available and serves the same Worker)/);
     }
     expect(readRequiredProjectFile('public/index.html')).toMatch(
       /<footer[\s\S]*Transit MCP was formerly Metro MCP\./,

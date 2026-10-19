@@ -203,6 +203,20 @@ describe('edge refresh workflow', () => {
     expect([...f.db.objects.keys()].some(key => key.startsWith('work/'))).toBe(false);
   });
 
+  it('restarts a failed refresh for the current archive a bounded number of times', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW));
+    const db = memoryStorage(), archive = await zip(NYC_FILES as Record<string, string>);
+    let restarts = 0;
+    const env = { TRANSIT_ARTIFACTS: db.bucket, TRANSIT_COVERAGE_MODES: '{"nyc":"on"}', TRANSIT_REFRESH: {
+      create: async () => { throw new Error('instance already exists'); },
+      get: async () => ({ status: async () => ({ status: 'errored' }), restart: async () => { restarts++; } }) } } as unknown as Env;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(archive, { headers: { etag: '"v1"' } }));
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (let check = 0; check < 5; check++) await checkStaticSources(env, Date.now() + check * 10 * 60_000);
+    expect(restarts).toBe(3);
+    expect(warnings).toHaveBeenCalledWith(expect.stringContaining('schedule_refresh_gave_up'));
+  });
+
   it('checks sources cheaply: conditional requests, one refresh per new archive', async () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW));
     const db = memoryStorage(), archive = await zip(NYC_FILES as Record<string, string>), hash = await sha256(archive);
@@ -211,7 +225,7 @@ describe('edge refresh workflow', () => {
       TRANSIT_REFRESH: { create: async (options: { id: string; params: unknown }) => {
         if (created.some(item => item.id === options.id)) throw new Error('instance already exists');
         created.push(options);
-      } } } as unknown as Env;
+      }, get: async () => ({ status: async () => ({ status: 'running' }), restart: async () => { throw new Error('must not restart a running refresh'); } }) } } as unknown as Env;
     const requests: Request[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const request = new Request(input as RequestInfo, init); requests.push(request);
