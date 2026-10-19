@@ -98,11 +98,17 @@ Real DC and NYC timetables exposed that the router kept every label it generated
 
 Rollback target before this rollout: Worker version `5fa5d475`.
 
+## Edge refresh in production (2026-10-19 UTC)
+
+- The cron noticed MTA's new archive and started `refresh-nyc-7f8d4e8f…`. Its first run, on code that still parsed the whole table per day, exhausted retries on the last day; the cron restarted it and it completed: nine days built, guard passed, NYC version `6cff55ff` published with `cbb481df` kept as rollback, canary healthy, scratch cleaned. DC was left alone because WMATA had not published a new archive.
+- Overnight NYC matching was low (about 48%) because MTA dates after-midnight trips by calendar day. Matching them to the previous service day raised it to about 60% against the same data; the rest are trains missing from the timetable, shown as observed.
+- Late at night only a handful of DC trains run; one unmatched train had dropped the rate under 95% and withdrawn DC predictions. The rate gate now needs at least 20 trips.
+
 ## Not yet established
 
-- **Scheduled artifact refresh.** Not automated. NYC's match rate fell from ~75% to ~55% over three hours as the 00:46 UTC supplemented schedule aged; below 50% NYC realtime degrades to schedule-only (fail closed). DC's artifact ends at WMATA's `feed_end_date` 2026-10-23, after which DC returns `SCHEDULE_EXPIRED`. A validated rebuild must run at least hourly for NYC and daily for DC.
-- **NYC planning cost.** ~11 s Worker CPU per plan in production; acceptable under the CPU limit but expensive under load.
-- **NYC alert freshness.** MTA's alerts feed header advances only when alerts change, so alerts are often served with `REALTIME_STALE` after 20 minutes.
-- Agreement with official MTA/WMATA trip planners for current journeys.
-- NYC vehicle locations (no coordinates in the feed) and NYCT train numbers (published in an MTA protobuf extension this decoder does not read).
-- Step-free routing (not offered for any coverage).
+- **NYC request latency.** Wall time in production is high for heavy calls (about 13 s for an NYC plan, 9 s for city-wide status) even though planning itself takes well under a second locally; R2 reads and cold isolates dominate. Worth measuring per phase before optimizing further.
+- **NYC alert freshness.** MTA's alerts feed header advances only when alerts change, so alerts are often labeled `REALTIME_STALE` after 20 minutes.
+- **Agreement with official planners.** Current MTA and WMATA trip-planner results have not been compared journey by journey.
+- **NYC vehicle locations and train numbers.** The feed has no coordinates, and NYCT train numbers live in an MTA protobuf extension this decoder does not read.
+- **Step-free routing** is not offered for any coverage.
+- **Validator coverage of edge refreshes.** Edge builds rely on the compiler's checks and the change guards; the MobilityData validator is a manual check when a base timetable changes.
