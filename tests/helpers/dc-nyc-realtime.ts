@@ -21,7 +21,7 @@ export const nowSeconds = () => Math.floor(Date.now() / 1000);
 export const civil = (time: string, date = '2026-10-19') => Date.parse(`${date}T${time}-04:00`) / 1000;
 
 const calendar = 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWeekday,1,1,1,1,1,0,0,20261001,20261031\n';
-const NYC_FILES: GtfsScheduleFiles = {
+export const NYC_FILES: GtfsScheduleFiles = {
   'agency.txt': 'agency_id,agency_name,agency_url,agency_timezone\nMTA NYCT,MTA New York City Transit,http://www.mta.info,America/New_York\n',
   'stops.txt': ['stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station',
     '127,Times Sq-42 St,40.75529,-73.987495,1,', '127S,Times Sq-42 St,40.75529,-73.987495,,127',
@@ -49,7 +49,7 @@ const NYC_FILES: GtfsScheduleFiles = {
   'calendar.txt': calendar,
   'transfers.txt': 'from_stop_id,to_stop_id,transfer_type,min_transfer_time\n132,132,2,180\n',
 };
-const DC_FILES: GtfsScheduleFiles = {
+export const DC_FILES: GtfsScheduleFiles = {
   'agency.txt': 'agency_id,agency_name,agency_url,agency_timezone\n1,WMATA,http://www.wmata.com,America/New_York\n',
   'stops.txt': ['stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station',
     'STN_A03,Dupont Circle,38.909499,-77.04362,1,', 'PF_A03_C,Dupont Circle,38.909499,-77.04362,0,STN_A03',

@@ -37,6 +37,8 @@ export interface Env extends CoverageWorkerBindings {
   // API Keys
   WMATA_API_KEY: string;           // DC Metro (WMATA) API key (secret)
   REGION_FEED_HUB?: DurableObjectNamespace;
+  /** Edge schedule refresh (Cloudflare Workflow). */
+  TRANSIT_REFRESH?: Workflow;
   TRANSIT_ARTIFACTS?: R2Bucket;
 
   /**

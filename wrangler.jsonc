@@ -49,6 +49,15 @@
     }
   ],
 
+  // Edge schedule refresh: the cron detects a changed source, this rebuilds it.
+  "workflows": [
+    {
+      "name": "transit-refresh",
+      "binding": "TRANSIT_REFRESH",
+      "class_name": "TransitRefreshWorkflow"
+    }
+  ],
+
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
@@ -114,6 +123,13 @@
         {
           "binding": "TRANSIT_ARTIFACTS",
           "bucket_name": "transit-mcp-artifacts-preview"
+        }
+      ],
+      "workflows": [
+        {
+          "name": "transit-refresh-preview",
+          "binding": "TRANSIT_REFRESH",
+          "class_name": "TransitRefreshWorkflow"
         }
       ],
       "triggers": {

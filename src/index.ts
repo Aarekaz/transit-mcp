@@ -13,11 +13,13 @@ import { normalizeMcpRoute } from './route-normalizer';
 import { serializeTelemetry, type TelemetryInput } from './telemetry';
 import type { Env } from './types';
 import { bootstrapRegionalFeedHub } from './transit/gtfs/realtime/bootstrap';
+import { checkStaticSources } from './transit/gtfs/refresh/refresh';
 
 // Export MetroMcpAgent so the wrangler.jsonc DO binding can resolve the class.
 // Cloudflare's bundler discovers DO classes by name at deploy time.
 export { MetroMcpAgent } from './mcp-agent';
 export { RegionFeedHub } from './transit/gtfs/realtime/region-feed-hub';
+export { TransitRefreshWorkflow } from './transit/gtfs/refresh/workflow';
 
 function mcpTrustRejection(
   request: Request,
@@ -111,5 +113,6 @@ export default {
   },
   scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
     ctx.waitUntil(bootstrapRegionalFeedHub(env));
+    ctx.waitUntil(checkStaticSources(env, Date.now()));
   },
 };

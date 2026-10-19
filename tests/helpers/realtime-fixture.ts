@@ -38,8 +38,10 @@ export function memoryStorage() {
       const bytes = objects.get(key);
       if (!bytes) return null;
       return { size: bytes.byteLength, body: new Response(bytes).body,
-        arrayBuffer: async () => bytes.slice().buffer, text: async () => new TextDecoder().decode(bytes) };
+        arrayBuffer: async () => bytes.slice().buffer, text: async () => new TextDecoder().decode(bytes),
+        json: async () => JSON.parse(new TextDecoder().decode(bytes)) };
     },
+    head: async (key: string) => objects.has(key) ? { key, size: objects.get(key)!.byteLength } : null,
     put: async (key: string, value: Uint8Array | string) => { objects.set(key, typeof value === 'string' ? new TextEncoder().encode(value) : value.slice()); },
     delete: async (keys: string | string[]) => { for (const key of typeof keys === 'string' ? [keys] : keys) objects.delete(key); },
   };

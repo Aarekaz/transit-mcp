@@ -103,6 +103,9 @@ export interface ArtifactManifestV2 {
 export interface CompileScheduleInput {
   coverage: CoverageManifest; feedId: string; files: GtfsScheduleFiles;
   window: ServiceWindow; source: Pick<SourceMetadata, 'url' | 'retrievedAt'>;
+  /** Set when one archive is compiled in parts (per service date): every part carries the
+   * whole feed's identity and feed-wide timetable bound instead of its own. */
+  identity?: { sha256: string; maxStopTimeSeconds: number } & Pick<SourceMetadata, 'archiveSha256' | 'derivedFrom'>;
 }
 export interface CompiledSchedule {
   manifest: ArtifactManifestV2; discovery: DiscoveryIndex; shard: ScheduleShard;

@@ -75,6 +75,23 @@ export class StaticArtifactStore {
     return version;
   }
 
+  /** Returns the pointer to the previous version if the current one is still `expected`. */
+  async rollback(expected: string): Promise<boolean> {
+    const pointer = await this.bucket.get(this.pointerKey);
+    if (!pointer) return false;
+    const value = JSON.parse(await pointer.text()) as { current: string; previous?: string };
+    if (value.current !== expected || !value.previous) return false;
+    await this.read(value.previous); // Never point at an unreadable manifest.
+    await this.bucket.put(this.pointerKey, encode({ current: value.previous, previous: value.current }));
+    this.#resident = undefined;
+    return true;
+  }
+
+  async pointer(): Promise<{ current: string; previous?: string } | null> {
+    const pointer = await this.bucket.get(this.pointerKey);
+    return pointer ? JSON.parse(await pointer.text()) as { current: string; previous?: string } : null;
+  }
+
   async current(): Promise<{ version: StaticVersion; manifest: ArtifactManifestV2 } | null> {
     const pointer = await this.bucket.get(this.pointerKey);
     if (!pointer) return null;

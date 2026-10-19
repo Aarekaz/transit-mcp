@@ -53,10 +53,9 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Invalid public source URL');
   if (!Number.isFinite(Date.parse(input.source.retrievedAt))) throw new Error('Invalid source retrieval timestamp');
   const ref = (kind: TransitEntityKind, id: string) => formatEntityRef({ coverage: coverage.id, feed: feedId, kind, id });
-  const tables = Object.fromEntries(Object.entries(files).map(([name, csv]) => [name, parseGtfsCsv(csv).sort((a, b) => {
-    const left = canonicalJson(a), right = canonicalJson(b);
-    return left < right ? -1 : left > right ? 1 : 0;
-  })]));
+  // Serialize each row once, then sort: the same canonical order without re-serializing per comparison.
+  const tables = Object.fromEntries(Object.entries(files).map(([name, csv]) => [name, parseGtfsCsv(csv)
+    .map(row => [canonicalJson(row), row] as const).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, row]) => row)]));
   const rows = (name: string) => tables[name] ?? [];
   const agencyRows = rows('agency.txt');
   // GTFS permits the ID to be absent only for a single agency. Keep the raw
@@ -96,24 +95,7 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
       shortName: row.route_short_name ?? '', longName: row.route_long_name ?? '', routeType,
       mode: routeTypeToMode(routeType), color: row.route_color ?? '', textColor: row.route_text_color ?? '' };
   }).sort((a, b) => a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0);
-  const calendars: Record<string, ServiceCalendar> = Object.create(null);
-  for (const [id, row] of indexed(rows('calendar.txt'), 'service_id')) {
-    const startDate = required(row, 'start_date'), endDate = required(row, 'end_date');
-    if (parseServiceDate(startDate) > parseServiceDate(endDate)) throw new Error('Invalid calendar date range');
-    calendars[id] = { monday: integer(row, 'monday', undefined, 1) === 1, tuesday: integer(row, 'tuesday', undefined, 1) === 1,
-      wednesday: integer(row, 'wednesday', undefined, 1) === 1, thursday: integer(row, 'thursday', undefined, 1) === 1,
-      friday: integer(row, 'friday', undefined, 1) === 1, saturday: integer(row, 'saturday', undefined, 1) === 1,
-      sunday: integer(row, 'sunday', undefined, 1) === 1, startDate, endDate, exceptions: {} };
-  }
-  for (const row of rows('calendar_dates.txt')) {
-    const id = required(row, 'service_id'), date = required(row, 'date');
-    parseServiceDate(date);
-    const type = integer(row, 'exception_type', undefined, 2);
-    if (type !== 1 && type !== 2) throw new Error('Invalid exception_type');
-    const calendar = calendars[id] ??= { monday: false, tuesday: false, wednesday: false, thursday: false, friday: false, saturday: false, sunday: false, startDate: '00000000', endDate: '99999999', exceptions: {} };
-    if (calendar.exceptions[date]) throw new Error('duplicate calendar exception');
-    calendar.exceptions[date] = type;
-  }
+  const calendars = buildServiceCalendars(rows('calendar.txt'), rows('calendar_dates.txt'));
   const trips: ScheduleTrip[] = [...tripRows].map(([id, row]) => {
     const serviceId = required(row, 'service_id');
     if (!calendars[serviceId]) throw new Error('unknown service reference');
@@ -186,7 +168,9 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     signpostedAs: row.signposted_as ?? '', reversedSignpostedAs: row.reversed_signposted_as ?? '',
   }));
   const source = { feedId, url: url.href, retrievedAt: input.source.retrievedAt,
-    sha256: await sha256(new TextEncoder().encode(canonicalJson(tables))), feedInfo: rows('feed_info.txt'),
+    sha256: input.identity?.sha256 ?? await sha256(new TextEncoder().encode(canonicalJson(tables))), feedInfo: rows('feed_info.txt'),
+    ...(input.identity?.archiveSha256 ? { archiveSha256: input.identity.archiveSha256 } : {}),
+    ...(input.identity?.derivedFrom ? { derivedFrom: input.identity.derivedFrom } : {}),
     ...(anonymousAgencyId ? { anonymousAgencyRef: ref('agency', anonymousAgencyId) } : {}) };
   for (const info of source.feedInfo) {
     for (const field of ['feed_publisher_url', 'feed_contact_url']) {
@@ -217,6 +201,10 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     // Non-exact service covers the entire half-open interval, including its final fractional second.
     if (first !== null && last !== null) maxStopTimeSeconds = Math.max(maxStopTimeSeconds, frequency.endSeconds - (frequency.exactTimes === 1 ? 1 : 0) + last - first);
   }
+  if (input.identity) {
+    if (maxStopTimeSeconds > input.identity.maxStopTimeSeconds) throw new Error('Part exceeds the feed-wide timetable bound');
+    maxStopTimeSeconds = input.identity.maxStopTimeSeconds;
+  }
   const shard: ScheduleShard = { schemaVersion: 2, coverageId: coverage.id, feedId, window: { ...window }, maxStopTimeSeconds, source, agencyTimezones,
     stops, routes, trips: activeTrips, patterns: [...patterns.values()].filter(p => activePatterns.has(p.id)).sort((a, b) => a.id < b.id ? -1 : 1),
     calendars, frequencies: frequencies.filter(f => activeRefs.has(f.tripRef)), blocks,
@@ -233,6 +221,29 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     discoveries: [{ feedId, key: `${prefix}/discovery/${discoveryHash}.json`, sha256: discoveryHash, byteLength: discoveryBytes.length }],
     shards: [{ feedId, window: { ...window }, maxStopTimeSeconds, key: `${prefix}/${window.startDate}-${window.endDate}/${shardHash}.bin`, sha256: shardHash, byteLength: shardBytes.length }],
   } };
+}
+
+/** GTFS calendar.txt and calendar_dates.txt as service calendars keyed by service_id. */
+export function buildServiceCalendars(calendarRows: GtfsCsvRow[], calendarDateRows: GtfsCsvRow[]): Record<string, ServiceCalendar> {
+  const calendars: Record<string, ServiceCalendar> = Object.create(null);
+  for (const [id, row] of indexed(calendarRows, 'service_id')) {
+    const startDate = required(row, 'start_date'), endDate = required(row, 'end_date');
+    if (parseServiceDate(startDate) > parseServiceDate(endDate)) throw new Error('Invalid calendar date range');
+    calendars[id] = { monday: integer(row, 'monday', undefined, 1) === 1, tuesday: integer(row, 'tuesday', undefined, 1) === 1,
+      wednesday: integer(row, 'wednesday', undefined, 1) === 1, thursday: integer(row, 'thursday', undefined, 1) === 1,
+      friday: integer(row, 'friday', undefined, 1) === 1, saturday: integer(row, 'saturday', undefined, 1) === 1,
+      sunday: integer(row, 'sunday', undefined, 1) === 1, startDate, endDate, exceptions: {} };
+  }
+  for (const row of calendarDateRows) {
+    const id = required(row, 'service_id'), date = required(row, 'date');
+    parseServiceDate(date);
+    const type = integer(row, 'exception_type', undefined, 2);
+    if (type !== 1 && type !== 2) throw new Error('Invalid exception_type');
+    const calendar = calendars[id] ??= { monday: false, tuesday: false, wednesday: false, thursday: false, friday: false, saturday: false, sunday: false, startDate: '00000000', endDate: '99999999', exceptions: {} };
+    if (calendar.exceptions[date]) throw new Error('duplicate calendar exception');
+    calendar.exceptions[date] = type;
+  }
+  return calendars;
 }
 
 function finiteNumber(row: GtfsCsvRow, name: string): number {

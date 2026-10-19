@@ -111,6 +111,7 @@ export class RegionFeedHub implements DurableObject {
     const source = this.#source;
     if (!source) return Response.json({ error: 'inactive_coordinator' }, { status: 409 });
     if (url.pathname === '/health') return new Response(null, { status: 204 });
+    if (url.pathname === '/stats') return Response.json(await this.#state.storage.get('stats:trip_updates') ?? null);
     if (url.pathname === '/quota/static' && request.method === 'POST') {
       return Response.json({ allowed: await this.#quota!.claim('static', Math.floor(Date.now() / 1000)) });
     }
@@ -213,6 +214,8 @@ export class RegionFeedHub implements DurableObject {
         payload = applied.stopUpdates; degraded = applied.degraded || window.status === 'unavailable'; warnings = [...applied.warnings, ...window.reasons];
         Object.assign(timings, { rows: payload.length });
         console.info(JSON.stringify({ event: 'regional_trip_match', region: coverage.id, ...applied.match, ...applied.excluded }));
+        // The schedule refresh compares this before and after publishing a new artifact.
+        await this.#state.storage.put('stats:trip_updates', { artifactVersion: current.version.artifactVersion, ...applied.match, atSeconds: nowSeconds });
       }
       if (spec.kind === 'vehicle_positions') {
         const window = await matchWindow();
