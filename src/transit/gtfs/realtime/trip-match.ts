@@ -14,6 +14,9 @@ export interface TripMatchContext {
   tripMatching?: RealtimeSourcePolicy['tripMatching'];
   minimumScheduleMatchRate?: number;
 }
+/** Below this many eligible trips a match rate is not evidence about the schedule. */
+export const MIN_ELIGIBLE_FOR_MATCH_RATE = 20;
+
 /** The realtime trip_id a provider publishes for one static trip. */
 export function realtimeTripKey(providerId: string, strategy: TripMatchContext['tripMatching'] = 'exact'): string {
   if (strategy !== 'nyct_suffix') return providerId;
@@ -355,7 +358,12 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
     if (updates) { matched++; stopUpdates.push(...updates); }
   }
   const rate = eligible ? matched / eligible : 1;
-  const degraded = invalidExtras > 0 || rate < (context.minimumScheduleMatchRate ?? SFBAY_COVERAGE.thresholds.minimumScheduleMatchRate);
+  // The rate detects a wrong or stale schedule, where matching collapses. Over a handful of
+  // trips (late night) one unmatched train says nothing, so small samples only fail when
+  // nothing matches at all.
+  const threshold = context.minimumScheduleMatchRate ?? SFBAY_COVERAGE.thresholds.minimumScheduleMatchRate;
+  const mismatched = eligible >= MIN_ELIGIBLE_FOR_MATCH_RATE ? rate < threshold : eligible > 0 && matched === 0;
+  const degraded = invalidExtras > 0 || mismatched;
   return { version: context.version, trips: feed.trips, stopUpdates, match: { eligible, matched, rate }, excluded: { nonRevenue, invalidExtras, unrepresentableAdded }, degraded,
     warnings: [...feed.warnings, ...(degraded ? ['SCHEDULE_REALTIME_MISMATCH'] : [])] };
 }

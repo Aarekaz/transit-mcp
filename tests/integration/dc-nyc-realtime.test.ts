@@ -258,6 +258,16 @@ describe('Washington Metrorail through the global tools', () => {
     expect(console.info).toHaveBeenCalledWith(expect.stringContaining('"eligible":1,"matched":1,"rate":1,"nonRevenue":1'));
   });
 
+  it('judges schedule identity by match rate only with enough trips, never by one late-night stray', async () => {
+    const stray = (id: string) => ({ id, tripUpdate: { trip: { tripId: id, routeId: 'RED', startDate: SERVICE_DATE, startTime: '09:00:00', scheduleRelationship: 0 },
+      stopTimeUpdate: [{ stopSequence: 1, stopId: 'PF_A03_C', departure: { time: civil('09:08:00') } }] } });
+    const few = await dc({ trips: [red, stray('X1'), stray('X2'), stray('X3')] });
+    expect((await callTool(few.env, 'get_departures', { stopRef: few.ref('stop', 'STN_A02'), windowSeconds: 1800 })).structuredContent).toMatchObject({ status: 'realtime', reasons: [] });
+    const none = await dc({ trips: [stray('X1'), stray('X2')] });
+    expect((await callTool(none.env, 'get_departures', { stopRef: none.ref('stop', 'STN_A02'), windowSeconds: 1800 })).structuredContent)
+      .toMatchObject({ status: 'scheduled_only', reasons: ['SCHEDULE_REALTIME_MISMATCH'] });
+  });
+
   it('locates an observed train only for a sufficiently specific dated trip or route', async () => {
     const vehicle = { id: 'V118', vehicle: { trip: { tripId: '14362694_20741', routeId: 'RED', startDate: SERVICE_DATE, startTime: '09:02:00', scheduleRelationship: 0 },
       position: { latitude: 38.905, longitude: -77.041, bearing: 120 }, timestamp: nowSeconds() - 10, vehicle: { id: '118', label: '644' } } };
