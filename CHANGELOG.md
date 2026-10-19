@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- NYC live predictions now reach the 7, L and Staten Island Railway, and most F and G trains. Those lines publish a short trip ID (`059150_7..S`) for the scheduled `..._059150_7..S97R`; it is matched only when it names exactly one active scheduled trip. Live matching rose from 69% to 82% of NYC trains.
+- Route names are the ones riders use: WMATA's single-letter short names become the line name ("Red", not "R").
 - A station complex now covers every station in it: departures at Times Sq-42 St include the 1/2/3, 7, N/Q/R/W and shuttle, not just the first station found.
 - Long NYC trips (Inwood-207 St to Coney Island) and plans whose window crosses into a third timetable band no longer exceed the planner budget. The router interns leg sequences instead of keeping a signature string per label, and the decoded-shard charge is measured (2.2x file size) rather than assumed (8x). Across 240 NYC plans at every half hour of a day, none is refused with the default window.
 - NYC trip planning no longer refuses rush-hour trips. The planner charged its memory budget as if it copied every live prediction; it only indexes them.

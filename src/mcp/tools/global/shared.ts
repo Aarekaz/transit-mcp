@@ -242,6 +242,12 @@ export function sameStation(data: TransitData, matches: Candidate[]): Candidate[
   }
   return result;
 }
+/** The name riders use for a route: its short name ("A", "7"), unless that is only the
+ * initial of the long name, as WMATA publishes "R" for "Red". */
+export function routeName(route: { shortName: string; longName: string }): string {
+  const initial = route.shortName.length === 1 && route.longName.toUpperCase().startsWith(route.shortName.toUpperCase());
+  return sanitizeTransitText(!route.shortName || initial ? route.longName || route.shortName : route.shortName, 120);
+}
 /** The other stations in a station's complex (Times Sq-42 St is published as four). */
 export function complexStations(data: TransitData, stationRef: string): string[] {
   const station = stopsByRef(data).get(stationRef);

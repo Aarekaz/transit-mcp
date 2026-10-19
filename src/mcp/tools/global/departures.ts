@@ -8,7 +8,7 @@ import { formatEntityRef, parseTransitRef } from '../../../transit/core/refs';
 import { decodeScheduleShard } from '../../../transit/gtfs/static/shards';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import type { ScheduleTrip } from '../../../transit/gtfs/static/schema';
-import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, candidates, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, sameStation, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, candidates, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, sameStation, unavailable, validRef, type TransitData } from './shared';
 import { getCoverage } from '../../../transit/core/coverage';
 
 const departureShape = { tripRef: z.string(), serviceDate: z.string(), routeRef: z.string(), routeName: z.string().describe('Public route name, e.g. "1", "A" or "Red".'),
@@ -130,7 +130,7 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     departures = departures.filter(row => time(row) >= start && time(row) < end).sort((a, b) => direction * (time(a) - time(b)) || a.tripInstanceRef.localeCompare(b.tripInstanceRef) ||
       (a.stopSequence ?? -1) - (b.stopSequence ?? -1) || a.stopRef.localeCompare(b.stopRef)).slice(0, args.limit);
     // Human-readable names beside the opaque references, so a model can answer directly.
-    const routeNames = new Map(data.indexes.flatMap(index => index.routes).map(route => [route.ref as string, sanitizeTransitText(route.shortName || route.longName, 120)]));
+    const routeNames = new Map(data.indexes.flatMap(index => index.routes).map(route => [route.ref as string, routeName(route)]));
     const stopNames = new Map(data.indexes.flatMap(index => index.stops).map(row => [row.ref as string, sanitizeTransitText(row.name, 200)]));
     const named = <T extends { routeRef: string; stopRef: string }>(row: T) => ({ ...row, routeName: routeNames.get(row.routeRef) ?? '', stopName: stopNames.get(row.stopRef) ?? '' });
     return complete({ ...meta, sources,

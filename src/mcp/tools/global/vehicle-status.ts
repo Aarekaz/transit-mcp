@@ -7,7 +7,7 @@ import { getCoverage } from '../../../transit/core/coverage';
 import type { NormalizedVehicle } from '../../../transit/gtfs/realtime/decode';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import { MAX_DISCOVERY_CANDIDATES, TransitToolError, boundedText, candidates, checkState, complexStations, coordinatesSchema, coverageSchema, guarded, instantSchema, knownEntity, loadData,
-  metadata, readFeed, realtimeSource, resultShape, sameStation, unavailable, validRef, type TransitData } from './shared';
+  metadata, readFeed, realtimeSource, resultShape, routeName, sameStation, unavailable, validRef, type TransitData } from './shared';
 
 const STOP_STATUS = { STOPPED_AT: 'stopped_at', INCOMING_AT: 'incoming_at', IN_TRANSIT_TO: 'in_transit_to' } as const;
 
@@ -75,7 +75,7 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
           vehicle.currentStatus === 'STOPPED_AT' && stationLatitude != null && stationLongitude != null ? { coordinates: { latitude: stationLatitude, longitude: stationLongitude }, coordinatesSource: 'stop' as const } :
           { coordinates: null, coordinatesSource: null };
         return { id: vehicle.vehicleId ?? vehicle.entityId, tripInstanceRef: vehicle.tripInstanceRef ?? null, routeRef: route?.ref ?? null,
-          routeName: route ? sanitizeTransitText(route.shortName || route.longName, 120) : null, headsign: vehicle.headsign ? sanitizeTransitText(vehicle.headsign, 200) : null,
+          routeName: route ? routeName(route) : null, headsign: vehicle.headsign ? sanitizeTransitText(vehicle.headsign, 200) : null,
           stopStatus: at !== null && vehicle.currentStatus ? STOP_STATUS[vehicle.currentStatus] : null, stopRef: at, stopName: stopName(at),
           previousStopRef: previous, previousStopName: stopName(previous), ...coordinates,
           bearing: vehicle.bearing ?? null, speedMetersPerSecond: vehicle.speedMetersPerSecond ?? null,
