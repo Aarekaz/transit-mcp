@@ -239,7 +239,7 @@ describe('depart-at transit routing', () => {
     const input = plannerInput(); input.files['calendar_dates.txt'] = 'service_id,date,exception_type\nD,20261019,2\n';
     const f = await plannerFixture(input);
     const realtime = { version: f.version, producerTimestampSeconds: Date.parse(f.query.now) / 1000, receivedAtSeconds: Date.parse(f.query.now) / 1000,
-      payload: Array<NormalizedStopUpdate>(140000).fill({ entityId: 'unmatched', stopId: 'A' }) };
+      payload: Array<NormalizedStopUpdate>(600000).fill({ entityId: 'unmatched', stopId: 'A' }) };
     await expect(planJourney({ ...f.query, realtime })).rejects.toThrow(/working-set budget/i);
   });
 
@@ -257,11 +257,12 @@ describe('depart-at transit routing', () => {
     expect(long.diagnostics.estimatedWorkingSetBytes - short.diagnostics.estimatedWorkingSetBytes).toBeGreaterThanOrEqual(250000 * 2);
   });
 
-  it('budgets normalized realtime identity strings before building routing indexes', async () => {
-    const input = plannerInput(); input.files['calendar_dates.txt'] = 'service_id,date,exception_type\nD,20261019,2\n';
-    const f = await plannerFixture(input);
+  it('charges realtime rows as index references, so a rush-hour feed still plans', async () => {
+    const f = await plannerFixture(plannerInput());
+    // NYC publishes about 17,000 stop-time updates at rush hour.
     const realtime = { version: f.version, producerTimestampSeconds: Date.parse(f.query.now) / 1000, receivedAtSeconds: Date.parse(f.query.now) / 1000,
       payload: Array<NormalizedStopUpdate>(20000).fill({ entityId: 'e'.repeat(512), stopId: 's'.repeat(512), tripId: 't'.repeat(512) }) };
-    await expect(planJourney({ ...f.query, realtime })).rejects.toThrow(/working-set budget.*Durable Object/i);
+    const result = await planJourney({ ...f.query, realtime });
+    expect(result.candidates.length).toBeGreaterThan(0);
   });
 });

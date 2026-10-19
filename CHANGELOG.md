@@ -37,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Upgraded `@modelcontextprotocol/server` and `@modelcontextprotocol/client` to 2.3.1 and `agents` to 0.28.1, picking up fixes for GHSA-46jr-4wx8-v453 (memory exhaustion during validation), GHSA-f897-62hf-6gxq, and GHSA-jm63-cq47-j5jp. `@modelcontextprotocol/sdk` stays at 1.30.0 so the Transit Board app bundle is byte-identical.
 
+### Fixed
+
+- NYC trip planning no longer refuses rush-hour trips. The planner charged its memory budget as if it copied every live prediction; it only indexes them.
+- `get_elevator_incidents` no longer fails when WMATA omits a station name for an outage; the station code is used instead.
+
 ## [6.0.0] - 2026-08-21
 
 ### Breaking

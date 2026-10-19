@@ -60,13 +60,10 @@ function transferRules(previous: TransitLeg, next: Instance, board: TransitRef, 
 export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleShard[], artifactVersion: string,
   realtime: NormalizedStopUpdate[], realtimeTimestamp: number | undefined, baseBytes: number, signal?: AbortSignal): Promise<RouterOutput> {
   assertNotAborted(signal);
-  if (baseBytes + realtime.length * 512 >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
-  let realtimeBytes = 0;
-  for (const row of realtime) {
-    // Include UTF-16 identities plus the normalized record and index/key copies.
-    realtimeBytes += 512 + 8 * [row.entityId, row.tripId, row.routeId, row.stopId, row.tripInstanceRef, row.serviceDate].reduce((sum, value) => sum + (value?.length ?? 0), 0);
-    if (baseBytes + realtimeBytes >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
-  }
+  // Rows already live in the decoded feed; the router only adds an index entry
+  // that references each one. Charging per-row copies refused every NYC rush-hour plan.
+  const realtimeBytes = realtime.length * 128;
+  if (baseBytes + realtimeBytes >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
   const begin = parseInstant(query.departAt), end = begin + (query.windowSeconds ?? 7200) * 1000;
   const maxWalk = Math.min(800, query.maxWalkMetres ?? 800), maxTransfers = query.maxTransfers ?? 3;
   const stops = new Map<TransitRef, ScheduleStop>();
