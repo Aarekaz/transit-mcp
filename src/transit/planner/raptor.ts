@@ -12,7 +12,9 @@ interface Instance {
   shard: ScheduleShard; trip: ScheduleTrip; date: string; timezone: string; origin: number; start: number;
   ref: TransitLeg['tripInstanceRef']; shift: number; updates: Map<number, NormalizedStopUpdate>;
 }
-interface Label { stop: TransitRef; time: number; walking: number; boardings: number; legs: ItineraryLeg[]; last?: TransitLeg; signature?: string; transitKey?: string }
+interface Label { stop: TransitRef; time: number; walking: number; boardings: number; legs: ItineraryLeg[]; last?: TransitLeg;
+  /** Interned ids of the leg sequence and of its transit legs: equal ids, equal sequences. */
+  signature?: number; transitKey?: number }
 export interface RouterOutput { candidates: Itinerary[]; reasons: VerificationReason[]; rounds: number; estimatedWorkingSetBytes: number }
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const signature = (legs: ItineraryLeg[]) => legs.map(l => l.kind === 'transit' ? `${l.tripInstanceRef}/${l.boardSequence}/${l.alightSequence}` : `${JSON.stringify(l.from)}/${JSON.stringify(l.to)}/${l.pathwayId ?? ''}`).join('|');
@@ -53,6 +55,12 @@ function transferRules(previous: TransitLeg, next: Instance, board: TransitRef, 
   return matched.filter(rule => specificity(rule) === highest);
 }
 
+/** Estimated working set one search may reach. The estimate runs about 1.65x the heap it
+ * measures: NYC Inwood-207 St to Coney Island, the longest subway trip, estimates 70 MB and
+ * retains 32 MB beyond its decoded shards. This leaves most of a 128 MB isolate to the
+ * shards, realtime feed, discovery index and runtime. */
+const ROUTER_BUDGET_BYTES = 96 * 1024 * 1024;
+
 /** Round-based earliest-arrival scan. Each round adds one vehicle boarding;
  * block/explicit in-seat continuation is closed inside that same round.
  * Labels retain their arriving trip because transfer restrictions are trip-specific.
@@ -63,7 +71,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
   // Rows already live in the decoded feed; the router only adds an index entry
   // that references each one. Charging per-row copies refused every NYC rush-hour plan.
   const realtimeBytes = realtime.length * 128;
-  if (baseBytes + realtimeBytes >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
+  if (baseBytes + realtimeBytes >= ROUTER_BUDGET_BYTES) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
   const begin = parseInstant(query.departAt), end = begin + (query.windowSeconds ?? 7200) * 1000;
   const maxWalk = Math.min(800, query.maxWalkMetres ?? 800), maxTransfers = query.maxTransfers ?? 3;
   const stops = new Map<TransitRef, ScheduleStop>();
@@ -81,7 +89,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     }
   }
   for (const endpoint of [query.origin, query.destination]) if (typeof endpoint === 'string' && !stops.has(endpoint)) throw new Error('ENTITY_NOT_FOUND: unknown journey stop');
-  if (baseBytes + realtimeBytes + stops.size * 512 >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
+  if (baseBytes + realtimeBytes + stops.size * 512 >= ROUTER_BUDGET_BYTES) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
   const reasons = new Set<VerificationReason>();
   const updates = new Map<string, Map<number, NormalizedStopUpdate>>();
   const observedStarts = new Map<string, Set<number>>();
@@ -199,23 +207,48 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     }
   }
   let retainedLabelBytes = 0, neighbourBytes = 0, rounds = 0;
+  // Hash-consed leg sequences. Every label extends its parent by one leg, so a sequence is
+  // interned as (parent id, leg id) and labels hold integers instead of a ~500-character
+  // signature each. Full text is built only for finished journeys, to order ties.
+  const legIds = new Map<string, number>(), legIdOf = new WeakMap<ItineraryLeg, number>(), pathIds = new Map<string, number>();
+  const legId = (leg: ItineraryLeg) => {
+    let id = legIdOf.get(leg);
+    if (id === undefined) {
+      const piece = signature([leg]);
+      id = legIds.get(piece);
+      if (id === undefined) { id = legIds.size + 1; legIds.set(piece, id); }
+      legIdOf.set(leg, id);
+    }
+    return id;
+  };
+  const pathId = (legs: ItineraryLeg[], transitOnly = false) => {
+    let id = 0;
+    for (const leg of legs) {
+      if (transitOnly && leg.kind !== 'transit') continue;
+      const key = `${id}:${legId(leg)}`;
+      let next = pathIds.get(key);
+      if (next === undefined) { next = pathIds.size + 1; pathIds.set(key, next); }
+      id = next;
+    }
+    return id;
+  };
   const estimatedBytes = () => baseBytes + instanceBytes + retainedLabelBytes + neighbourBytes + stops.size * 512 + realtimeBytes;
-  // Labels share leg objects by reference and path copies share strings: charge each
-  // retained leg once (object overhead plus its exact UTF-16 text), and every label for
-  // its own path array, exact signature text, state-map keys and queue/sort slots.
+  // Labels share leg objects by reference: charge each retained leg once (object overhead
+  // plus its exact UTF-16 text, which also bounds its interned piece), and every label for
+  // its own path array, two interned path entries, state-map keys and queue/sort slots.
   // Never rely on a fixed bytes/label.
   const chargedLegs = new WeakSet<ItineraryLeg>();
   /** Checks the charge; only retain() commits leg charges, so a pre-checked candidate
    * that is later deduplicated never leaves its leg text uncounted. Without signature
    * text yet, each leg is bounded by its own string fields (legBytes). */
-  function labelCharge(label: Label, signatures = ''): number {
+  function labelCharge(label: Label): number {
     let legBytes = 0;
     for (const leg of label.legs) {
       if (chargedLegs.has(leg)) continue;
       legBytes += 512 + Object.values(leg).reduce<number>((size, value) => size + (typeof value === 'string' ? value.length * 2 : 32), 0);
     }
-    const charge = 1024 + label.legs.length * 64 + signatures.length * 2 * 2 + legBytes;
-    if (label.legs.length > 100 || estimatedBytes() + charge >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
+    const charge = 1024 + label.legs.length * 64 + 2 * 96 + legBytes;
+    if (label.legs.length > 100 || estimatedBytes() + charge >= ROUTER_BUDGET_BYTES) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
     return charge;
   }
   // Per-stop Pareto bags (RAPTOR): a label at least as late, with as many boardings and
@@ -225,7 +258,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
   const bags = new Map<TransitRef, Label[]>();
   // Target pruning: once K distinct journeys reach the destination, a label already
   // later than the K-th arrival cannot become a returned itinerary.
-  const arrivals = new Map<string, number>();
+  const arrivals = new Map<number, number>();
   let cutoff = Infinity; // Recomputed only when a journey finishes, never per check.
   const arrived = (label: Label) => {
     const key = label.signature!; arrivals.set(key, Math.min(arrivals.get(key) ?? Infinity, label.time));
@@ -235,9 +268,9 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     other.time <= label.time && other.boardings <= label.boardings && other.walking <= label.walking).length >= PARETO_ALTERNATIVES;
   function retain(label: Label): Label {
     const bag = bags.get(label.stop) ?? []; bag.push(label); bags.set(label.stop, bag);
-    label.signature = signature(label.legs);
-    label.transitKey = signature(label.legs.filter(leg => leg.kind === 'transit'));
-    retainedLabelBytes += labelCharge(label, label.signature + label.transitKey);
+    label.signature = pathId(label.legs);
+    label.transitKey = pathId(label.legs, true);
+    retainedLabelBytes += labelCharge(label);
     for (const leg of label.legs) chargedLegs.add(leg);
     return label;
   }
@@ -261,7 +294,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
         if (metres <= maxWalk) list.push({ ref: stop.ref, metres });
       }
       neighbourBytes += 128 + list.length * 64;
-      if (estimatedBytes() >= 64 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
+      if (estimatedBytes() >= ROUTER_BUDGET_BYTES) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
       neighbours.set(from, list);
     }
     return list;
@@ -354,7 +387,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     }
     const prior = new Map<TransitRef, Label[]>(), current = new Map<TransitRef, Label[]>();
     for (const label of frontier) { const list = prior.get(label.stop) ?? []; list.push(label); prior.set(label.stop, list); }
-    const next: Label[] = [], stateCounts = new Map<string, Set<string>>(), terminalLabels = new Map<TransitRef, Label[]>();
+    const next: Label[] = [], stateCounts = new Map<string, Set<number>>(), terminalLabels = new Map<TransitRef, Label[]>();
     for (const instance of instances) {
       assertNotAborted(signal);
       if ([...instance.updates.values()].some(row => row.status === 'canceled' || row.scheduleRelationship === 'CANCELED')) { reasons.add('TRIP_CANCELED'); continue; }
@@ -397,7 +430,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
             // Check variable string/path allocation before constructing a new
             // signature, including candidates that are later deduplicated.
             labelCharge(candidate);
-            const key = `${instance.ref}/${dest.sequence}/${candidate.walking}/${label.transitKey}`, signatures = stateCounts.get(key) ?? new Set<string>(), sig = signature(candidate.legs);
+            const key = `${instance.ref}/${dest.sequence}/${candidate.walking}/${label.transitKey}`, signatures = stateCounts.get(key) ?? new Set<number>(), sig = pathId(candidate.legs);
             if (signatures.has(sig) || signatures.size >= 3) continue; signatures.add(sig); stateCounts.set(key, signatures);
             retain(candidate); next.push(candidate);
             const sameRound = current.get(dest.stopRef) ?? []; sameRound.push(candidate); current.set(dest.stopRef, sameRound);
@@ -414,9 +447,10 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     }));
     frontier.forEach(finish);
   }
-  const unique = new Map<string, Label>();
+  const unique = new Map<number, Label>();
   for (const label of finished) unique.set(label.signature!, label);
-  const ordered = [...unique.values()].sort((a, b) => a.time - b.time || a.boardings - b.boardings || a.walking - b.walking || compare(a.signature!, b.signature!));
+  const text = new Map([...unique.values()].map(label => [label, signature(label.legs)]));
+  const ordered = [...unique.values()].sort((a, b) => a.time - b.time || a.boardings - b.boardings || a.walking - b.walking || compare(text.get(a)!, text.get(b)!));
   const candidates = ordered.map(label => ({
     coverageId: query.manifest.coverageId, artifactVersion, origin: query.origin, destination: query.destination, departAt: query.departAt,
     windowSeconds: query.windowSeconds ?? 7200, maxWalkMetres: maxWalk, maxTransfers, departureTime: label.legs[0]!.departureTime,

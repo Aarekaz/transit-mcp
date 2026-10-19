@@ -239,7 +239,7 @@ describe('depart-at transit routing', () => {
     const input = plannerInput(); input.files['calendar_dates.txt'] = 'service_id,date,exception_type\nD,20261019,2\n';
     const f = await plannerFixture(input);
     const realtime = { version: f.version, producerTimestampSeconds: Date.parse(f.query.now) / 1000, receivedAtSeconds: Date.parse(f.query.now) / 1000,
-      payload: Array<NormalizedStopUpdate>(600000).fill({ entityId: 'unmatched', stopId: 'A' }) };
+      payload: Array<NormalizedStopUpdate>(1_000_000).fill({ entityId: 'unmatched', stopId: 'A' }) };
     await expect(planJourney({ ...f.query, realtime })).rejects.toThrow(/working-set budget/i);
   });
 
