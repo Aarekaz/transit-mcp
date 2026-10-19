@@ -58,6 +58,8 @@
     "MCP_ALLOWED_HOSTNAMES": "transitmcp.com,metro-mcp.anuragd.me",
     "MCP_ALLOWED_ORIGIN_HOSTNAMES": "transitmcp.com,metro-mcp.anuragd.me",
     "SFBAY_MODE": "dark",
+    // DC/NYC global tools: off | dark (ingest and validate only) | on | suspended.
+    "TRANSIT_COVERAGE_MODES": "{\"dc\":\"dark\",\"nyc\":\"dark\"}",
     "ENVIRONMENT": "production"
   },
 
