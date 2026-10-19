@@ -179,6 +179,8 @@ export class RegionFeedHub implements DurableObject {
       if (!current || !this.#snapshots || !this.#env.TRANSIT_ARTIFACTS) return;
       await this.#state.storage.put(pollAttemptState(spec.kind, nowSeconds));
       const parts = feedParts(spec);
+      const timings: Record<string, number> = {}, startedAt = Date.now();
+      const lap = (phase: string) => { timings[phase] = Date.now() - startedAt; };
       const settled = await Promise.allSettled(parts.map(part => this.#fetchPart(source, spec, part.url, nowSeconds)));
       const failed = settled.flatMap((result, index) => result.status === 'rejected' ? [parts[index]!.id] : []);
       if (failed.length) {
@@ -189,6 +191,7 @@ export class RegionFeedHub implements DurableObject {
         throw new Error(`incomplete_feed:${failed.join(',')}`);
       }
       const decoded = mergeRealtimeParts(settled.map(result => (result as PromiseFulfilledResult<NormalizedRealtimeFeed>).value));
+      lap('fetched');
       let payload = payloadFor(spec.kind, decoded), warnings = decoded.warnings, degraded = false;
       const readShard = (key: string) => readBoundedObject(this.#env.TRANSIT_ARTIFACTS!, key, 64 * 1024 * 1024);
       const matchWindow = () => loadScheduleWindow({ manifest: current.manifest, instant: new Date(nowSeconds * 1000).toISOString(),
@@ -197,14 +200,18 @@ export class RegionFeedHub implements DurableObject {
         minimumScheduleMatchRate: coverage.thresholds.minimumScheduleMatchRate };
       if (spec.kind === 'trip_updates') {
         const window = await matchWindow();
+        lap('schedule');
         const descriptors = current.manifest.discoveries.filter(item => item.feedId === policy.feedId);
         if (descriptors.length !== 1) throw new Error('Discovery identity missing or ambiguous');
         const descriptor = descriptors[0]!;
         const discoveryBytes = await readBoundedObject(this.#env.TRANSIT_ARTIFACTS, descriptor.key, Math.min(descriptor.byteLength, 64 * 1024 * 1024));
         if (discoveryBytes.length !== descriptor.byteLength || await sha256(discoveryBytes) !== descriptor.sha256) throw new Error('Discovery integrity failure');
         const discovery = decodeDiscoveryIndex(discoveryBytes);
+        lap('discovery');
         const applied = await applyTripUpdates(decoded, { ...matching, shards: window.shards.map(entry => entry.shard), discoveries: [discovery] });
+        lap('matched');
         payload = applied.stopUpdates; degraded = applied.degraded || window.status === 'unavailable'; warnings = [...applied.warnings, ...window.reasons];
+        Object.assign(timings, { rows: payload.length });
         console.info(JSON.stringify({ event: 'regional_trip_match', region: coverage.id, ...applied.match, ...applied.excluded }));
       }
       if (spec.kind === 'vehicle_positions') {
@@ -218,6 +225,8 @@ export class RegionFeedHub implements DurableObject {
         receivedAtSeconds: Math.floor(Date.now() / 1000),
         payload, warnings, degraded,
       });
+      lap('published');
+      console.info(JSON.stringify({ event: 'regional_feed_polled', region: coverage.id, feed: spec.kind, ...timings }));
     } catch (error) {
       const reason = safePollFailureReason(error);
       if (reason === 'malformed_feed') await this.#snapshots?.warn(spec.kind, reason);
