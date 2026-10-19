@@ -72,13 +72,23 @@ export interface TransitData {
   coverage: CoverageManifest; manifest: ArtifactManifestV2; version: StaticVersion; indexes: DiscoveryIndex[];
   readObject: (key: string) => Promise<Uint8Array>;
 }
+/** One store per bucket and coverage keeps the resident manifest across requests; the
+ * pointer is still read every time, so a new version is seen immediately. */
+const artifactStores = new WeakMap<R2Bucket, Map<string, StaticArtifactStore>>();
+function artifactStore(bucket: R2Bucket, coverageId: string): StaticArtifactStore {
+  let stores = artifactStores.get(bucket);
+  if (!stores) { stores = new Map(); artifactStores.set(bucket, stores); }
+  let store = stores.get(coverageId);
+  if (!store) { store = new StaticArtifactStore(bucket, coverageId); stores.set(coverageId, store); }
+  return store;
+}
 /** Verified, content-addressed discovery indexes per bound bucket (one store never vouches for another). */
 const discoveryCaches = new WeakMap<R2Bucket, Map<string, DiscoveryIndex>>();
 /** Public mode checks belong at the data boundary; catalog registration never changes. */
 export async function loadData(context: MetroMcpContext, coverageId: string, signal: AbortSignal, version?: string): Promise<TransitData | null> {
   const coverage = getCoverage(coverageId);
   if (!coverage || getCoverageMode(coverage.id, context.env) !== 'on' || !context.env.TRANSIT_ARTIFACTS) return null;
-  const bucket = context.env.TRANSIT_ARTIFACTS, store = new StaticArtifactStore(bucket, coverage.id);
+  const bucket = context.env.TRANSIT_ARTIFACTS, store = artifactStore(bucket, coverage.id);
   signal.throwIfAborted();
   const current = version ? await store.read(version) : await store.current();
   signal.throwIfAborted();
@@ -113,29 +123,62 @@ export function validRef(value: string, kinds: string[], dated = false): NonNull
   if (!parsed || !kinds.includes(parsed.kind) || (dated && parsed.kind === 'trip' && !('serviceDate' in parsed))) throw new TransitToolError('INVALID_TRANSIT_REF');
   return parsed;
 }
-export function entities(data: TransitData): Candidate[] {
-  return data.indexes.flatMap(index => [
+/** Entities of one verified discovery index, built once: the index is immutable and
+ * content-addressed, so the list, reference map and normalized names never change. */
+interface EntityIndex { list: readonly Candidate[]; byRef: Map<string, Candidate>; names: Map<string, readonly string[]> }
+const entityIndexes = new WeakMap<DiscoveryIndex, Map<string, EntityIndex>>();
+function entityIndex(data: TransitData, index: DiscoveryIndex): EntityIndex {
+  const agencies = Object.keys(data.manifest.agencyTimezones).filter(ref => parseTransitRef(ref)?.feed === index.feedId).sort();
+  const key = agencies.join('\n');
+  let byAgencies = entityIndexes.get(index);
+  const cached = byAgencies?.get(key);
+  if (cached) return cached;
+  const routes = new Map(index.routes.map(route => [route.ref as string, route]));
+  const list = [
     ...index.stops.map(stop => ({ ref: stop.ref, providerId: stop.providerId, name: sanitizeTransitText(stop.name), kind: 'stop' as const })),
     ...index.routes.map(route => ({ ref: route.ref, providerId: route.providerId, name: sanitizeTransitText(`${route.shortName} ${route.longName}`.trim()), kind: 'route' as const })),
     ...index.tripProviderIds.map(id => ({ ref: formatEntityRef({ coverage: index.coverageId, feed: index.feedId, kind: 'trip', id }), providerId: id, name: sanitizeTransitText(id), kind: 'trip' as const })),
-    ...Object.keys(data.manifest.agencyTimezones).filter(ref => parseTransitRef(ref)?.feed === index.feedId).map(ref => ({ ref, providerId: parseTransitRef(ref)!.id, name: sanitizeTransitText(parseTransitRef(ref)!.id), kind: 'agency' as const })),
-  ].map(entity => ({ ...entity, coverage: index.coverageId, feed: index.feedId })));
+    ...agencies.map(ref => ({ ref, providerId: parseTransitRef(ref)!.id, name: sanitizeTransitText(parseTransitRef(ref)!.id), kind: 'agency' as const })),
+  ].map(entity => Object.freeze({ ...entity, coverage: index.coverageId, feed: index.feedId }) as Candidate);
+  const names = new Map(list.map(entity => {
+    const route = entity.kind === 'route' ? routes.get(entity.ref) : undefined;
+    return [entity.ref, Object.freeze([entity.providerId, entity.name, route?.shortName ?? '', route?.longName ?? ''].filter(Boolean).map(normalizeEntityName))] as const;
+  }));
+  const built: EntityIndex = { list: Object.freeze(list), byRef: new Map(list.map(entity => [entity.ref, entity])), names };
+  if (!byAgencies) { byAgencies = new Map(); entityIndexes.set(index, byAgencies); }
+  byAgencies.set(key, built);
+  return built;
+}
+export function entities(data: TransitData): readonly Candidate[] {
+  return data.indexes.length === 1 ? entityIndex(data, data.indexes[0]!).list : data.indexes.flatMap(index => entityIndex(data, index).list);
 }
 export function candidates(data: TransitData, query: string, kind?: string): Candidate[] {
-  const normalized = normalizeEntityName(query);
-  return entities(data).filter(entity => (!kind || kind === entity.kind) &&
-    (entityNames(data, entity).some(name => name.includes(normalized)) || placeAliasMatch(data, entity, normalized)))
-    .sort((a, b) => Number(exactCandidate(data, b, query)) - Number(exactCandidate(data, a, query)) || a.providerId.localeCompare(b.providerId) || a.ref.localeCompare(b.ref));
+  const normalized = normalizeEntityName(query), aliasStops = aliasStopNames(data, normalized);
+  const found: { entity: Candidate; exact: boolean }[] = [];
+  for (const index of data.indexes) {
+    const { list, names } = entityIndex(data, index);
+    for (const entity of list) {
+      if (kind && kind !== entity.kind) continue;
+      const own = names.get(entity.ref)!, alias = aliasMatch(entity, aliasStops);
+      if (alias || own.some(name => name.includes(normalized))) found.push({ entity, exact: alias || own.includes(normalized) });
+    }
+  }
+  return found.sort((a, b) => Number(b.exact) - Number(a.exact) || a.entity.providerId.localeCompare(b.entity.providerId) || a.entity.ref.localeCompare(b.entity.ref))
+    .map(item => item.entity);
 }
 const normalizeEntityName = (value: string) => value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
-function entityNames(data: TransitData, entity: Candidate): string[] {
-  const route = entity.kind === 'route' ? data.indexes.find(index => index.feedId === entity.feed)?.routes.find(route => route.ref === entity.ref) : undefined;
-  return [entity.providerId, entity.name, route?.shortName ?? '', route?.longName ?? ''].filter(Boolean).map(normalizeEntityName);
+function entityNames(data: TransitData, entity: Candidate): readonly string[] {
+  const index = data.indexes.find(index => index.feedId === entity.feed);
+  return (index && entityIndex(data, index).names.get(entity.ref)) ?? [entity.providerId, entity.name].filter(Boolean).map(normalizeEntityName);
 }
+/** Normalized stop names a reviewed public place alias stands for (empty when none match). */
+function aliasStopNames(data: TransitData, normalized: string): Set<string> {
+  return new Set((data.coverage.placeAliases ?? []).filter(place => place.aliases.some(alias => normalizeEntityName(alias) === normalized))
+    .flatMap(place => place.stopNames.map(normalizeEntityName)));
+}
+const aliasMatch = (entity: Candidate, aliasStops: Set<string>) => entity.kind === 'stop' && aliasStops.size > 0 && aliasStops.has(normalizeEntityName(entity.name));
 function placeAliasMatch(data: TransitData, entity: Candidate, normalized: string): boolean {
-  return entity.kind === 'stop' && (data.coverage.placeAliases ?? []).some(place =>
-    place.aliases.some(alias => normalizeEntityName(alias) === normalized) &&
-    place.stopNames.some(name => normalizeEntityName(name) === normalizeEntityName(entity.name)));
+  return aliasMatch(entity, aliasStopNames(data, normalized));
 }
 export const exactCandidate = (data: TransitData, entity: Candidate, query: string) =>
   entityNames(data, entity).includes(normalizeEntityName(query)) || placeAliasMatch(data, entity, normalizeEntityName(query));
@@ -160,7 +203,8 @@ export function sameStation(data: TransitData, matches: Candidate[]): Candidate[
 export function knownEntity(data: TransitData, ref: string): Candidate {
   const parsed = validRef(ref, ['agency', 'route', 'stop', 'trip']);
   const base = formatEntityRef(parsed);
-  const entity = entities(data).find(entity => entity.ref === base);
+  const index = data.indexes.find(index => index.feedId === parsed.feed);
+  const entity = index && entityIndex(data, index).byRef.get(base);
   if (!entity) throw new TransitToolError('ENTITY_NOT_FOUND');
   return { ...entity, ref };
 }
