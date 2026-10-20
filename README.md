@@ -1,6 +1,6 @@
 # Transit MCP
 
-Transit MCP is an anonymous, read-only Model Context Protocol server for live DC Metro and NYC Subway transit information. SF Bay support is in development and is not available on the production MCP surface.
+Transit MCP is an anonymous, read-only Model Context Protocol server for live DC Metro and NYC Subway transit information. In the SF Bay Area the global tools serve departures, service alerts and vehicle locations for every 511 SF Bay operator; journey planning there is not offered yet.
 
 **Metro MCP is now Transit MCP.**
 

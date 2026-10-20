@@ -46,47 +46,34 @@ describe('release operator documentation', () => {
     expect(llmsText).toContain('do not provide a full journey planner');
     expect(llmsText).toContain('minutesAway');
   });
-  it('keeps SF Bay dark while documenting the in-development rollout', () => {
-    for (const [name, document] of [
-      ['README', readme],
-      ['landing page', landingPage],
-      ['public docs', publicDocs],
-      ['LLM index', llmsText],
-      ['changelog', changelog],
-    ] as const) {
-      expect(document, name).toMatch(/SF Bay support is in development/i);
+  it('documents SF Bay departures, alerts and vehicles without claiming SF planning', () => {
+    // The landing page and social image keep their in-development copy until they are redesigned.
+    expect(landingPage).toMatch(/SF Bay support is in development/i);
+    for (const [name, document] of [['README', readme], ['public docs', publicDocs], ['LLM index', llmsText]] as const) {
+      expect(document, name).toMatch(/departures, (?:service )?alerts and vehicle(?: location)?s/i);
+      expect(document, name).toMatch(/plan(?:ning|_trip)[^.]{0,80}not offered/i);
     }
-
-    for (const [name, document] of [
-      ['README', readme],
-      ['landing page', landingPage],
-      ['public docs', publicDocs],
-      ['LLM index', llmsText],
-      ['privacy', privacy],
-      ['terms', terms],
-      ['support', support],
-      ['registry', registry],
-      ['social image', ogImageSvg],
-      ['changelog', changelog],
-    ] as const) {
-      for (const pattern of forbiddenSfLiveClaimPatterns) {
-        expect(document, name).not.toMatch(pattern);
-      }
+    expect(llmsText).toContain('PLANNING_UNAVAILABLE');
+    // Pages not rewritten for the launch still make no live SF claim.
+    for (const [name, document] of [['privacy', privacy], ['terms', terms], ['support', support], ['registry', registry], ['social image', ogImageSvg]] as const) {
+      for (const pattern of forbiddenSfLiveClaimPatterns) expect(document, name).not.toMatch(pattern);
     }
-
+    for (const [name, document] of [['README', readme], ['public docs', publicDocs], ['LLM index', llmsText], ['changelog', changelog]] as const) {
+      expect(document, name).not.toMatch(/(?:plan|journey)[^.\n]{0,60}(?:SF Bay|Bay Area)[^.\n]{0,40}(?:available|live)\b/i);
+    }
     expect(readme).toMatch(/18 MCP tools/i);
     expect(publicDocs).toMatch(/18 Model Context Protocol tools/i);
     expect(sfBayRollout).not.toMatch(/without registering public tools|on.*registers tools|current\.json\.gz/);
     expect(readme).toContain('docs/global-transit-verification.md');
-    expect(sfBayRollout).toMatch(/SF Bay support is in development/i);
     expect(sfBayRollout).toContain('511 SF Bay');
     expect(privacy).toContain('511 SF Bay');
     expect(terms).toContain('511 SF Bay');
     expect(transitBoardSource).toContain('<title>Transit MCP Transit Board</title>');
     expect(ogImageSvg).toContain('SF Bay: in development');
     expect(ogImageSvg).toContain('2 live regions');
+    // Production serves SF Bay; preview stays dark.
     expect([...wrangler.matchAll(/"SFBAY_MODE": "([^"]+)"/g)].map(match => match[1]))
-      .toEqual(['dark', 'dark']);
+      .toEqual(['on', 'dark']);
   });
 
   it.each([

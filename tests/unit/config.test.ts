@@ -221,9 +221,11 @@ describe('anonymous deployment configuration', () => {
       MCP_PUBLIC_ORIGIN: 'https://transitmcp.com',
       MCP_ALLOWED_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
       MCP_ALLOWED_ORIGIN_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
-      SFBAY_MODE: 'dark',
+      SFBAY_MODE: 'on',
       // Preview has no DC/NYC artifacts, so its coverages stay off by omission.
       TRANSIT_COVERAGE_MODES: '{"dc":"on","nyc":"on"}',
+      // SF Bay serves departures, alerts and vehicles; regional planning is not offered yet.
+      TRANSIT_PLANNING_OFF: '["sfbay"]',
       ENVIRONMENT: 'production',
     });
     expect(wrangler.env.preview.vars).toEqual({

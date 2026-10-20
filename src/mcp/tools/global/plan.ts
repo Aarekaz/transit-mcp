@@ -11,7 +11,7 @@ import type { SourceStatus, VerificationReason } from '../../../transit/core/res
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { canonicalJson, sha256 } from '../../../transit/gtfs/static/shards';
 import { DecodedShardCache } from '../../../transit/planner/schedule-index';
-import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, journeyAgencies, candidates, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, sameStation, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, effectiveCapabilities, journeyAgencies, candidates, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, sameStation, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
 
 const journeyEndpoint = z.union([z.string(), coordinatesSchema]);
 const transitLeg = z.strictObject({ kind: z.literal('transit'), from: z.string(), to: z.string(), tripRef: z.string(), tripInstanceRef: z.string(), serviceDate: z.string(), instanceStartSeconds: z.number(),
@@ -57,6 +57,7 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     if (!coverageId || originCoverage && destinationCoverage && originCoverage !== destinationCoverage) return noData();
     const data = await loadData(context, coverageId, handler.mcpReq.signal, state?.phase === 'transit-selection' ? state.artifactVersion : undefined);
     if (!data) return noData();
+    if (!effectiveCapabilities(context, data.coverage, false).planning) return complete({ ...unavailable(coverageId, data, ['PLANNING_UNAVAILABLE']), itineraries: [] });
     const resolved: Partial<Record<'origin' | 'destination', JourneyEndpoint>> = {};
     const ambiguous: Partial<Record<'origin' | 'destination', Candidate[]>> = {};
     const accepted = state?.phase === 'transit-selection' ? acceptedContent(handler.mcpReq.inputResponses, 'endpoints', z.strictObject({ origin: z.string().optional(), destination: z.string().optional() })) : undefined;

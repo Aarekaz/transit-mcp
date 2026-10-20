@@ -66,9 +66,11 @@
     "MCP_PUBLIC_ORIGIN": "https://transitmcp.com",
     "MCP_ALLOWED_HOSTNAMES": "transitmcp.com,metro-mcp.anuragd.me",
     "MCP_ALLOWED_ORIGIN_HOSTNAMES": "transitmcp.com,metro-mcp.anuragd.me",
-    "SFBAY_MODE": "dark",
+    "SFBAY_MODE": "on",
     // DC/NYC global tools: off | dark (ingest and validate only) | on | suspended.
     "TRANSIT_COVERAGE_MODES": "{\"dc\":\"on\",\"nyc\":\"on\"}",
+    // SF Bay planning needs a dedicated planner (docs/sfbay-rollout.md); its other tools are on.
+    "TRANSIT_PLANNING_OFF": "[\"sfbay\"]",
     "ENVIRONMENT": "production"
   },
 
