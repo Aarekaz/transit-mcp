@@ -4,9 +4,10 @@ import { allocatePollIntervals } from '../upstream/budget';
 import { decodeRealtimeFeed, type NormalizedAlert, type NormalizedRealtimeFeed } from './decode';
 import { RegionalFeedHubCore } from './hub-core';
 import { ApiKeyQuota, RealtimeSnapshotStore, StaticArtifactStore, readBoundedObject } from './snapshot-store';
-import { loadScheduleWindow } from '../../planner/schedule-index';
+import { DecodedShardCache, loadScheduleWindow } from '../../planner/schedule-index';
 import { applyTripUpdates, applyVehiclePositions, matchVehicles, settleStoppedVehicles } from './trip-match';
 import { decodeDiscoveryIndex, sha256 } from '../static/shards';
+import type { DiscoveryIndex } from '../static/schema';
 import { feedParts, getRealtimeSource, getRealtimeSources, ingestionActive, publishedKinds, upstreamRequest, type RealtimeSource } from './sources';
 
 const POLLED_PREFIX = 'polled:';
@@ -83,6 +84,9 @@ export class RegionFeedHub implements DurableObject {
   readonly #snapshots?: RealtimeSnapshotStore;
   readonly #artifacts?: StaticArtifactStore;
   readonly #quota?: ApiKeyQuota;
+  // Polls reuse the verified timetable and discovery index while their hashes are unchanged.
+  readonly #shards = new DecodedShardCache(24 * 1024 * 1024);
+  #discovery?: { sha256: string; index: DiscoveryIndex };
 
   constructor(state: DurableObjectState, env: Env) {
     this.#state = state;
@@ -129,7 +133,10 @@ export class RegionFeedHub implements DurableObject {
     const stops = url.searchParams.getAll('stop');
     const snapshot = await this.#snapshots.read(kind, current.version, stops.length && kind === 'trip_updates' ? stops : undefined);
     if (snapshot) core.replace(kind, snapshot);
-    return Response.json(core.read(kind, now));
+    const read = core.read(kind, now);
+    // The reader already holds this exact payload: send only the freshness metadata.
+    if (read.etag && url.searchParams.get('have') === read.etag) return Response.json({ ...read, payload: null, notModified: true });
+    return Response.json(read);
   }
 
   async alarm(): Promise<void> {
@@ -196,7 +203,7 @@ export class RegionFeedHub implements DurableObject {
       let payload = payloadFor(spec.kind, decoded), warnings = decoded.warnings, degraded = false, vehicles: unknown[] | undefined;
       const readShard = (key: string) => readBoundedObject(this.#env.TRANSIT_ARTIFACTS!, key, 64 * 1024 * 1024);
       const matchWindow = () => loadScheduleWindow({ manifest: current.manifest, instant: new Date(nowSeconds * 1000).toISOString(),
-        windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [policy.feedId] });
+        windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [policy.feedId], decoded: this.#shards });
       const matching = { manifest: current.manifest, version: current.version, feedId: policy.feedId, tripMatching: policy.tripMatching,
         minimumScheduleMatchRate: coverage.thresholds.minimumScheduleMatchRate };
       if (spec.kind === 'trip_updates') {
@@ -205,9 +212,12 @@ export class RegionFeedHub implements DurableObject {
         const descriptors = current.manifest.discoveries.filter(item => item.feedId === policy.feedId);
         if (descriptors.length !== 1) throw new Error('Discovery identity missing or ambiguous');
         const descriptor = descriptors[0]!;
-        const discoveryBytes = await readBoundedObject(this.#env.TRANSIT_ARTIFACTS, descriptor.key, Math.min(descriptor.byteLength, 64 * 1024 * 1024));
-        if (discoveryBytes.length !== descriptor.byteLength || await sha256(discoveryBytes) !== descriptor.sha256) throw new Error('Discovery integrity failure');
-        const discovery = decodeDiscoveryIndex(discoveryBytes);
+        if (this.#discovery?.sha256 !== descriptor.sha256) {
+          const discoveryBytes = await readBoundedObject(this.#env.TRANSIT_ARTIFACTS, descriptor.key, Math.min(descriptor.byteLength, 64 * 1024 * 1024));
+          if (discoveryBytes.length !== descriptor.byteLength || await sha256(discoveryBytes) !== descriptor.sha256) throw new Error('Discovery integrity failure');
+          this.#discovery = { sha256: descriptor.sha256, index: decodeDiscoveryIndex(discoveryBytes) };
+        }
+        const discovery = this.#discovery.index;
         lap('discovery');
         const applied = await applyTripUpdates(decoded, { ...matching, shards: window.shards.map(entry => entry.shard), discoveries: [discovery] });
         lap('matched');

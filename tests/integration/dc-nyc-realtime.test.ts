@@ -100,6 +100,24 @@ describe('NYC subway through the global tools with every MTA feed', () => {
       .map((departure: Row) => [departure.scheduleMatch, departure.scheduledTime])).toEqual([['unmatched_trip', null]]);
   });
 
+  it('sends an unchanged realtime payload once per isolate, with fresh metadata every read', async () => {
+    const f = await nyc();
+    const reads: { have: string | null; notModified: boolean; rows: number }[] = [];
+    const original = f.hub.fetch.bind(f.hub);
+    vi.spyOn(f.hub, 'fetch').mockImplementation(async (request: Request) => {
+      const response = await original(request), url = new URL(request.url), body = await response.clone().json() as { notModified?: boolean; payload: unknown[] | null };
+      if (url.pathname === '/trip_updates' && !url.searchParams.has('stop')) reads.push({ have: url.searchParams.get('have'), notModified: !!body.notModified, rows: body.payload?.length ?? 0 });
+      return response;
+    });
+    const plan = () => callTool(f.env, 'plan_trip', { origin: { ref: f.ref('stop', '127') }, destination: { ref: f.ref('stop', '132') }, maxWalkMetres: 0 });
+    const first = (await plan()).structuredContent, second = (await plan()).structuredContent;
+    expect(reads[0]).toMatchObject({ notModified: false });
+    expect(reads[0]!.rows).toBeGreaterThan(0);
+    expect(reads.at(-1)).toMatchObject({ have: expect.stringMatching(/^[0-9a-f]{64}$/), notModified: true, rows: 0 });
+    expect(second.itineraries).toEqual(first.itineraries);
+    expect(second.status).toBe(first.status);
+  });
+
   it('lists departures across every station of a complex', async () => {
     const f = await nyc();
     // 725 has no scheduled service of its own; the 1 and 2 leave from 127 in the same complex.

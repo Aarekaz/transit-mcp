@@ -11,6 +11,7 @@ export interface FeedSnapshot<T> {
   warnings?: string[];
   version?: StaticVersion;
   degraded?: boolean;
+  etag?: string;
 }
 
 export interface FeedRead<T> {
@@ -23,6 +24,8 @@ export interface FeedRead<T> {
   ageSeconds?: number | null;
   version?: StaticVersion;
   degraded?: boolean;
+  /** Identifies an unfiltered payload a reader may already hold; vehicles are rebuilt per read. */
+  etag?: string;
 }
 
 type Intervals = Record<RealtimeFeedKind, number>;
@@ -58,7 +61,7 @@ export class RegionalFeedHubCore {
       }
       return { freshness, status, ageSeconds, producerTimestampSeconds: snapshot?.producerTimestampSeconds,
         receivedAtSeconds: snapshot?.receivedAtSeconds, version: snapshot?.version, degraded: snapshot?.degraded,
-        payload, warnings: [...(snapshot?.warnings ?? []), ...(freshness === 'stale' ? ['stale_feed'] : freshness === 'expired' ? ['expired_feed'] : freshness === 'unavailable' ? ['unavailable_feed'] : [])] };
+        payload, ...(payload !== null && kind !== 'vehicle_positions' && snapshot?.etag ? { etag: snapshot.etag } : {}), warnings: [...(snapshot?.warnings ?? []), ...(freshness === 'stale' ? ['stale_feed'] : freshness === 'expired' ? ['expired_feed'] : freshness === 'unavailable' ? ['unavailable_feed'] : [])] };
     }
     const freshness = classifyFreshness(
       snapshot?.producerTimestampSeconds,

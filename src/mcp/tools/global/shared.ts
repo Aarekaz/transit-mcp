@@ -315,6 +315,9 @@ export function effectiveCapabilities(context: MetroMcpContext, coverage: Covera
 }
 /** Each coverage's coordinator owns exactly one static feed's realtime. */
 export type OwnedFeedRead<T> = FeedRead<T> & { feedId: string; reasons: VerificationReason[] };
+/** Complete payloads this isolate already holds, by coordinator and kind. The coordinator
+ * confirms the tag on every read, so freshness metadata is never served from cache. */
+const heldPayloads = new Map<string, { etag: string; payload: unknown[] }>();
 export async function readFeed<T>(context: MetroMcpContext, data: TransitData, kind: RealtimeFeedKind, now: number, signal: AbortSignal, stopIds: string[] = []): Promise<OwnedFeedRead<T[]>> {
   const source = getRealtimeSource(data.coverage.id);
   const feedId = source?.policy.feedId ?? data.manifest.sources[0]?.feedId ?? '';
@@ -325,12 +328,16 @@ export async function readFeed<T>(context: MetroMcpContext, data: TransitData, k
   const url = new URL(`https://region-feed-hub.internal/${kind}`);
   url.searchParams.set('now', String(now)); url.searchParams.set('artifact', data.version.artifactVersion);
   for (const stop of kind === 'trip_updates' ? stopIds.slice(0, 200) : []) url.searchParams.append('stop', stop);
+  const heldKey = `${source.policy.namespace}\n${kind}`, held = kind === 'trip_updates' && stopIds.length ? undefined : heldPayloads.get(heldKey);
+  if (held) url.searchParams.set('have', held.etag);
   signal.throwIfAborted();
   try {
     const response = await context.env.REGION_FEED_HUB.get(context.env.REGION_FEED_HUB.idFromName(source.policy.namespace)).fetch(url.href, { signal });
     signal.throwIfAborted();
     if (!response.ok) return missing();
-    const feed = await response.json<FeedRead<T[]>>();
+    const { notModified, ...feed } = await response.json<FeedRead<T[]> & { notModified?: boolean }>();
+    if (notModified && held && feed.etag === held.etag) feed.payload = held.payload as T[];
+    else if (feed.etag && Array.isArray(feed.payload) && !(kind === 'trip_updates' && stopIds.length)) heldPayloads.set(heldKey, { etag: feed.etag, payload: feed.payload });
     const policy = data.coverage.thresholds;
     const threshold = kind === 'trip_updates' ? policy.tripUpdates.realtimeSeconds : kind === 'vehicle_positions' ? policy.vehiclePositions.realtimeSeconds : policy.alerts.currentSeconds;
     const expiry = kind === 'trip_updates' ? policy.tripUpdates.staleSeconds : kind === 'vehicle_positions' ? policy.vehiclePositions.unavailableSeconds : Infinity;

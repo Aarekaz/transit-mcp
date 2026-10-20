@@ -9,6 +9,8 @@ export interface ScheduleWindowQuery {
   manifest: ArtifactManifestV2;
   /** Reads one immutable object. Implementations must also cap transport size. */
   readShard: (key: string) => Promise<Uint8Array>;
+  /** Decoded shards kept across calls by a long-lived reader (the realtime coordinator). */
+  decoded?: DecodedShardCache;
   instant: string;
   /** Half-open interval [instant, instant + windowSeconds), maximum seven days. */
   windowSeconds: number;
@@ -38,6 +40,31 @@ function withinFeed(source: SourceMetadata, date: string): boolean {
 }
 
 /** Pure selection plus an injected immutable-byte reader; no R2 or global clock dependency. */
+/** Verified, decoded shards by content hash, least recently used first out. Objects are
+ * immutable: shards are content-addressed and never edited after decoding. */
+export class DecodedShardCache {
+  readonly #entries = new Map<string, { shard: ScheduleShard; bytes: number }>();
+  #bytes = 0;
+  constructor(private readonly maxFileBytes: number) {}
+  get(descriptor: { sha256: string; byteLength: number }): ScheduleShard | undefined {
+    const key = `${descriptor.sha256}/${descriptor.byteLength}`, entry = this.#entries.get(key);
+    if (!entry) return undefined;
+    this.#entries.delete(key); this.#entries.set(key, entry);
+    return entry.shard;
+  }
+  *shards(): Iterable<ScheduleShard> { for (const entry of this.#entries.values()) yield entry.shard; }
+  set(descriptor: { sha256: string; byteLength: number }, shard: ScheduleShard): void {
+    if (descriptor.byteLength > this.maxFileBytes) return;
+    const key = `${descriptor.sha256}/${descriptor.byteLength}`;
+    if (this.#entries.has(key)) return;
+    this.#entries.set(key, { shard, bytes: descriptor.byteLength }); this.#bytes += descriptor.byteLength;
+    for (const [old, entry] of this.#entries) {
+      if (this.#bytes <= this.maxFileBytes) break;
+      this.#entries.delete(old); this.#bytes -= entry.bytes;
+    }
+  }
+}
+
 export async function loadScheduleWindow(query: ScheduleWindowQuery): Promise<ScheduleWindow> {
   const start = parseInstant(query.instant), end = start + query.windowSeconds * 1000;
   if (!Number.isInteger(query.windowSeconds) || query.windowSeconds <= 0 || query.windowSeconds > 7 * 86400) throw new Error('TIME_OUTSIDE_WINDOW: search window must be between 1 second and 7 days');
@@ -110,9 +137,13 @@ export async function loadScheduleWindow(query: ScheduleWindowQuery): Promise<Sc
   if (bytesRequired > BYTE_BUDGET) throw new Error('Schedule shard byte budget exceeded');
   // Sequential decoding bounds the transient byte buffers and pins one source per feed.
   for (const { descriptor, days, source } of selected.values()) {
-    const bytes = await query.readShard(descriptor.key);
-    if (bytes.byteLength !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Schedule shard integrity failure');
-    const shard = decodeScheduleShard(bytes);
+    let shard = query.decoded?.get(descriptor);
+    if (!shard) {
+      const bytes = await query.readShard(descriptor.key);
+      if (bytes.byteLength !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Schedule shard integrity failure');
+      shard = decodeScheduleShard(bytes);
+      query.decoded?.set(descriptor, shard);
+    }
     const agencyTimezones = Object.fromEntries(Object.entries(manifest.agencyTimezones).filter(([ref]) => parseTransitRef(ref)?.feed === descriptor.feedId));
     if (shard.coverageId !== manifest.coverageId || shard.feedId !== descriptor.feedId || shard.source.sha256 !== source.sha256 ||
       canonicalJson(shard.source) !== canonicalJson(source) || canonicalJson(shard.agencyTimezones) !== canonicalJson(agencyTimezones) ||

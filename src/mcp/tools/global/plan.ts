@@ -6,7 +6,8 @@ import { getCoverage } from '../../../transit/core/coverage';
 import { planJourney } from '../../../transit/planner/plan';
 import type { JourneyEndpoint } from '../../../transit/planner/types';
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
-import { canonicalJson, decodeScheduleShard, sha256 } from '../../../transit/gtfs/static/shards';
+import { canonicalJson, sha256 } from '../../../transit/gtfs/static/shards';
+import { DecodedShardCache } from '../../../transit/planner/schedule-index';
 import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, candidates, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, sameStation, scheduledRealtimeRows, sourceSchema, unavailable, type Candidate } from './shared';
 
 const journeyEndpoint = z.union([z.string(), coordinatesSchema]);
@@ -95,12 +96,9 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     if (feed.payload?.some(update => ['DUPLICATED', 'REPLACEMENT'].includes(update.scheduleRelationship ?? ''))) {
       return complete({ ...unavailable(coverageId, data, ['REALTIME_UNAVAILABLE']), sources: [...metadata(coverageId, data).sources, ...realtimeSource(data, feed, 'trip_updates', Date.parse(now) / 1000)], itineraries: [] });
     }
-    const sequences = new Map<string, number[]>();
-    const planned = planJourney({ manifest: data.manifest, readShard: async key => {
-      const bytes = await data.readObject(key), shard = decodeScheduleShard(bytes);
-      for (const trip of shard.trips) sequences.set(trip.ref, trip.stopTimes.map(call => call.sequence));
-      return bytes;
-    }, origin: resolved.origin!, destination: resolved.destination!, departAt: args.departAt ?? now, now,
+    // One decode per shard: the planner fills this, and leg details read trips from it.
+    const decoded = new DecodedShardCache(Number.MAX_SAFE_INTEGER);
+    const planned = planJourney({ manifest: data.manifest, readShard: data.readObject, decoded, origin: resolved.origin!, destination: resolved.destination!, departAt: args.departAt ?? now, now,
       windowSeconds: args.windowSeconds, maxWalkMetres: args.maxWalkMetres, maxTransfers: args.maxTransfers, realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds,
       // Journeys come only from schedule data; observed-only rows cannot form legs.
       realtime: feed.payload !== null && feed.version && feed.receivedAtSeconds !== undefined ? { ...feed, payload: scheduledRealtimeRows(feed.payload), version: feed.version, receivedAtSeconds: feed.receivedAtSeconds } : undefined }, handler.mcpReq.signal);
@@ -111,6 +109,9 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       if (error instanceof Error && error.message.startsWith('Planner working-set budget exceeded')) return complete({ ...unavailable(coverageId, data, ['SCOPE_LIMIT_EXCEEDED']), itineraries: [] });
       throw error;
     }
+    const legTrips = new Set(result.candidates.flatMap(candidate => candidate.legs.flatMap(leg => leg.kind === 'transit' ? [leg.tripRef as string] : [])));
+    const sequences = new Map<string, number[]>();
+    for (const shard of decoded.shards()) for (const trip of shard.trips) if (legTrips.has(trip.ref)) sequences.set(trip.ref, trip.stopTimes.map(call => call.sequence));
     const meta = metadata(coverageId, data, now);
     if (feed) meta.sources.push(...realtimeSource(data, feed, 'trip_updates', Date.parse(now) / 1000));
     const routes = data.indexes.flatMap(index => index.routes);

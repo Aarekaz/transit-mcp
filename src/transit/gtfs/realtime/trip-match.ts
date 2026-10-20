@@ -49,6 +49,18 @@ function assertIdentity(context: TripMatchContext): void {
   }
 }
 
+/** Canonical encodings already hashed, by object. Decoded shards and indexes are never
+ * edited, so a long-lived coordinator proves each object once, not on every poll. */
+const verified = new WeakMap<object, { sha256: string; byteLength: number }>();
+async function assertShardInManifest(shard: ScheduleShard, manifest: ArtifactManifestV2): Promise<void> {
+  let proven = verified.get(shard);
+  if (!proven) {
+    const bytes = encodeScheduleShard(shard);
+    proven = { sha256: await sha256(bytes), byteLength: bytes.length }; verified.set(shard, proven);
+  }
+  if (!manifest.shards.some(descriptor => descriptor.feedId === shard.feedId && descriptor.sha256 === proven.sha256 && descriptor.byteLength === proven.byteLength)) throw new Error('Realtime schedule integrity failure');
+}
+
 /** Date is never inferred from wall time. An ambiguous/missing frequency start is not a match. */
 export function matchTripInstance(update: NormalizedTripUpdate, context: TripMatchContext): MatchedTripInstance | null {
   assertIdentity(context);
@@ -59,10 +71,7 @@ export function matchTripInstance(update: NormalizedTripUpdate, context: TripMat
 export async function applyVehiclePositions(vehicles: NormalizedVehicle[], context: TripMatchContext): Promise<NormalizedVehicle[]> {
   assertIdentity(context);
   if (!sameStaticVersion(await staticVersion(context.manifest), context.version)) throw new Error('Realtime static artifact version mismatch');
-  for (const shard of context.shards) {
-    const bytes = encodeScheduleShard(shard), hash = await sha256(bytes);
-    if (!context.manifest.shards.some(descriptor => descriptor.feedId === shard.feedId && descriptor.sha256 === hash && descriptor.byteLength === bytes.length)) throw new Error('Realtime schedule integrity failure');
-  }
+  for (const shard of context.shards) await assertShardInManifest(shard, context.manifest);
   return matchVehicles(vehicles, context);
 }
 
@@ -344,18 +353,19 @@ function addedUpdates(update: NormalizedTripUpdate, context: TripMatchContext): 
 export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: TripMatchContext): Promise<AppliedTripUpdates> {
   assertIdentity(context);
   if (!sameStaticVersion(await staticVersion(context.manifest), context.version)) throw new Error('Realtime static artifact version mismatch');
-  for (const shard of context.shards) {
-    const bytes = encodeScheduleShard(shard), hash = await sha256(bytes);
-    if (!context.manifest.shards.some(descriptor => descriptor.feedId === shard.feedId && descriptor.sha256 === hash && descriptor.byteLength === bytes.length)) throw new Error('Realtime schedule integrity failure');
-  }
+  for (const shard of context.shards) await assertShardInManifest(shard, context.manifest);
   const staticIds = new Map<string, Set<string>>();
   for (const discovery of context.discoveries ?? []) {
-    const bytes = new TextEncoder().encode(canonicalJson(discovery));
-    decodeDiscoveryIndex(bytes);
     const descriptors = context.manifest.discoveries.filter(item => item.feedId === discovery.feedId);
     if (staticIds.has(discovery.feedId) || discovery.coverageId !== context.manifest.coverageId ||
-      discovery.sourceSha256 !== context.version.sourceVersions[discovery.feedId] || descriptors.length !== 1 ||
-      descriptors[0]!.byteLength !== bytes.length || descriptors[0]!.sha256 !== await sha256(bytes)) throw new Error('Realtime discovery integrity or identity failure');
+      discovery.sourceSha256 !== context.version.sourceVersions[discovery.feedId] || descriptors.length !== 1) throw new Error('Realtime discovery integrity or identity failure');
+    let proven = verified.get(discovery);
+    if (!proven) {
+      const bytes = new TextEncoder().encode(canonicalJson(discovery));
+      decodeDiscoveryIndex(bytes);
+      proven = { sha256: await sha256(bytes), byteLength: bytes.length }; verified.set(discovery, proven);
+    }
+    if (descriptors[0]!.byteLength !== proven.byteLength || descriptors[0]!.sha256 !== proven.sha256) throw new Error('Realtime discovery integrity or identity failure');
     staticIds.set(discovery.feedId, new Set(discovery.tripProviderIds));
   }
   const stopUpdates: NormalizedStopUpdate[] = []; let eligible = 0, matched = 0, invalidExtras = 0, nonRevenue = 0, unrepresentableAdded = 0;

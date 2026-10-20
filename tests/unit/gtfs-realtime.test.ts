@@ -215,7 +215,21 @@ describe('bounded snapshot storage and manifest policy', () => {
     expect(db.values.size).toBe(0);
     await store.publish('trip_updates', { version, receivedAtSeconds: 1000, payload: [{ stopId: 'S' }] });
     for (const key of db.objects.keys()) db.objects.set(key, new TextEncoder().encode('[]'));
-    await expect(store.read('trip_updates', version)).rejects.toThrow(/integrity/i);
+    // The publisher serves the payload it holds; a restarted coordinator reads R2 and verifies it.
+    expect((await store.read('trip_updates', version))?.payload).toEqual([{ stopId: 'S' }]);
+    await expect(new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).read('trip_updates', version)).rejects.toThrow(/integrity/i);
+  });
+
+  it('tags complete payloads so a reader that holds one skips the transfer', async () => {
+    const db = memoryStorage(), version = await snapshots.staticVersion((await realtimeFixture()).manifest);
+    await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).publish('trip_updates', { version, receivedAtSeconds: 1000, payload: [{ stopId: 'S' }, { stopId: 'T' }] });
+    const cold = new snapshots.RealtimeSnapshotStore(db.storage, db.bucket);
+    const first = await cold.read('trip_updates', version), again = await cold.read('trip_updates', version);
+    expect(first?.etag).toMatch(/^[0-9a-f]{64}$/);
+    expect(again?.etag).toBe(first?.etag);
+    // Stop-filtered reads are partial and carry no tag.
+    expect(await cold.read('trip_updates', version, ['T'])).toMatchObject({ payload: [{ stopId: 'T' }] });
+    expect((await cold.read('trip_updates', version, ['T']))?.etag).toBeUndefined();
   });
 
   it('retains at most the current and previous snapshot payload generations after repeated polls', async () => {

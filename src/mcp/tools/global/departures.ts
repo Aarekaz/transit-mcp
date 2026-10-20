@@ -5,7 +5,7 @@ import { complete, readOnlyLive } from '../../shared';
 import { getScheduledDeparturePages, type ScheduledDeparture, type ScheduledDepartures } from '../../../transit/planner/departures';
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { formatEntityRef, parseTransitRef } from '../../../transit/core/refs';
-import { decodeScheduleShard } from '../../../transit/gtfs/static/shards';
+import { DecodedShardCache } from '../../../transit/planner/schedule-index';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import type { ScheduleTrip } from '../../../transit/gtfs/static/schema';
 import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, candidates, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, sameStation, unavailable, validRef, type TransitData } from './shared';
@@ -59,20 +59,19 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     // A station is the whole complex a rider knows by that name; a platform is just itself.
     const complex = complexStations(data, stopRef!), within = new Set([stopRef!, ...complex]);
     const relevantStops = new Set(data.indexes.flatMap(index => index.stops).filter(stop => within.has(stop.ref) || stop.parentStationRef !== undefined && within.has(stop.parentStationRef)).map(stop => stop.ref));
-    const trips = new Map<string, Pick<ScheduleTrip, 'headsign' | 'directionId' | 'routeRef' | 'stopTimes'>>();
-    const pages = getScheduledDeparturePages({ manifest: data.manifest, readShard: async key => {
-      const bytes = await data.readObject(key), shard = decodeScheduleShard(bytes);
-      for (const trip of shard.trips) {
-        const stopTimes = trip.stopTimes.filter(call => relevantStops.has(call.stopRef));
-        if (stopTimes.length) trips.set(trip.ref, { headsign: trip.headsign, directionId: trip.directionId, routeRef: trip.routeRef, stopTimes });
-      }
-      return bytes;
-    }, readDiscovery: data.readObject, stopRef: asTransitRef(stopRef!), complexStationRefs: complex.map(asTransitRef),
+    // One decode per shard: the scan fills this, and observed rows read trips from it.
+    const decoded = new DecodedShardCache(Number.MAX_SAFE_INTEGER);
+    const pages = getScheduledDeparturePages({ manifest: data.manifest, readShard: data.readObject, decoded, readDiscovery: data.readObject, stopRef: asTransitRef(stopRef!), complexStationRefs: complex.map(asTransitRef),
       instant: args.at ?? now, windowSeconds: args.windowSeconds, selection: args.selection, limit: 100, routeRefs: args.routeRefs?.map(asTransitRef), agencyRefs: args.agencyRefs?.map(asTransitRef) });
     const scheduled: ScheduledDeparture[] = []; let schedule: ScheduledDepartures | undefined;
     // Predictions can reorder any scheduled page. Exhaust the bounded window before ranking.
     for await (const page of pages) { handler.mcpReq.signal.throwIfAborted(); schedule = page; scheduled.push(...page.departures); }
     if (!schedule) throw new Error('Missing departure scan');
+    const trips = new Map<string, Pick<ScheduleTrip, 'headsign' | 'directionId' | 'routeRef' | 'stopTimes'>>();
+    for (const shard of decoded.shards()) for (const trip of shard.trips) {
+      const stopTimes = trip.stopTimes.filter(call => relevantStops.has(call.stopRef));
+      if (stopTimes.length) trips.set(trip.ref, { headsign: trip.headsign, directionId: trip.directionId, routeRef: trip.routeRef, stopTimes });
+    }
     const stopIndex = data.indexes.flatMap(index => index.stops);
     const relevantProviderIds = stopIndex.filter(stop => relevantStops.has(stop.ref)).map(stop => stop.providerId);
     const feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', nowSeconds, handler.mcpReq.signal, relevantProviderIds);

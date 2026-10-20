@@ -1,3 +1,4 @@
+import type { DecodedShardCache } from './schedule-index';
 import type { TransitRef, TripInstanceRef } from '../core/refs';
 import type { VerificationReason, VerificationStatus } from '../core/results';
 import type { NormalizedStopUpdate } from '../gtfs/realtime/decode';
@@ -40,6 +41,8 @@ export interface ValidationSource {
 }
 export interface JourneyQuery extends Omit<ValidationSource, 'shards'> {
   readShard: (key: string) => Promise<Uint8Array>;
+  /** Receives each decoded shard, so a caller can read trips without decoding again. */
+  decoded?: DecodedShardCache;
   origin: JourneyEndpoint; destination: JourneyEndpoint; departAt: string;
   /** Exact journeys must arrive inside this horizon (default two hours, max seven days). */
   windowSeconds?: number;
