@@ -15,17 +15,55 @@ import { matchTripInstance } from '../../../transit/gtfs/realtime/trip-match';
 import type { ScheduleShard } from '../../../transit/gtfs/static/schema';
 import { AlertScopeLimitError, expandAlertScopes, matchesAlertSelector, resolveAlertSelector, type AlertScope } from '../../../transit/gtfs/realtime/alert-match';
 import { itinerarySchema } from './plan';
-import { TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef } from './shared';
+import { blockedStations, currentOutage, outageStations, stationOf, type EquipmentOutage } from '../../../transit/accessibility/equipment';
+import { TransitToolError, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
 
 /** Per-alert detail bound: a city-wide status call stays readable for a model. */
 export const ALERT_DETAIL_LIMIT = 20;
+/** Equipment outages listed per call; `count` is the full number in scope. */
+export const EQUIPMENT_DETAIL_LIMIT = 20;
+const UPCOMING_HORIZON_SECONDS = 86400;
+
+const equipmentSchema = z.strictObject({
+  status: z.enum(['current', 'stale', 'unavailable', 'not_offered']).describe('Freshness of the agency equipment report; not_offered when this coverage publishes none.'),
+  count: z.number().int().nonnegative(), blockingStepFreeCount: z.number().int().nonnegative(),
+  outages: z.array(z.strictObject({ equipmentId: z.string(), kind: z.enum(['elevator', 'escalator']), stationRefs: z.array(z.string()).max(8), stationName: z.string(), location: z.string(),
+    accessiblePath: z.boolean().describe('On the step-free (ADA) path.'), hasBackup: z.boolean().nullable().describe('Agency says another elevator covers the same path; null when it does not say.'),
+    blocksStepFree: z.boolean().describe('Step-free plan_trip avoids these stations while this lasts.'), reason: z.string(), since: instantSchema.nullable(), estimatedReturn: instantSchema.nullable(),
+    upcoming: z.boolean().describe('Announced, starting within 24 hours.'), alternativeRoute: z.string().nullable().describe('Agency-supplied way around the outage.') }))
+    .describe(`At most ${EQUIPMENT_DETAIL_LIMIT}, blocking and accessible-path outages first.`),
+});
+
+/** Elevator and escalator outages at the scoped stations (all, for a coverage or agency). */
+async function equipmentReport(context: MetroMcpContext, data: TransitData, stations: Set<string> | 'all', nowSeconds: number, signal: AbortSignal) {
+  if (!effectiveCapabilities(context, data.coverage, false).accessibility) return { report: { status: 'not_offered' as const, count: 0, blockingStepFreeCount: 0, outages: [] }, sources: [] };
+  const feed = await readFeed<EquipmentOutage>(context, data, 'equipment_outages', nowSeconds, signal);
+  const sources = realtimeSource(data, feed, 'equipment_outages', nowSeconds);
+  if (!feed.payload) return { report: { status: 'unavailable' as const, count: 0, blockingStepFreeCount: 0, outages: [] }, sources };
+  const rows = data.indexes.flatMap(index => {
+    const blocked = blockedStations(feed.payload!, index, nowSeconds);
+    return feed.payload!.flatMap(outage => {
+      const current = currentOutage(outage, nowSeconds);
+      if (!current && !(outage.upcoming && outage.sinceSeconds !== null && outage.sinceSeconds <= nowSeconds + UPCOMING_HORIZON_SECONDS)) return [];
+      const refs = outageStations(outage, index);
+      if (stations !== 'all' && !refs.some(ref => stations.has(ref))) return [];
+      const blocksStepFree = current && outage.kind === 'elevator' && outage.accessiblePath && refs.some(ref => blocked.has(ref));
+      return [{ equipmentId: outage.id, kind: outage.kind, stationRefs: refs.slice(0, 8), stationName: outage.stationName, location: outage.location, accessiblePath: outage.accessiblePath,
+        hasBackup: outage.redundant, blocksStepFree, reason: outage.reason, since: outage.sinceSeconds === null ? null : new Date(outage.sinceSeconds * 1000).toISOString(),
+        estimatedReturn: outage.estimatedReturnSeconds === null ? null : new Date(outage.estimatedReturnSeconds * 1000).toISOString(), upcoming: !current, alternativeRoute: outage.alternativeRoute }];
+    });
+  }).sort((a, b) => Number(b.blocksStepFree) - Number(a.blocksStepFree) || Number(b.accessiblePath) - Number(a.accessiblePath) || Number(a.upcoming) - Number(b.upcoming) ||
+    (a.since ?? '').localeCompare(b.since ?? '') || a.equipmentId.localeCompare(b.equipmentId));
+  return { report: { status: feed.freshness === 'fresh' ? 'current' as const : 'stale' as const, count: rows.length, blockingStepFreeCount: rows.filter(row => row.blocksStepFree).length,
+    outages: rows.slice(0, EQUIPMENT_DETAIL_LIMIT) }, sources };
+}
 
 export function registerServiceStatusTool(server: McpServer, context: MetroMcpContext): void {
   const absent = { coverage: z.never().optional(), ref: z.never().optional(), itinerary: z.never().optional() };
   const selectorSchema = z.strictObject({ agencyId: z.string().optional(), routeId: z.string().optional(), routeType: z.number().int().optional(), stopId: z.string().optional(), directionId: z.number().int().optional(),
     trip: z.strictObject({ tripId: z.string().optional(), startDate: z.string().optional(), startTime: z.string().optional(), routeId: z.string().optional(), directionId: z.number().int().optional() }).optional() });
   server.registerTool('get_service_status', {
-    title: 'Transit service status', description: 'Check disruptions, delays, closures, accessibility alerts or revalidate a chosen itinerary without replacing it. Scope by coverage or an agency, route, stop or dated trip reference. Aggregate scopes include canonical service in the next 24 hours. Use get_vehicle_status for an observed vehicle location.',
+    title: 'Transit service status', description: 'Check disruptions, delays, closures, elevator and escalator outages, or revalidate a chosen itinerary without replacing it. Scope by coverage or an agency, route, stop or dated trip reference; a station covers its complex. Aggregate scopes include canonical service in the next 24 hours. equipment lists elevator/escalator outages: accessiblePath marks the step-free route, blocksStepFree marks stations step-free plan_trip avoids, and alternativeRoute is the agency\'s way around. Use get_vehicle_status for an observed vehicle location.',
     annotations: readOnlyLive('Transit service status'),
     inputSchema: z.union([z.strictObject({ ...absent, coverage: coverageSchema }), z.strictObject({ ...absent, ref: boundedText }), z.strictObject({ ...absent, itinerary: z.record(z.string(), z.unknown())
       .describe('An itinerary exactly as plan_trip returned it; validated strictly against that contract.') })]),
@@ -35,7 +73,8 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       activePeriods: z.array(z.strictObject({ start: instantSchema.nullable(), end: instantSchema.nullable() })).max(32) })),
       journeyValid: z.boolean().nullable(), journeyReasons: z.array(z.string()),
       legChecks: z.array(z.strictObject({ index: z.number().int(), valid: z.boolean(), reasons: z.array(z.string()) })),
-      transferChecks: z.array(z.strictObject({ fromLegIndex: z.number().int(), toLegIndex: z.number().int(), valid: z.literal(false), reasons: z.array(z.string()) })) }),
+      transferChecks: z.array(z.strictObject({ fromLegIndex: z.number().int(), toLegIndex: z.number().int(), valid: z.literal(false), reasons: z.array(z.string()) })),
+      equipment: equipmentSchema.optional().describe('Elevator and escalator outages in scope, where the coverage publishes them.') }),
   }, async (args, handler) => guarded(handler, async () => {
     checkState(handler, 'get_service_status');
     const parsed = args.ref ? validRef(args.ref, ['agency', 'route', 'stop', 'trip'], true) : undefined;
@@ -154,7 +193,18 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
         stopIds: stopIds.slice(0, ALERT_DETAIL_LIMIT), stopCount: stopIds.length, stale: feed?.freshness !== 'fresh',
         activePeriods: (alert.activePeriods ?? []).map(period => ({ start: period.start === undefined ? null : new Date(period.start * 1000).toISOString(), end: period.end === undefined ? null : new Date(period.end * 1000).toISOString() })) }];
     }); } catch (error) { if (error instanceof AlertScopeLimitError) return scopeUnavailable(); throw error; }
-    return complete({ ...meta, sources,
+    // Stations in scope: a station covers its complex; routes, trips and itineraries their stops' stations.
+    const stopIndex = new Map(data.indexes.flatMap(index => index.stops).map(stop => [stop.ref as string, stop]));
+    let stations: Set<string> | 'all' = 'all';
+    if (parsed?.kind === 'stop') { const station = stationOf(args.ref!, stopIndex); stations = new Set([station, ...complexStations(data, station)]); }
+    else if (parsed?.kind === 'route') stations = new Set(data.indexes.flatMap(index => Object.entries(index.stopRoutes).filter(([, routes]) => routes.includes(asTransitRef(args.ref!))).map(([ref]) => stationOf(ref, stopIndex))));
+    else if (parsed?.kind === 'trip' || inputItinerary) {
+      const ids = new Set(inputItinerary ? inputItinerary.legs.flatMap(leg => leg.kind === 'transit' ? [leg.from, leg.to] : []) : scopes.flatMap(scope => [...scope.stopIds].map(id => `${scope.feedId}\u0000${id}`)));
+      stations = new Set([...stopIndex.values()].filter(stop => ids.has(stop.ref) || ids.has(`${parseTransitRef(stop.ref)!.feed}\u0000${stop.providerId}`)).map(stop => stationOf(stop.ref, stopIndex)));
+    }
+    const equipment = await equipmentReport(context, data, stations, nowSeconds, handler.mcpReq.signal);
+    sources.push(...equipment.sources);
+    return complete({ ...meta, sources, equipment: equipment.report,
       status: usable && journeyValid !== false ? 'realtime' as const : 'unavailable' as const, reasons: resultReasons.size ? [...resultReasons] : usable ? [] : ['REALTIME_UNAVAILABLE' as const], alerts, journeyValid, journeyReasons, legChecks, transferChecks });
   }, () => complete({ ...unavailable(args.coverage), alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] })));
 }

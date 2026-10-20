@@ -7,12 +7,14 @@ import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode
 import { formatEntityRef, parseTransitRef } from '../../../transit/core/refs';
 import { decodeScheduleShard } from '../../../transit/gtfs/static/shards';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
+import { stopAccess } from '../../../transit/accessibility/equipment';
 import type { ScheduleTrip } from '../../../transit/gtfs/static/schema';
 import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, candidates, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, sameStation, unavailable, validRef, type TransitData } from './shared';
 import { getCoverage } from '../../../transit/core/coverage';
 
 const departureShape = { tripRef: z.string(), serviceDate: z.string(), routeRef: z.string(), routeName: z.string().describe('Public route name, e.g. "1", "A" or "Red".'),
   agencyRef: z.string(), stopRef: z.string(), stopName: z.string(), stopSequence: z.number().int(),
+  stepFree: z.enum(['accessible', 'not_accessible', 'unknown']).describe('Step-free access to this platform per the agency\'s station data; live elevator outages are in get_service_status.'),
   headsign: z.string(), directionId: z.number().int().nullable(), pickupType: z.number().int(), status: z.enum(['scheduled_only', 'realtime']), feedId: z.string(), scheduleVersion: z.string(), agencyTimezone: z.string() };
 /** `matched` rows are calls of a canonical scheduled trip instance. Observed rows
  * (`unscheduled_call`: a reroute stop; `unmatched_trip`: a train absent from the
@@ -21,7 +23,7 @@ const departureSchema = z.strictObject({ ...departureShape, stopSequence: z.numb
   predictedTime: instantSchema.nullable(), platform: z.string().nullable(), scheduleMatch: z.enum(['matched', 'unscheduled_call', 'unmatched_trip']) });
 const frequencySchema = z.strictObject({ ...departureShape, tripTemplateRef: z.string(), startTime: instantSchema, endTime: instantSchema, overlapStartTime: instantSchema, overlapEndTime: instantSchema,
   headwaySeconds: z.number().int(), exactTimes: z.literal(false) });
-type Unnamed<T> = Omit<T, 'routeName' | 'stopName'>;
+type Unnamed<T> = Omit<T, 'routeName' | 'stopName' | 'stepFree'>;
 
 export function registerDeparturesTool(server: McpServer, context: MetroMcpContext): void {
   server.registerTool('get_departures', {
@@ -132,7 +134,10 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     // Human-readable names beside the opaque references, so a model can answer directly.
     const routeNames = new Map(data.indexes.flatMap(index => index.routes).map(route => [route.ref as string, routeName(route)]));
     const stopNames = new Map(data.indexes.flatMap(index => index.stops).map(row => [row.ref as string, sanitizeTransitText(row.name, 200)]));
-    const named = <T extends { routeRef: string; stopRef: string }>(row: T) => ({ ...row, routeName: routeNames.get(row.routeRef) ?? '', stopName: stopNames.get(row.stopRef) ?? '' });
+    const stopRows = new Map(data.indexes.flatMap(index => index.stops.map(row => [row.ref as string, { index, row }] as const)));
+    const allStops = new Map([...stopRows].map(([ref, { row }]) => [ref, row]));
+    const access = (ref: string) => { const found = stopRows.get(ref); return found ? stopAccess(found.index, found.row, allStops) : 'unknown' as const; };
+    const named = <T extends { routeRef: string; stopRef: string }>(row: T) => ({ ...row, routeName: routeNames.get(row.routeRef) ?? '', stopName: stopNames.get(row.stopRef) ?? '', stepFree: access(row.stopRef) });
     return complete({ ...meta, sources,
       status: departures.some(row => row.status === 'realtime') ? 'realtime' as const : schedule.status, reasons: [...new Set([...schedule.reasons, ...feed.reasons])],
       departures: departures.map(named), frequencyWindows: schedule.frequencyWindows.map(named) });

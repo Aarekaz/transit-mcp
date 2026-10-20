@@ -54,8 +54,8 @@ export function feedParts(spec: RealtimeFeedSpec): readonly { id: string; url: U
   return [{ id: spec.kind, url: spec.url }];
 }
 
-export function upstreamRequest(source: RealtimeSource, url: URL, env: Env): Request {
-  const headers: Record<string, string> = { accept: 'application/x-google-protobuf' };
+export function upstreamRequest(source: RealtimeSource, url: URL, env: Env, accept = 'application/x-google-protobuf'): Request {
+  const headers: Record<string, string> = { accept };
   const target = new URL(url);
   const key = credential(source, env);
   if (key === null) throw new Error('upstream_credential_missing');

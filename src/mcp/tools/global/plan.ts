@@ -5,9 +5,11 @@ import { complete, readOnlyLive } from '../../shared';
 import { getCoverage } from '../../../transit/core/coverage';
 import { planJourney } from '../../../transit/planner/plan';
 import type { JourneyEndpoint } from '../../../transit/planner/types';
+import type { TransitRef } from '../../../transit/core/refs';
+import type { SourceStatus, VerificationReason } from '../../../transit/core/results';
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { canonicalJson, decodeScheduleShard, sha256 } from '../../../transit/gtfs/static/shards';
-import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, candidates, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, sameStation, scheduledRealtimeRows, sourceSchema, unavailable, type Candidate } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, candidates, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, sameStation, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
 
 const journeyEndpoint = z.union([z.string(), coordinatesSchema]);
 const transitLeg = z.strictObject({ kind: z.literal('transit'), from: z.string(), to: z.string(), tripRef: z.string(), tripInstanceRef: z.string(), serviceDate: z.string(), instanceStartSeconds: z.number(),
@@ -23,7 +25,7 @@ export const itinerarySchema = z.strictObject({ coverageId: z.string(), artifact
 
 export const planInput = z.strictObject({ origin: endpointSchema, destination: endpointSchema, coverage: coverageSchema.optional(), departAt: instantSchema.optional(),
   windowSeconds: z.number().int().min(1).max(604800).default(7200), maxWalkMetres: z.number().min(0).max(800).default(800), maxTransfers: z.number().int().min(0).max(4).default(3),
-  accessibility: z.enum(['no_preference', 'step_free']).default('no_preference') });
+  accessibility: z.enum(['no_preference', 'step_free']).default('no_preference').describe('step_free: only platforms reachable without stairs, avoiding current elevator outages.') });
 export const planState = z.strictObject({ phase: z.literal('transit-selection'), tool: z.literal('plan_trip'), requestHash: z.string().regex(/^[a-f0-9]{64}$/),
   artifactVersion: z.string().regex(/^[a-f0-9]{64}$/),
   candidates: z.strictObject({ origin: z.array(z.string()).min(2).max(MAX_DISCOVERY_CANDIDATES).optional(), destination: z.array(z.string()).min(2).max(MAX_DISCOVERY_CANDIDATES).optional() }) });
@@ -39,7 +41,7 @@ export function verifyPlanChoices(state: z.infer<typeof planState>, inputRespons
 
 export function registerPlanTool(server: McpServer, context: MetroMcpContext, codec: RequestStateCodec<TransitRequestState>): void {
   server.registerTool('plan_trip', {
-    title: 'Plan a transit journey', description: 'Plan an origin-to-destination journey when find_transit reports available coverage with planning enabled. Returns up to three independently validated itineraries and resolves named endpoints together; departure defaults to now. The whole journey must finish within windowSeconds (default two hours): if none is found for a long trip, retry with a larger window. Each transit leg carries a tripInstanceRef; pass it to get_vehicle_status to see where that train is now. Never assemble or repair journeys from get_departures.',
+    title: 'Plan a transit journey', description: 'Plan an origin-to-destination journey when find_transit reports available coverage with planning enabled. Returns up to three independently validated itineraries and resolves named endpoints together; departure defaults to now. The whole journey must finish within windowSeconds (default two hours): if none is found for a long trip, retry with a larger window. Each transit leg carries a tripInstanceRef; pass it to get_vehicle_status to see where that train is now. For a wheelchair user or anyone avoiding stairs, set accessibility: "step_free": journeys then board, alight and change only at platforms step-free from the street per the agency (partial stations by direction), avoiding stations cut off by a current elevator outage; in-station changes between such platforms are taken as step-free. It refuses with ACCESSIBILITY_UNAVAILABLE when no current elevator report exists and ENDPOINT_NOT_STEP_FREE when an endpoint has no step-free platform now (get_service_status lists the outages). Never assemble or repair journeys from get_departures.',
     annotations: readOnlyLive('Plan a transit journey'),
     inputSchema: planInput,
     outputSchema: z.strictObject({ ...resultShape, itineraries: z.array(itinerarySchema).max(3) }),
@@ -53,8 +55,6 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     if (!coverageId || originCoverage && destinationCoverage && originCoverage !== destinationCoverage) return noData();
     const data = await loadData(context, coverageId, handler.mcpReq.signal, state?.phase === 'transit-selection' ? state.artifactVersion : undefined);
     if (!data) return noData();
-    // This planner has no verified step-free constraints yet; never imply accessibility.
-    if (args.accessibility === 'step_free') return complete({ ...unavailable(coverageId, data), itineraries: [] });
     const resolved: Partial<Record<'origin' | 'destination', JourneyEndpoint>> = {};
     const ambiguous: Partial<Record<'origin' | 'destination', Candidate[]>> = {};
     const accepted = state?.phase === 'transit-selection' ? acceptedContent(handler.mcpReq.inputResponses, 'endpoints', z.strictObject({ origin: z.string().optional(), destination: z.string().optional() })) : undefined;
@@ -92,6 +92,20 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
         requestState: await codec.mint({ phase: 'transit-selection', tool: 'plan_trip', requestHash, artifactVersion: data.version.artifactVersion, candidates: choices }, handler) });
     }
     const now = new Date().toISOString(), feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', Date.parse(now) / 1000, handler.mcpReq.signal);
+    // Step-free: board, alight and change only where access is step-free now. Without a
+    // current equipment report, or with an endpoint cut off, refuse rather than guess.
+    let stepFree: { usableStopRefs: ReadonlySet<TransitRef> } | undefined, accessSources: SourceStatus[] = [];
+    if (args.accessibility === 'step_free') {
+      const access = await stepFreeAccess(context, data, Date.parse(now) / 1000, handler.mcpReq.signal);
+      accessSources = access.sources;
+      const refuse = (reasons: VerificationReason[]) => complete({ ...unavailable(coverageId, data, reasons), sources: [...metadata(coverageId, data).sources, ...accessSources], itineraries: [] });
+      if (!access.usable) return refuse(access.reasons);
+      const stops = data.indexes.flatMap(index => index.stops);
+      for (const endpoint of [resolved.origin!, resolved.destination!]) {
+        if (typeof endpoint === 'string' && !stops.some(stop => (stop.ref === endpoint || stop.parentStationRef === endpoint) && access.usable!.has(stop.ref))) return refuse(['ENDPOINT_NOT_STEP_FREE']);
+      }
+      stepFree = { usableStopRefs: access.usable as ReadonlySet<TransitRef> };
+    }
     if (feed.payload?.some(update => ['DUPLICATED', 'REPLACEMENT'].includes(update.scheduleRelationship ?? ''))) {
       return complete({ ...unavailable(coverageId, data, ['REALTIME_UNAVAILABLE']), sources: [...metadata(coverageId, data).sources, ...realtimeSource(data, feed, 'trip_updates', Date.parse(now) / 1000)], itineraries: [] });
     }
@@ -103,7 +117,8 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     }, origin: resolved.origin!, destination: resolved.destination!, departAt: args.departAt ?? now, now,
       windowSeconds: args.windowSeconds, maxWalkMetres: args.maxWalkMetres, maxTransfers: args.maxTransfers, realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds,
       // Journeys come only from schedule data; observed-only rows cannot form legs.
-      realtime: feed.payload !== null && feed.version && feed.receivedAtSeconds !== undefined ? { ...feed, payload: scheduledRealtimeRows(feed.payload), version: feed.version, receivedAtSeconds: feed.receivedAtSeconds } : undefined }, handler.mcpReq.signal);
+      realtime: feed.payload !== null && feed.version && feed.receivedAtSeconds !== undefined ? { ...feed, payload: scheduledRealtimeRows(feed.payload), version: feed.version, receivedAtSeconds: feed.receivedAtSeconds } : undefined,
+      ...(stepFree ? { stepFree } : {}) }, handler.mcpReq.signal);
     let result: Awaited<typeof planned>;
     // A search too large for this isolate is a scope limit, not missing coverage.
     try { result = await planned; }
@@ -113,6 +128,7 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     }
     const meta = metadata(coverageId, data, now);
     if (feed) meta.sources.push(...realtimeSource(data, feed, 'trip_updates', Date.parse(now) / 1000));
+    meta.sources.push(...accessSources);
     const routes = data.indexes.flatMap(index => index.routes);
     return complete({ ...meta, status: result.status, reasons: [...new Set([...result.reasons, ...feed.reasons])], itineraries: result.candidates.map(candidate => ({ ...candidate, legs: candidate.legs.map((leg, index) => {
       if (leg.kind === 'walk') return { ...leg, validatorOutcome: 'valid' as const };
