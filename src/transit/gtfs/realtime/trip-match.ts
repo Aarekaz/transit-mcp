@@ -40,6 +40,8 @@ export interface AppliedTripUpdates {
   match: { eligible: number; matched: number; rate: number };
   /** Trips proven to serve no rider; never part of the match rate. */
   excluded: { nonRevenue: number; invalidExtras: number; unrepresentableAdded: number; beyondWindow: number }; degraded: boolean; warnings: string[];
+  /** Up to five unmatched trips and why (`no_instance` or `calls_rejected`), for diagnosis. */
+  unmatchedSample?: string[];
 }
 function timeString(seconds: number): string {
   return `${String(Math.floor(seconds / 3600)).padStart(2, '0')}:${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
@@ -77,6 +79,12 @@ export function recordVerifiedShards(entries: readonly { shard: ScheduleShard; k
     if (descriptor && !verified.has(shard)) verified.set(shard, { sha256: descriptor.sha256, byteLength: descriptor.byteLength });
   }
 }
+
+/** A discovery index the coordinator decoded from bytes it checked against the manifest. */
+export function recordVerifiedDiscovery(index: DiscoveryIndex, descriptor: { sha256: string; byteLength: number }): void {
+  if (!verified.has(index)) verified.set(index, { sha256: descriptor.sha256, byteLength: descriptor.byteLength });
+}
+const tripIdSets = new WeakMap<DiscoveryIndex, ReadonlySet<string>>();
 
 /** Date is never inferred from wall time, except under undatedWindow (see there). An
  * ambiguous or missing frequency start is not a match. */
@@ -418,8 +426,11 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
       proven = { sha256: await sha256(bytes), byteLength: bytes.length }; verified.set(discovery, proven);
     }
     if (descriptors[0]!.byteLength !== proven.byteLength || descriptors[0]!.sha256 !== proven.sha256) throw new Error('Realtime discovery integrity or identity failure');
-    staticIds.set(discovery.feedId, new Set(discovery.tripProviderIds));
+    let ids = tripIdSets.get(discovery);
+    if (!ids) { ids = new Set(discovery.tripProviderIds); tripIdSets.set(discovery, ids); }
+    staticIds.set(discovery.feedId, ids as Set<string>);
   }
+  const unmatchedSample: string[] = [];
   const stopUpdates: NormalizedStopUpdate[] = []; let eligible = 0, matched = 0, invalidExtras = 0, nonRevenue = 0, unrepresentableAdded = 0, beyondWindow = 0;
   const timezone = Object.entries(context.manifest.agencyTimezones).find(([ref]) => !context.feedId || parseTransitRef(ref)?.feed === context.feedId)?.[1];
   const startsAfterHorizon = (update: NormalizedTripUpdate) => {
@@ -469,6 +480,7 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
     }
     const updates = match ? matchedUpdates(update, match) : null;
     if (updates) { matched++; stopUpdates.push(...updates); }
+    else if (unmatchedSample.length < 5) unmatchedSample.push(`${match ? 'calls_rejected' : 'no_instance'}:${update.tripId}@${update.startDate ?? '-'}/${update.startTime ?? '-'}`);
   }
   const rate = eligible ? matched / eligible : 1;
   // The rate detects a wrong or stale schedule, where matching collapses. Over a handful of
@@ -477,6 +489,6 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
   const threshold = context.minimumScheduleMatchRate ?? SFBAY_COVERAGE.thresholds.minimumScheduleMatchRate;
   const mismatched = eligible >= MIN_ELIGIBLE_FOR_MATCH_RATE ? rate < threshold : eligible > 0 && matched === 0;
   const degraded = invalidExtras > 0 || mismatched;
-  return { version: context.version, trips: feed.trips, stopUpdates, match: { eligible, matched, rate }, excluded: { nonRevenue, invalidExtras, unrepresentableAdded, beyondWindow }, degraded,
+  return { version: context.version, trips: feed.trips, stopUpdates, unmatchedSample, match: { eligible, matched, rate }, excluded: { nonRevenue, invalidExtras, unrepresentableAdded, beyondWindow }, degraded,
     warnings: [...feed.warnings, ...(degraded ? ['SCHEDULE_REALTIME_MISMATCH'] : [])] };
 }

@@ -5,7 +5,7 @@ import { decodeRealtimeFeed, type NormalizedAlert, type NormalizedRealtimeFeed }
 import { RegionalFeedHubCore } from './hub-core';
 import { ApiKeyQuota, RealtimeSnapshotStore, StaticArtifactStore, readBoundedObject, type StaticVersion } from './snapshot-store';
 import { DecodedShardCache, loadScheduleWindow } from '../../planner/schedule-index';
-import { MIN_ELIGIBLE_FOR_MATCH_RATE, applyTripUpdates, applyVehiclePositions, matchVehicles, recordVerifiedShards, settleStoppedVehicles, type AppliedTripUpdates } from './trip-match';
+import { MIN_ELIGIBLE_FOR_MATCH_RATE, applyTripUpdates, applyVehiclePositions, matchVehicles, recordVerifiedDiscovery, recordVerifiedShards, settleStoppedVehicles, type AppliedTripUpdates } from './trip-match';
 import { decodeDiscoveryIndex, sha256 } from '../static/shards';
 import type { ArtifactManifestV2, DiscoveryIndex } from '../static/schema';
 import type { TransitRef } from '../../core/refs';
@@ -306,6 +306,7 @@ export class RegionFeedHub implements DurableObject {
         const discoveryBytes = await readBoundedObject(this.#env.TRANSIT_ARTIFACTS!, descriptor.key, Math.min(descriptor.byteLength, 64 * 1024 * 1024));
         if (discoveryBytes.length !== descriptor.byteLength || await sha256(discoveryBytes) !== descriptor.sha256) throw new Error('Discovery integrity failure');
         const index = decodeDiscoveryIndex(discoveryBytes);
+        recordVerifiedDiscovery(index, descriptor);
         this.#discoveries.set(feedId, { sha256: descriptor.sha256, index });
         return index;
       };
@@ -341,9 +342,7 @@ export class RegionFeedHub implements DurableObject {
             applied.push(result); feedResults.push(result);
             if (groups) {
               // Which agency groups match, with a few unmatched trips, so a low rate can be traced.
-              const matchedIds = new Set(result.stopUpdates.map(update => update.tripId));
-              groupStats.push([group ? [...group].map(ref => ref.split(':').at(-1)!).join('+').slice(0, 48) : 'unpublished', result.match.eligible, result.match.matched,
-                sub.trips.filter(trip => trip.scheduleRelationship === 'SCHEDULED' && !matchedIds.has(trip.tripId)).slice(0, 3).map(trip => `${trip.tripId}@${trip.startDate}/${trip.startTime}`)]);
+              groupStats.push([group ? [...group].map(ref => ref.split(':').at(-1)!).join('+').slice(0, 48) : 'unpublished', result.match.eligible, result.match.matched, result.unmatchedSample ?? []]);
             }
             // Same documents, same verified shards: no second fetch or integrity pass.
             if (spec.alsoPublishes?.includes('vehicle_positions')) matchedVehicles.push(...matchVehicles(settleStoppedVehicles(sub.vehicles, sub.trips), { ...matching(feedId), shards }));
