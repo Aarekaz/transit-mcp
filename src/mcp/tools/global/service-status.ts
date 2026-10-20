@@ -87,14 +87,16 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
     if (!data) return complete({ ...unavailable(id), alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] });
     if (args.ref) knownEntity(data, args.ref);
     const now = new Date().toISOString(), nowSeconds = Date.parse(now) / 1000;
+    // Alert selectors name provider IDs that are meaningful only inside their own feed.
     const feed = await readFeed<NormalizedAlert>(context, data, 'service_alerts', nowSeconds, handler.mcpReq.signal);
-    const resultReasons = new Set(feed.reasons);
+    const resultReasons = new Set<VerificationReason>();
     const meta = metadata(id, data, now);
     const sources = [...meta.sources, ...(feed ? realtimeSource(data, feed, 'alerts', nowSeconds) : [])];
     const canonicalShards: ScheduleShard[] = [];
     const scopeUnavailable = (reasons: VerificationReason[] = ['SCOPE_LIMIT_EXCEEDED']) => complete({ ...unavailable(id, data, reasons), sources, alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] });
-    if (args.coverage && feed?.payload?.some(alert => alert.selectors?.some(selector => selector.trip && selector.trip.tripId === undefined))) {
-      const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant: now, windowSeconds: 86400, feedIds: [feed.feedId] });
+    const tripPatternFeeds = feed.parts.filter(part => part.payload?.some(alert => alert.selectors?.some(selector => selector.trip && selector.trip.tripId === undefined))).map(part => part.feedId);
+    if (args.coverage && tripPatternFeeds.length) {
+      const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant: now, windowSeconds: 86400, feedIds: tripPatternFeeds });
       if (schedule.status === 'unavailable') return scopeUnavailable(schedule.reasons);
       canonicalShards.push(...schedule.shards.map(item => item.shard));
     }
@@ -142,7 +144,9 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
     let journeyValid: boolean | null = null, journeyReasons: string[] = [];
     if (inputItinerary) {
       const itinerary = inputItinerary;
-      const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant: itinerary.departAt, windowSeconds: itinerary.windowSeconds });
+      // Only the feeds its legs ride: a coverage may hold far larger ones (Metrobus).
+      const legFeeds = [...new Set(itinerary.legs.flatMap(leg => leg.kind === 'transit' ? [parseTransitRef(leg.tripInstanceRef)?.feed ?? ''] : []))];
+      const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant: itinerary.departAt, windowSeconds: itinerary.windowSeconds, feedIds: legFeeds });
       canonicalShards.push(...schedule.shards.map(item => item.shard));
       for (const leg of itinerary.legs) if (leg.kind === 'transit') addTrip(leg.tripInstanceRef, schedule.shards.map(item => item.shard), leg.boardSequence, leg.alightSequence,
         { start: Date.parse(leg.departureTime) / 1000, end: Date.parse(leg.arrivalTime) / 1000 });
@@ -170,19 +174,25 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       const parent = parents.get(`${scope.feedId}\u0000${id}`);
       if (parent) scope.stopIds.add(parent);
     }
-    const inFeed = !!args.coverage || !!feed && feeds.has(feed.feedId);
+    const partFeeds = (part: typeof feed.parts[number]) => part.feedIds ?? [part.feedId];
+    const relevant = feed.parts.filter(part => args.coverage || partFeeds(part).some(id => feeds.has(id)));
+    relevant.forEach(part => part.reasons.forEach(reason => resultReasons.add(reason)));
     // Older persisted snapshots lack selector groups; never reconstruct their
     // conjunctions from lossy arrays or advertise a false empty service state.
-    const usable = inFeed && feed?.payload !== null && feed?.payload !== undefined && feed.payload.every(alert => Array.isArray(alert.selectors));
+    const usableParts = relevant.filter(part => part.payload !== null && part.payload !== undefined && part.payload.every(alert => Array.isArray(alert.selectors)));
+    const usable = usableParts.length > 0;
     const active = (alert: NormalizedAlert, start: number, end: number) => !alert.activePeriods?.length || alert.activePeriods.some(period => (period.start ?? -Infinity) < end && (period.end ?? Infinity) > start);
     let alerts: { id: string; agencyText: { title: string; description: string; label: 'agency_supplied' }; selectors: NormalizedAlert['selectors']; routeIds: string[]; stopIds: string[]; stale: boolean; activePeriods: { start: string | null; end: string | null }[] }[];
-    try { alerts = (usable ? feed.payload! : []).flatMap(alert => {
+    try { alerts = usableParts.flatMap(part => part.payload!.flatMap(alert => {
       if (!safeAlertIdentifier(alert.id) || alert.selectors.some(selector => !safeAlertSelector(selector)) || (alert.activePeriods?.length ?? 0) > 32) return [];
       const inWindow = (scope: typeof scopes[number]) => active(alert, scope.window?.start ?? nowSeconds, scope.window?.end ?? nowSeconds + 86400);
       if (args.coverage ? !active(alert, nowSeconds, nowSeconds + 86400) : !scopes.some(inWindow)) return [];
       const selectors = alert.selectors.filter(selector => {
-        const resolved = resolveAlertSelector(selector, { manifest: data.manifest, version: data.version, shards: canonicalShards, feedId: feed!.feedId });
-        return resolved && (args.coverage || scopes.some(scope => scope.feedId === feed!.feedId && inWindow(scope) && matchesAlertSelector(resolved, scope)));
+        // A source describing several timetables (Bus Time) resolves a selector in each.
+        return partFeeds(part).some(feedId => {
+          const resolved = resolveAlertSelector(selector, { manifest: data.manifest, version: data.version, shards: canonicalShards, feedId });
+          return resolved && (args.coverage || scopes.some(scope => scope.feedId === feedId && inWindow(scope) && matchesAlertSelector(resolved, scope)));
+        });
       });
       if (alert.selectors.length && !selectors.length) return [];
       // NYCT alerts name every affected platform; report exact counts and a bounded sample.
@@ -190,9 +200,9 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       return [{ id: alert.id, agencyText: { title: sanitizeTransitText(alert.header), description: sanitizeTransitText(alert.description), label: 'agency_supplied' as const },
         selectors: selectors.slice(0, ALERT_DETAIL_LIMIT), selectorCount: selectors.length,
         routeIds: [...new Set(selectors.flatMap(selector => selector.routeId === undefined ? [] : [selector.routeId]))],
-        stopIds: stopIds.slice(0, ALERT_DETAIL_LIMIT), stopCount: stopIds.length, stale: feed?.freshness !== 'fresh',
+        stopIds: stopIds.slice(0, ALERT_DETAIL_LIMIT), stopCount: stopIds.length, stale: part.freshness !== 'fresh',
         activePeriods: (alert.activePeriods ?? []).map(period => ({ start: period.start === undefined ? null : new Date(period.start * 1000).toISOString(), end: period.end === undefined ? null : new Date(period.end * 1000).toISOString() })) }];
-    }); } catch (error) { if (error instanceof AlertScopeLimitError) return scopeUnavailable(); throw error; }
+    })); } catch (error) { if (error instanceof AlertScopeLimitError) return scopeUnavailable(); throw error; }
     // Stations in scope: a station covers its complex; routes, trips and itineraries their stops' stations.
     const stopIndex = new Map(data.indexes.flatMap(index => index.stops).map(stop => [stop.ref as string, stop]));
     let stations: Set<string> | 'all' = 'all';

@@ -1,0 +1,6 @@
+{
+  "coverageId": "dc",
+  "warnings": [
+    { "code": "service_has_no_active_day_of_the_week", "reason": "Metrobus defines holiday and special services with every weekday flag 0 and dates only in calendar_dates.txt, which the compiler reads.", "expires": "2026-12-31" }
+  ]
+}

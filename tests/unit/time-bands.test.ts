@@ -61,8 +61,28 @@ describe('time-banded schedule shards', () => {
 
   it('refuses inputs a band boundary could silently cut', async () => {
     await expect(partitionSchedule(await compile({ 'frequencies.txt': 'trip_id,start_time,end_time,headway_secs\nmorning,08:50:00,10:00:00,600\n' }), 3 * 3600)).rejects.toThrow(/frequency/);
-    await expect(partitionSchedule(await compile({ 'trips.txt': 'route_id,service_id,trip_id,block_id\n1,Weekday,early,b1\n1,Weekday,morning,b1\n1,Weekday,overnight,\n1,Weekend,weekend,\n' }), 3 * 3600)).rejects.toThrow(/block/);
-    await expect(partitionSchedule(await compile({ 'transfers.txt': 'from_stop_id,to_stop_id,from_trip_id,to_trip_id,transfer_type\nB,B,early,morning,1\n' }), 3 * 3600)).rejects.toThrow(/trip-specific/);
+    // Staying in your seat from one trip to another cannot be split across bands.
+    await expect(partitionSchedule(await compile({ 'transfers.txt': 'from_stop_id,to_stop_id,from_trip_id,to_trip_id,transfer_type\nB,B,early,morning,4\n' }), 3 * 3600)).rejects.toThrow(/trip-specific/);
+  });
+
+  it('keeps blocks on trips, publishes no block table, and compiles no timed trip transfer', async () => {
+    const { shards } = await partitionSchedule(await compile({ 'trips.txt': 'route_id,service_id,trip_id,block_id\n1,Weekday,early,b1\n1,Weekday,morning,b1\n1,Weekday,overnight,\n1,Weekend,weekend,\n' }), 3 * 3600);
+    expect(shards.every(shard => Object.keys(shard.blocks).length === 0)).toBe(true);
+    expect([...new Set(shards.flatMap(shard => shard.trips).filter(trip => trip.blockId === 'b1').map(trip => trip.providerId))].sort()).toEqual(['early', 'morning']);
+    for (const shard of shards) expect(decodeScheduleShard(encodeScheduleShard(shard)).trips.length).toBe(shard.trips.length);
+    // A timed transfer only promises a hold; the stop's own rule applies instead.
+    const timed = await compile({ 'transfers.txt': 'from_stop_id,to_stop_id,from_trip_id,to_trip_id,transfer_type,min_transfer_time\nB,B,early,morning,1,\nB,B,,,2,120\n' });
+    expect(timed.shard.transfers).toEqual([expect.objectContaining({ transferType: 2, minTransferSeconds: 120 })]);
+    await expect(partitionSchedule(timed, 3 * 3600)).resolves.toBeDefined();
+  });
+
+  it('carries only the stops a band serves, with their stations', async () => {
+    const { shards } = await partitionSchedule(await compile(), 3 * 3600);
+    for (const shard of shards) {
+      const served = new Set(shard.trips.flatMap(trip => trip.stopTimes.map(call => call.stopRef)));
+      for (const stop of shard.stops) expect(served.has(stop.ref) || shard.stops.some(child => child.parentStationRef === stop.ref)).toBe(true);
+      for (const ref of served) expect(shard.stops.some(stop => stop.ref === ref)).toBe(true);
+    }
   });
 
   it('rejects a band holding a trip outside its declared range', async () => {

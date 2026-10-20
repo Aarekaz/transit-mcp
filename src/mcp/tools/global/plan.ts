@@ -2,7 +2,8 @@ import { CLIENT_CAPABILITIES_META_KEY, ProtocolError, ProtocolErrorCode, accepte
 import { z } from 'zod';
 import type { MetroMcpContext, TransitRequestState } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
-import { getCoverage } from '../../../transit/core/coverage';
+import { getCoverage, planningFeedIds } from '../../../transit/core/coverage';
+import { parseTransitRef } from '../../../transit/core/refs';
 import { planJourney } from '../../../transit/planner/plan';
 import type { JourneyEndpoint } from '../../../transit/planner/types';
 import type { TransitRef } from '../../../transit/core/refs';
@@ -92,7 +93,9 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       return inputRequired({ inputRequests: { endpoints: inputRequired.elicit({ message: 'Choose the transit endpoints for this journey.', requestedSchema: z.object(shape) }) },
         requestState: await codec.mint({ phase: 'transit-selection', tool: 'plan_trip', requestHash, artifactVersion: data.version.artifactVersion, candidates: choices }, handler) });
     }
-    const now = new Date().toISOString(), feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', Date.parse(now) / 1000, handler.mcpReq.signal);
+    // Only the published feeds a journey can ride: a bus feed's state says nothing about a rail plan.
+    const planning = planningFeedIds(data.coverage).filter(feedId => data.version.sourceVersions[feedId] !== undefined);
+    const now = new Date().toISOString(), feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', Date.parse(now) / 1000, handler.mcpReq.signal, [], planning);
     // Step-free: board, alight and change only where access is step-free now. Without a
     // current equipment report, or with an endpoint cut off, refuse rather than guess.
     let stepFree: { usableStopRefs: ReadonlySet<TransitRef> } | undefined, accessSources: SourceStatus[] = [];
@@ -110,9 +113,17 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     if (feed.payload?.some(update => ['DUPLICATED', 'REPLACEMENT'].includes(update.scheduleRelationship ?? ''))) {
       return complete({ ...unavailable(coverageId, data, ['REALTIME_UNAVAILABLE']), sources: [...metadata(coverageId, data).sources, ...realtimeSource(data, feed, 'trip_updates', Date.parse(now) / 1000)], itineraries: [] });
     }
+    // A stop in a feed the planner does not search (Metrobus) is planned from its location:
+    // the journey walks from there to a stop it can use.
+    for (const endpoint of ['origin', 'destination'] as const) {
+      const value = resolved[endpoint], parsed = typeof value === 'string' ? parseTransitRef(value) : null;
+      if (!parsed || planning.includes(parsed.feed)) continue;
+      const stop = data.indexes.find(index => index.feedId === parsed.feed)?.stops.find(item => item.ref === value);
+      if (stop?.latitude != null && stop.longitude != null) resolved[endpoint] = { latitude: stop.latitude, longitude: stop.longitude };
+    }
     // One decode per shard: the planner fills this, and leg details read trips from it.
     const decoded = new DecodedShardCache(Number.MAX_SAFE_INTEGER);
-    const planned = planJourney({ manifest: data.manifest, readShard: data.readObject, decoded, origin: resolved.origin!, destination: resolved.destination!, departAt: args.departAt ?? now, now,
+    const planned = planJourney({ manifest: data.manifest, feedIds: planning, readShard: data.readObject, decoded, origin: resolved.origin!, destination: resolved.destination!, departAt: args.departAt ?? now, now,
       windowSeconds: args.windowSeconds, maxWalkMetres: args.maxWalkMetres, maxTransfers: args.maxTransfers, realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds,
       // Journeys come only from schedule data; observed-only rows cannot form legs.
       realtime: feed.payload !== null && feed.version && feed.receivedAtSeconds !== undefined ? { ...feed, payload: scheduledRealtimeRows(feed.payload), version: feed.version, receivedAtSeconds: feed.receivedAtSeconds } : undefined,

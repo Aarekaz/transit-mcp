@@ -145,9 +145,12 @@ export class RealtimeSnapshotStore {
   /** The last complete payload per kind, kept by the coordinator that published or read it.
    * A read whose metadata names the same shards serves it without R2, hashing or parsing. */
   readonly #latest = new Map<RealtimeFeedKind, { identity: string; etag: string; payload: unknown[] }>();
-
-  constructor(private readonly storage: DurableObjectStorage, private readonly bucket: R2Bucket, private readonly coverageId = 'sfbay') {
-    if (!/^[a-z0-9_]+$/.test(coverageId)) throw new Error('Invalid coverage namespace');
+  private readonly prefix: string;
+  /** `feedId` scopes a coverage's non-primary feeds: every coordinator collects only the
+   * objects it wrote. The primary feed keeps the coverage-level prefix. */
+  constructor(private readonly storage: DurableObjectStorage, private readonly bucket: R2Bucket, coverageId = 'sfbay', feedId?: string) {
+    if (!/^[a-z0-9_]+$/.test(coverageId) || feedId !== undefined && !/^[a-z0-9_]+$/.test(feedId)) throw new Error('Invalid coverage namespace');
+    this.prefix = feedId === undefined ? `realtime/${coverageId}` : `realtime/${coverageId}/feeds/${feedId}`;
   }
 
   async publish<T>(kind: RealtimeFeedKind, snapshot: NormalizedRealtimeSnapshot<T>): Promise<void> {
@@ -168,7 +171,7 @@ export class RealtimeSnapshotStore {
         if (!batch.length) return;
         const bytes = new TextEncoder().encode(`[${batch.join(',')}]`), hash = await sha256(bytes);
         objects.push({ bytes, descriptor: { partition: part, byteLength: bytes.length, sha256: hash,
-          key: `realtime/${this.coverageId}/${snapshot.version.artifactVersion}/${kind}/${hash}.json` } });
+          key: `${this.prefix}/${snapshot.version.artifactVersion}/${kind}/${hash}.json` } });
         batch = []; size = 2;
       };
       for (const record of records) {

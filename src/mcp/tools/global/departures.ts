@@ -76,7 +76,8 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     }
     const stopIndex = data.indexes.flatMap(index => index.stops);
     const relevantProviderIds = stopIndex.filter(stop => relevantStops.has(stop.ref)).map(stop => stop.providerId);
-    const feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', nowSeconds, handler.mcpReq.signal, relevantProviderIds);
+    // Provider stop IDs repeat across feeds (LIRR 101 is not subway 101): read this stop's feed only.
+    const feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', nowSeconds, handler.mcpReq.signal, relevantProviderIds, [stop.feed]);
     const meta = metadata(stop.coverage, data, now);
     const sources = [...meta.sources, ...realtimeSource(data, feed, 'trip_updates', nowSeconds)];
     // Duplicated and replacement service rewrite canonical calls in ways this board
@@ -90,7 +91,7 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
       const update = fresh ? feed.payload?.find(update => update.tripInstanceRef === departure.tripInstanceRef && update.stopSequence === departure.stopSequence && update.stopId === parseTransitRef(departure.stopRef)!.id) : undefined;
       if (update?.status === 'canceled' || update?.status === 'skipped') return [];
       const prediction = update?.status === 'realtime' ? update.departureTimeSeconds ?? update.arrivalTimeSeconds : undefined;
-      return [{ ...departure, predictedTime: prediction === undefined ? null : new Date(prediction * 1000).toISOString(), platform: null,
+      return [{ ...departure, predictedTime: prediction === undefined ? null : new Date(prediction * 1000).toISOString(), platform: update?.track ?? null,
         status: prediction === undefined ? 'scheduled_only' as const : 'realtime' as const, scheduleMatch: 'matched' as const }];
     });
     const routesByProvider = new Map(data.indexes.find(index => index.feedId === stop.feed)?.routes.map(route => [route.providerId, route]) ?? []);
@@ -109,7 +110,7 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
       if (args.routeRefs && !args.routeRefs.includes(route.ref) || args.agencyRefs && !args.agencyRefs.includes(route.agencyRef)) continue;
       departures.push({ tripRef: formatEntityRef(instance), tripInstanceRef: update.tripInstanceRef, serviceDate: instance.serviceDate, routeRef: route.ref, agencyRef: route.agencyRef,
         stopRef: at.ref, stopSequence: null, headsign: stationName(update.destinationStopId), directionId: null, pickupType: 0,
-        scheduledTime: null, predictedTime: new Date(predicted * 1000).toISOString(), platform: null, status: 'realtime', scheduleMatch: update.scheduleMatch,
+        scheduledTime: null, predictedTime: new Date(predicted * 1000).toISOString(), platform: update.track ?? null, status: 'realtime', scheduleMatch: update.scheduleMatch,
         feedId: instance.feed, scheduleVersion: data.version.sourceVersions[instance.feed]!, agencyTimezone: data.manifest.agencyTimezones[route.agencyRef]! });
     }
     for (const update of fresh ? feed.payload ?? [] : []) {
@@ -123,7 +124,7 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
       if (!trip || !call || !route || predicted === undefined || scheduled === undefined || args.routeRefs && !args.routeRefs.includes(route.ref) || args.agencyRefs && !args.agencyRefs.includes(route.agencyRef)) continue;
       departures.push({ tripRef, tripInstanceRef: update.tripInstanceRef, serviceDate: instance.serviceDate, routeRef: route.ref, agencyRef: route.agencyRef,
         stopRef: call.stopRef, stopSequence: call.sequence, headsign: call.headsign || trip.headsign, directionId: trip.directionId, pickupType: call.pickupType,
-        scheduledTime: new Date(scheduled * 1000).toISOString(), predictedTime: new Date(predicted * 1000).toISOString(), platform: null, status: 'realtime', scheduleMatch: 'matched',
+        scheduledTime: new Date(scheduled * 1000).toISOString(), predictedTime: new Date(predicted * 1000).toISOString(), platform: update.track ?? null, status: 'realtime', scheduleMatch: 'matched',
         feedId: instance.feed, scheduleVersion: data.version.sourceVersions[instance.feed]!, agencyTimezone: data.manifest.agencyTimezones[route.agencyRef]! });
     }
     const start = Date.parse(args.at ?? now), end = start + args.windowSeconds * 1000, direction = args.selection === 'last' ? -1 : 1;

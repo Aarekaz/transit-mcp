@@ -39,7 +39,9 @@ export interface CoverageManifest {
   aliases: readonly string[];
   /** Reviewed public place names only. Never client-specific home/work meanings. */
   placeAliases?: readonly { aliases: readonly string[]; stopNames: readonly string[] }[];
-  feeds: readonly { id: string; realtime: readonly RealtimeFeedSpec[] }[];
+  /** `planning: false` keeps a feed out of journey planning while it still serves departures,
+   * vehicles and alerts: the planner cannot search it within an isolate's memory. */
+  feeds: readonly { id: string; realtime: readonly RealtimeFeedSpec[]; planning?: false }[];
   agencyTimezones: Readonly<Record<string, string>>;
   supportedModes: readonly TransitMode[];
   bounds?: readonly [west: number, south: number, east: number, north: number];
@@ -57,6 +59,11 @@ export interface CoverageManifest {
 }
 
 const coverages: readonly CoverageManifest[] = [SFBAY_COVERAGE, DC_COVERAGE, NYC_COVERAGE];
+
+/** Feeds a journey may use. */
+export function planningFeedIds(coverage: CoverageManifest): string[] {
+  return coverage.feeds.filter(feed => feed.planning !== false).map(feed => feed.id);
+}
 
 export function getCoverages(): readonly CoverageManifest[] { return coverages; }
 

@@ -13,6 +13,10 @@ export interface TripMatchContext {
   /** Provider identity rule; defaults to exact trip IDs. */
   tripMatching?: RealtimeSourcePolicy['tripMatching'];
   minimumScheduleMatchRate?: number;
+  /** Epoch seconds the loaded timetable reaches. A trip scheduled to start later is out of
+   * scope for this poll (providers publish predictions hours ahead): neither matched nor
+   * judged, and counted as `beyondWindow`. */
+  horizonEndSeconds?: number;
 }
 /** Below this many eligible trips a match rate is not evidence about the schedule. */
 export const MIN_ELIGIBLE_FOR_MATCH_RATE = 20;
@@ -31,7 +35,7 @@ export interface AppliedTripUpdates {
   version: StaticVersion; trips: NormalizedTripUpdate[]; stopUpdates: NormalizedStopUpdate[];
   match: { eligible: number; matched: number; rate: number };
   /** Trips proven to serve no rider; never part of the match rate. */
-  excluded: { nonRevenue: number; invalidExtras: number; unrepresentableAdded: number }; degraded: boolean; warnings: string[];
+  excluded: { nonRevenue: number; invalidExtras: number; unrepresentableAdded: number; beyondWindow: number }; degraded: boolean; warnings: string[];
 }
 function timeString(seconds: number): string {
   return `${String(Math.floor(seconds / 3600)).padStart(2, '0')}:${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
@@ -117,11 +121,13 @@ export function matchVehicles(vehicles: NormalizedVehicle[], context: TripMatchC
  * (`040200_7..S97R`). Some lines (7, L, SIR and parts of F and G) publish only the short form. */
 const NYCT_SHORT_TRIP = /^\d{6}_[^.]+\.\.[NS]/;
 const SHORT_PREFIX = 'short:';
+const TRAIN_PREFIX = 'train:';
 
 function tripIndex(context: TripMatchContext): Map<string, { shard: ScheduleShard; trip: ScheduleTrip }[]> {
   const index = new Map<string, { shard: ScheduleShard; trip: ScheduleTrip }[]>();
   const add = (key: string, entry: { shard: ScheduleShard; trip: ScheduleTrip }) => { const entries = index.get(key) ?? []; entries.push(entry); index.set(key, entries); };
   for (const shard of context.shards) for (const trip of shard.trips) {
+    if (context.tripMatching === 'train_number') { if (trip.shortName) add(`${TRAIN_PREFIX}${trip.shortName}`, { shard, trip }); continue; }
     const key = realtimeTripKey(trip.providerId, context.tripMatching);
     add(key, { shard, trip });
     const short = context.tripMatching === 'nyct_suffix' ? NYCT_SHORT_TRIP.exec(key)?.[0] : undefined;
@@ -133,6 +139,7 @@ function tripIndex(context: TripMatchContext): Map<string, { shard: ScheduleShar
 function matchIndexedTrip(update: NormalizedTripUpdate, context: TripMatchContext, index: ReturnType<typeof tripIndex>): MatchedTripInstance | null {
   if (!update.tripId || !update.startDate || update.scheduleRelationship === 'UNKNOWN') return null;
   try { parseServiceDate(update.startDate); } catch { return null; }
+  if (context.tripMatching === 'train_number') return trainNumberMatch(update, context, index);
   const exact = tripCandidates(update, update.tripId, update.startDate, context, index);
   if (exact.length || context.tripMatching !== 'nyct_suffix') return exact.length === 1 ? exact[0]! : null;
   // A short NYCT ID names the one scheduled trip it prefixes; several is ambiguous, not a match.
@@ -146,6 +153,22 @@ function matchIndexedTrip(update: NormalizedTripUpdate, context: TripMatchContex
   if (!previous) return null;
   const day = shiftServiceDate(update.startDate, -1), shifted = tripCandidates(update, previous, day, context, index);
   const candidates = shifted.length ? shifted : short(previous, day);
+  return candidates.length === 1 ? candidates[0]! : null;
+}
+
+/** Metro-North names a train by its number (the entity ID) and dates it by the civil date
+ * and time it leaves: train 1299 at 00:05 on the 20th is service day 19 at 24:05, and the
+ * same number runs again the next night. The one scheduled trip of that number whose
+ * origin is that civil time, on the start date or the service day before, is the match. */
+function trainNumberMatch(update: NormalizedTripUpdate, context: TripMatchContext, index: ReturnType<typeof tripIndex>): MatchedTripInstance | null {
+  if (!update.startTime || !/^[A-Za-z0-9]{1,8}$/.test(update.entityId)) return null;
+  let start: number;
+  try { start = parseGtfsTime(update.startTime).totalSeconds; } catch { return null; }
+  const key = `${TRAIN_PREFIX}${update.entityId}`;
+  const candidates = [
+    ...tripCandidates(update, key, update.startDate!, context, index),
+    ...tripCandidates({ ...update, startTime: timeString(start + 86_400) }, key, shiftServiceDate(update.startDate!, -1), context, index),
+  ];
   return candidates.length === 1 ? candidates[0]! : null;
 }
 
@@ -221,7 +244,8 @@ function matchedUpdates(update: NormalizedTripUpdate, match: MatchedTripInstance
     const row: NormalizedStopUpdate = { entityId: update.entityId, tripId, routeId: parseTransitRef(trip.routeRef)!.id,
       stopId: parseTransitRef(call.stopRef)!.id, stopSequence: call.sequence, tripInstanceRef, serviceDate,
       scheduleRelationship: update.scheduleRelationship, stopScheduleRelationship: stop?.stopScheduleRelationship ?? 'SCHEDULED',
-      scheduledArrivalTimeSeconds: scheduledArrival, scheduledDepartureTimeSeconds: scheduledDeparture, status: 'scheduled_only' };
+      scheduledArrivalTimeSeconds: scheduledArrival, scheduledDepartureTimeSeconds: scheduledDeparture, status: 'scheduled_only',
+      ...(stop?.track ? { track: stop.track } : {}) };
     if (update.scheduleRelationship === 'CANCELED') { row.status = 'canceled'; result.push(row); continue; }
     if (stop?.stopScheduleRelationship === 'SKIPPED') { row.status = 'skipped'; result.push(row); continue; }
     if (stop?.stopScheduleRelationship === 'NO_DATA') { delay = undefined; result.push(row); continue; }
@@ -368,7 +392,12 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
     if (descriptors[0]!.byteLength !== proven.byteLength || descriptors[0]!.sha256 !== proven.sha256) throw new Error('Realtime discovery integrity or identity failure');
     staticIds.set(discovery.feedId, new Set(discovery.tripProviderIds));
   }
-  const stopUpdates: NormalizedStopUpdate[] = []; let eligible = 0, matched = 0, invalidExtras = 0, nonRevenue = 0, unrepresentableAdded = 0;
+  const stopUpdates: NormalizedStopUpdate[] = []; let eligible = 0, matched = 0, invalidExtras = 0, nonRevenue = 0, unrepresentableAdded = 0, beyondWindow = 0;
+  const timezone = Object.entries(context.manifest.agencyTimezones).find(([ref]) => !context.feedId || parseTransitRef(ref)?.feed === context.feedId)?.[1];
+  const startsAfterHorizon = (update: NormalizedTripUpdate) => {
+    if (context.horizonEndSeconds === undefined || !timezone || !update.startDate || !update.startTime) return false;
+    try { return serviceDayOrigin(update.startDate, timezone) / 1000 + parseGtfsTime(update.startTime).totalSeconds > context.horizonEndSeconds; } catch { return false; }
+  };
   const index = tripIndex(context);
   const shardsInFeed = context.shards.filter(shard => !context.feedId || shard.feedId === context.feedId);
   const routeIds = new Set(shardsInFeed.flatMap(shard => shard.routes.map(route => route.providerId)));
@@ -378,6 +407,7 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
     // A move on a route the schedule does not publish, skipping every stop it lists,
     // serves no rider (e.g. WMATA non-revenue "NR" moves); it is not a match failure.
     if (update.routeId && !routeIds.has(update.routeId) && update.stops.every(stop => stop.stopScheduleRelationship === 'SKIPPED')) { nonRevenue++; continue; }
+    if (startsAfterHorizon(update)) { beyondWindow++; continue; }
     if (update.scheduleRelationship === 'ADDED' || update.scheduleRelationship === 'REPLACEMENT') {
       if (update.scheduleRelationship === 'REPLACEMENT') {
         const original = matchIndexedTrip(update, context, index);
@@ -419,6 +449,6 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
   const threshold = context.minimumScheduleMatchRate ?? SFBAY_COVERAGE.thresholds.minimumScheduleMatchRate;
   const mismatched = eligible >= MIN_ELIGIBLE_FOR_MATCH_RATE ? rate < threshold : eligible > 0 && matched === 0;
   const degraded = invalidExtras > 0 || mismatched;
-  return { version: context.version, trips: feed.trips, stopUpdates, match: { eligible, matched, rate }, excluded: { nonRevenue, invalidExtras, unrepresentableAdded }, degraded,
+  return { version: context.version, trips: feed.trips, stopUpdates, match: { eligible, matched, rate }, excluded: { nonRevenue, invalidExtras, unrepresentableAdded, beyondWindow }, degraded,
     warnings: [...feed.warnings, ...(degraded ? ['SCHEDULE_REALTIME_MISMATCH'] : [])] };
 }

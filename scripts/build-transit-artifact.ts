@@ -1,7 +1,8 @@
 import { join } from 'node:path';
-import { mkdir, rename } from 'node:fs/promises';
+import { mkdir, readdir, rename, stat } from 'node:fs/promises';
 import { compileSchedule } from '../src/transit/gtfs/static/compiler';
 import { partitionSchedule } from '../src/transit/gtfs/static/partition';
+import { composeManifest } from '../src/transit/gtfs/static/compose';
 import { validateMobilityDataReport, validateMobilityDataSystemErrors } from '../src/transit/gtfs/static/artifact';
 import { canonicalJson, sha256 } from '../src/transit/gtfs/static/shards';
 import type { GtfsScheduleFiles } from '../src/transit/gtfs/static/schema';
@@ -9,7 +10,9 @@ import { getCoverage } from '../src/transit/core/coverage';
 
 /** Offline: compiles one already-downloaded, already-validated official GTFS archive
  * into immutable, content-addressed v2 objects. It never fetches, uploads, or reads
- * credentials. Usage: bun scripts/build-transit-artifact.ts <output-directory> */
+ * credentials. Usage: bun scripts/build-transit-artifact.ts <output-directory>
+ * A coverage with several feeds is built one feed at a time: TRANSIT_MERGE_INTO names a
+ * previous build of the same coverage whose other feeds are kept as they are. */
 const required = (name: string) => {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
@@ -39,7 +42,9 @@ const entries = await Promise.all([...mandatory, ...optional].map(async name => 
 }));
 const files = Object.fromEntries(entries.filter(entry => entry !== null)) as GtfsScheduleFiles;
 const reportJson = await Bun.file(reportPath).text();
-const allowlist = await Bun.file(join(import.meta.dir, '..', 'data', `${coverage.id}-validator-allowlist.json`)).json();
+// A coverage's first feed uses `<coverage>-validator-allowlist.json`; others name their feed.
+const feedAllowlist = Bun.file(join(import.meta.dir, '..', 'data', `${coverage.id}-${feedId}-validator-allowlist.json`));
+const allowlist = await (await feedAllowlist.exists() ? feedAllowlist : Bun.file(join(import.meta.dir, '..', 'data', `${coverage.id}-validator-allowlist.json`))).json();
 const validator = await validateMobilityDataReport(reportJson, allowlist, coverage.id, new Date().toISOString().slice(0, 10));
 const systemErrors = await validateMobilityDataSystemErrors(await Bun.file(systemErrorsPath).text());
 const compiled = await compileSchedule({ coverage, feedId, files, window,
@@ -65,17 +70,26 @@ const report = JSON.parse(reportJson);
 if (report.sourceSha256 !== undefined && report.sourceSha256 !== compiled.manifest.sources[0]!.sha256) throw new Error('Validator report input does not match this source');
 const partitioned = await partitionSchedule(compiled, bandSeconds);
 partitioned.manifest.validator = { ...validator, ...systemErrors };
-const manifestBytes = new TextEncoder().encode(`${canonicalJson(partitioned.manifest)}\n`);
+const mergeInto = process.env.TRANSIT_MERGE_INTO;
+const base = mergeInto ? await Bun.file(join(mergeInto, 'manifest.json')).json() : null;
+const manifest = composeManifest(base, partitioned.manifest);
+// Carry the other feeds' immutable objects; their keys are content-addressed.
+const walk = async (path: string): Promise<string[]> => (await stat(path)).isDirectory()
+  ? (await Promise.all((await readdir(path)).map(name => walk(join(path, name))))).flat() : [path];
+const kept = new Set([...manifest.shards, ...manifest.discoveries].map(object => object.key));
+const carried = mergeInto ? (await walk(join(mergeInto, 'artifacts'))).map(path => path.slice(mergeInto.length + 1)).filter(key => kept.has(key)) : [];
+const manifestBytes = new TextEncoder().encode(`${canonicalJson(manifest)}\n`);
 const artifactVersion = await sha256(manifestBytes);
 const manifestKey = `artifacts/${coverage.id}/v2/manifests/${artifactVersion}.json`;
 // All validation completes before writing anything. Objects are immutable; the local
 // manifest pointer is written last, atomically.
+for (const key of carried) await Bun.write(join(outputDirectory, key), Bun.file(join(mergeInto!, key)));
 for (const { key, bytes } of [...partitioned.objects, { key: manifestKey, bytes: manifestBytes }]) await Bun.write(join(outputDirectory, key), bytes);
 await mkdir(outputDirectory, { recursive: true });
 const pending = join(outputDirectory, `.manifest-${crypto.randomUUID()}.tmp`);
 await Bun.write(pending, manifestBytes);
 await rename(pending, join(outputDirectory, 'manifest.json'));
 const largest = Math.max(...partitioned.manifest.shards.map(shard => shard.byteLength));
-console.info(JSON.stringify({ outputDirectory, coverage: coverage.id, artifactVersion, manifestKey, objects: partitioned.objects.length + 1,
+console.info(JSON.stringify({ outputDirectory, coverage: coverage.id, feedId, feeds: manifest.sources.map(source => source.feedId), artifactVersion, manifestKey, objects: partitioned.objects.length + carried.length + 1,
   shards: partitioned.manifest.shards.length, largestShardBytes: largest, stops: compiled.discovery.stops.length, routes: compiled.discovery.routes.length,
   trips: compiled.shard.trips.length, sourceSha256: compiled.shard.source.sha256, archiveSha256, validator: partitioned.manifest.validator }));

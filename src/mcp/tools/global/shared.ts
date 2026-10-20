@@ -7,7 +7,7 @@ import { getCoverageMode } from '../../../regions/manifest';
 import { formatEntityRef, parseTransitRef, type TransitRef } from '../../../transit/core/refs';
 import { VERIFICATION_REASONS, type SourceStatus, type VerificationReason } from '../../../transit/core/results';
 import { StaticArtifactStore, readBoundedObject, sameStaticVersion, type StaticVersion } from '../../../transit/gtfs/realtime/snapshot-store';
-import { credential, getRealtimeSource, publishedKinds } from '../../../transit/gtfs/realtime/sources';
+import { credential, getRealtimeSources, publishedKinds, sourceFeedIds, type RealtimeSource } from '../../../transit/gtfs/realtime/sources';
 import type { CoverageCapability } from '../../../transit/core/coverage';
 import { decodeDiscoveryIndex, decodeScheduleShard, sha256 } from '../../../transit/gtfs/static/shards';
 import type { ArtifactManifestV2, DiscoveryIndex, ScheduleStop } from '../../../transit/gtfs/static/schema';
@@ -249,12 +249,13 @@ export function routeName(route: { shortName: string; longName: string }): strin
   const initial = route.shortName.length === 1 && route.longName.toUpperCase().startsWith(route.shortName.toUpperCase());
   return sanitizeTransitText(!route.shortName || initial ? route.longName || route.shortName : route.shortName, 120);
 }
-/** The other stations in a station's complex (Times Sq-42 St is published as four). */
+/** The other stations in a station's complex (Times Sq-42 St is published as four), all in
+ * the station's own feed: a departure board reads one feed's predictions. */
 export function complexStations(data: TransitData, stationRef: string): string[] {
-  const station = stopsByRef(data).get(stationRef);
+  const station = stopsByRef(data).get(stationRef), feed = parseTransitRef(stationRef)?.feed;
   if (station?.locationType !== 1) return [];
   const name = normalizeEntityName(station.name);
-  const sameName = data.indexes.flatMap(index => index.stops).filter(stop => stop.locationType === 1 && normalizeEntityName(stop.name) === name).map(stop => stop.ref as string);
+  const sameName = (data.indexes.find(index => index.feedId === feed)?.stops ?? []).filter(stop => stop.locationType === 1 && normalizeEntityName(stop.name) === name).map(stop => stop.ref as string);
   const complex = stationComplexes(data, sameName), place = complex.get(stationRef);
   return sameName.filter(ref => ref !== stationRef && complex.get(ref) === place).sort();
 }
@@ -307,26 +308,30 @@ export async function detail(data: TransitData, ref: string) {
 /** Source support narrowed to what this deployment can serve now: realtime kinds need
  * a bound coordinator, any required credential, and an ingested feed of that kind. */
 export function effectiveCapabilities(context: MetroMcpContext, coverage: CoverageManifest, requireCredential = true): CoverageCapability {
-  const source = getRealtimeSource(coverage.id);
-  const ingests = (kind: RealtimeFeedKind) => !!source && !!context.env.REGION_FEED_HUB && (!requireCredential || credential(source, context.env) !== null) &&
-    publishedKinds(source).has(kind);
+  const sources = getRealtimeSources(coverage.id);
+  const ingests = (kind: RealtimeFeedKind) => !!context.env.REGION_FEED_HUB && sources.some(source =>
+    (!requireCredential || credential(source, context.env) !== null) && publishedKinds(source).has(kind));
   return { ...coverage.capabilities,
     realtimeDepartures: coverage.capabilities.realtimeDepartures && ingests('trip_updates'),
     alerts: coverage.capabilities.alerts && ingests('service_alerts'),
     vehicles: coverage.capabilities.vehicles && ingests('vehicle_positions'),
     accessibility: coverage.capabilities.accessibility && ingests('equipment_outages') };
 }
-/** Each coverage's coordinator owns exactly one static feed's realtime. */
-export type OwnedFeedRead<T> = FeedRead<T> & { feedId: string; reasons: VerificationReason[] };
+/** One coordinator owns each static feed's realtime; a coverage reads all of them. */
+export type OwnedFeedRead<T> = FeedRead<T> & { feedId: string; reasons: VerificationReason[]; /** Every feed this source describes. */ feedIds?: readonly string[] };
+/** A coverage's realtime across its feeds. `payload` holds the usable feeds' rows (null when
+ * none is usable) and `reasons` every feed's reasons; `parts` keeps each feed's own read
+ * for sources and feed-scoped matching. */
+export type CoverageFeedRead<T> = OwnedFeedRead<T> & { parts: OwnedFeedRead<T>[] };
 /** Complete payloads this isolate already holds, by coordinator and kind. The coordinator
  * confirms the tag on every read, so freshness metadata is never served from cache. */
 const heldPayloads = new Map<string, { etag: string; payload: unknown[] }>();
-export async function readFeed<T>(context: MetroMcpContext, data: TransitData, kind: RealtimeFeedKind, now: number, signal: AbortSignal, stopIds: string[] = []): Promise<OwnedFeedRead<T[]>> {
-  const source = getRealtimeSource(data.coverage.id);
-  const feedId = source?.policy.feedId ?? data.manifest.sources[0]?.feedId ?? '';
-  const missing = (): OwnedFeedRead<T[]> => ({ feedId, freshness: 'unavailable', status: kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: null, warnings: [], reasons: ['REALTIME_UNAVAILABLE'] });
-  const capability = kind === 'trip_updates' ? 'realtimeDepartures' : kind === 'vehicle_positions' ? 'vehicles' : kind === 'equipment_outages' ? 'accessibility' : 'alerts';
-  if (!source || !context.env.REGION_FEED_HUB || !effectiveCapabilities(context, data.coverage, false)[capability]) return missing();
+async function readOwnedFeed<T>(context: MetroMcpContext, data: TransitData, source: RealtimeSource, kind: RealtimeFeedKind, now: number, signal: AbortSignal, stopIds: string[]): Promise<OwnedFeedRead<T[]>> {
+  const feedId = source.policy.feedId, feedIds = sourceFeedIds(source.policy);
+  const missing = (): OwnedFeedRead<T[]> => ({ feedId, feedIds, freshness: 'unavailable', status: kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: null, warnings: [], reasons: ['REALTIME_UNAVAILABLE'] });
+  // A source whose key is not configured never polls (NYC buses until MTA_BUS_API_KEY is set),
+  // so it has no snapshot and reads as unavailable; an older snapshot ages by its own clock.
+  if (!context.env.REGION_FEED_HUB) return missing();
   // Without a credential the coordinator publishes nothing, so reads degrade by freshness.
   const url = new URL(`https://region-feed-hub.internal/${kind}`);
   url.searchParams.set('now', String(now)); url.searchParams.set('artifact', data.version.artifactVersion);
@@ -352,9 +357,31 @@ export async function readFeed<T>(context: MetroMcpContext, data: TransitData, k
       feed.degraded || !feed.version || freshness === 'expired' || freshness === 'unavailable' || receivedAtSeconds === undefined || receivedAtSeconds < (producerTimestampSeconds ?? Infinity) || !Array.isArray(feed.payload) ? ['REALTIME_UNAVAILABLE'] :
       freshness === 'stale' ? ['REALTIME_STALE'] : [];
     const usable = reasons.length === 0 || (kind === 'service_alerts' || kind === 'equipment_outages') && reasons[0] === 'REALTIME_STALE';
-    return { ...feed, feedId, reasons, warnings: [], producerTimestampSeconds, receivedAtSeconds, freshness,
+    return { ...feed, feedId, feedIds, reasons, warnings: [], producerTimestampSeconds, receivedAtSeconds, freshness,
       status: usable ? 'realtime' : kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: usable ? feed.payload : null };
   } catch (error) { signal.throwIfAborted(); if (error instanceof Error && error.name === 'AbortError') throw error; return missing(); }
+}
+const FRESHNESS_ORDER = ['fresh', 'stale', 'expired', 'unavailable'];
+/** Reads the coverage's feeds (or only `feedIds`) in parallel and combines them; a coverage
+ * with one feed reads exactly as before. */
+export async function readFeed<T>(context: MetroMcpContext, data: TransitData, kind: RealtimeFeedKind, now: number, signal: AbortSignal, stopIds: string[] = [], feedIds?: readonly string[]): Promise<CoverageFeedRead<T[]>> {
+  const capability = kind === 'trip_updates' ? 'realtimeDepartures' : kind === 'vehicle_positions' ? 'vehicles' : kind === 'equipment_outages' ? 'accessibility' : 'alerts';
+  // A feed's realtime counts only once its schedule is part of the published artifact.
+  const sources = effectiveCapabilities(context, data.coverage, false)[capability]
+    ? getRealtimeSources(data.coverage.id).filter(source => (!feedIds || sourceFeedIds(source.policy).some(feed => feedIds.includes(feed))) && publishedKinds(source).has(kind) &&
+      sourceFeedIds(source.policy).some(feed => data.version.sourceVersions[feed] !== undefined)) : [];
+  const parts = await Promise.all(sources.map(source => readOwnedFeed<T>(context, data, source, kind, now, signal, stopIds)));
+  const feedId = feedIds?.length === 1 ? feedIds[0]! : sources[0]?.policy.feedId ?? getRealtimeSources(data.coverage.id)[0]?.policy.feedId ?? data.manifest.sources[0]?.feedId ?? '';
+  if (!parts.length) return { feedId, freshness: 'unavailable', status: kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: null, warnings: [], reasons: ['REALTIME_UNAVAILABLE'], parts: [] };
+  if (parts.length === 1) return { ...parts[0]!, parts };
+  const usable = parts.filter(part => part.payload !== null);
+  const oldest = (key: 'producerTimestampSeconds' | 'receivedAtSeconds') => usable.length && usable.every(part => part[key] !== undefined) ? Math.min(...usable.map(part => part[key]!)) : undefined;
+  return { feedId, parts, version: (usable[0] ?? parts[0]!).version, degraded: usable.some(part => part.degraded),
+    // The combined snapshot is as old as its oldest usable feed.
+    producerTimestampSeconds: oldest('producerTimestampSeconds'), receivedAtSeconds: oldest('receivedAtSeconds'),
+    freshness: usable.length ? usable.map(part => part.freshness).sort((a, b) => FRESHNESS_ORDER.indexOf(a) - FRESHNESS_ORDER.indexOf(b)).at(-1)! : 'unavailable',
+    status: usable.length ? 'realtime' : parts[0]!.status, payload: usable.length ? usable.flatMap(part => part.payload!) : null, warnings: [],
+    reasons: [...new Set(parts.flatMap(part => part.reasons))] };
 }
 /** Platforms a step-free journey may use now, or why none can be claimed: the coverage
  * must publish station accessibility and a current (not stale) equipment report. */
@@ -393,7 +420,8 @@ export async function trainCandidates(context: MetroMcpContext, data: TransitDat
 export function scheduledRealtimeRows<T extends { scheduleMatch?: string }>(rows: T[] | null): T[] | null {
   return rows && rows.filter(row => row.scheduleMatch === undefined || row.scheduleMatch === 'matched');
 }
-export function realtimeSource(_data: TransitData, feed: OwnedFeedRead<unknown>, kind: SourceStatus['kind'], now: number): SourceStatus[] {
+export function realtimeSource(data: TransitData, feed: OwnedFeedRead<unknown> & { parts?: OwnedFeedRead<unknown>[] }, kind: SourceStatus['kind'], now: number): SourceStatus[] {
+  if (feed.parts && feed.parts.length > 1) return feed.parts.flatMap(part => realtimeSource(data, part, kind, now));
   const scheduleVersion = feed.version?.sourceVersions[feed.feedId];
   if (!scheduleVersion || feed.receivedAtSeconds === undefined) return [];
   return [{ feedId: feed.feedId, kind, producerTimestamp: feed.producerTimestampSeconds == null ? null : new Date(feed.producerTimestampSeconds * 1000).toISOString(),
