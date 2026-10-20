@@ -41,7 +41,9 @@ describe('SF Bay synthetic acceptance corpus through global MCP tools', () => {
       'stops.txt': corpus.files['stops.txt'] +
         'syn_airport_a_terminal,SFO International Terminal,37.616,-122.392\n' +
         'syn_airport_second,San Francisco International Airport,37.6158,-122.3921\n' +
-        'syn_airport_office,San Francisco International Airport Maintenance,37.62,-122.39\n',
+        'syn_airport_office,San Francisco International Airport Maintenance,37.62,-122.39\n' +
+        // Carries the alias in its name but lies 35 km away: not the airport.
+        'syn_far_sfo,Far Rd & SFO Shuttle Lot,37.6,-122.0\n',
       'routes.txt': corpus.files['routes.txt'] + 'syn_false_route,syn_muni,,San Francisco International Airport,3\n',
     });
     const env = createMockEnv({ SFBAY_MODE: 'on', TRANSIT_ARTIFACTS: fixture.bucket });

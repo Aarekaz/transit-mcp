@@ -4,24 +4,118 @@
   "reviewedAt": "2026-10-18",
   "review": "Checked against the linked public agency pages. These are discovery names, not a claim of active service, a provider-ID mapping, or a walking route. Exact canonical-name matches retain every candidate; missing names fail closed. Personal home/work meanings remain client-owned.",
   "coverageAliases": [
-    { "name": "SF", "target": "sfbay", "source": "https://511.org/open-data/transit", "basis": "511 SF Bay regional coverage; SF is a discovery shortcut, not a city-only service boundary." },
-    { "name": "San Francisco", "target": "sfbay", "source": "https://511.org/about", "basis": "San Francisco is included in the named Bay Area coverage." },
-    { "name": "Bay Area", "target": "sfbay", "source": "https://511.org/about", "basis": "511 describes the San Francisco Bay Area region." }
+    {
+      "name": "SF",
+      "target": "sfbay",
+      "source": "https://511.org/open-data/transit",
+      "basis": "511 SF Bay regional coverage; SF is a discovery shortcut, not a city-only service boundary."
+    },
+    {
+      "name": "San Francisco",
+      "target": "sfbay",
+      "source": "https://511.org/about",
+      "basis": "San Francisco is included in the named Bay Area coverage."
+    },
+    {
+      "name": "Bay Area",
+      "target": "sfbay",
+      "source": "https://511.org/about",
+      "basis": "511 describes the San Francisco Bay Area region."
+    }
   ],
   "places": [
     {
       "name": "Pier 39",
-      "aliases": ["Pier 39"],
-      "stopNames": ["The Embarcadero & Stockton St (Pier 39)"],
-      "sources": ["https://www.sfmta.com/stops/embarcadero-stockton-st-pier-39-14530"],
+      "aliases": [
+        "Pier 39"
+      ],
+      "stopNames": [
+        "The Embarcadero & Stockton St (Pier 39)"
+      ],
+      "sources": [
+        "https://www.sfmta.com/stops/embarcadero-stockton-st-pier-39-14530"
+      ],
       "basis": "SFMTA explicitly labels this public stop Pier 39. No 511 stop ID or opposite-direction stop is inferred."
     },
     {
       "name": "San Francisco International Airport",
-      "aliases": ["SFO"],
-      "stopNames": ["San Francisco International Airport", "San Francisco International Airport (SFO)", "San Francisco Int'l Airport"],
-      "sources": ["https://www.bart.gov/stations/sfia", "https://api.bart.gov/docs/overview/abbrev.aspx"],
-      "basis": "BART's public station page and abbreviation reference identify these airport station names. Airport terminal stops that already contain SFO remain separate candidates; no airport-wide equivalence or terminal walk is invented."
+      "aliases": [
+        "SFO"
+      ],
+      "stopNames": [
+        "SFO",
+        "San Francisco International Airport",
+        "San Francisco International Airport (SFO)",
+        "San Francisco Int'l Airport"
+      ],
+      "sources": [
+        "https://www.bart.gov/stations/sfia",
+        "https://api.bart.gov/docs/overview/abbrev.aspx",
+        "https://www.bart.gov/stations/sfia"
+      ],
+      "basis": "BART's public station page and abbreviation reference identify these airport station names. Airport terminal stops that already contain SFO remain separate candidates; no airport-wide equivalence or terminal walk is invented. BART publishes its airport station in the 511 feed as \"SFO\"; bart.gov lists it as San Francisco International Airport (SFO)."
+    },
+    {
+      "name": "Union Square",
+      "aliases": [
+        "Union Square"
+      ],
+      "stopNames": [
+        "Powell",
+        "Union Square/Market St Station Northbound",
+        "Union Square/Market St Station Southbound"
+      ],
+      "sources": [
+        "https://www.bart.gov/stations/powl",
+        "https://www.sfmta.com/projects/central-subway-project"
+      ],
+      "basis": "BART describes Powell St station as serving Union Square; SFMTA names its Central Subway station Union Square/Market Street. 511 publishes them as Powell (BART and Muni Metro) and Union Square/Market St Station Northbound/Southbound. Stops whose own names include Union Square stay candidates."
+    },
+    {
+      "name": "San Francisco Caltrain station (4th and King)",
+      "aliases": [
+        "4th and King",
+        "4th & King",
+        "San Francisco Caltrain"
+      ],
+      "stopNames": [
+        "Caltrain 4th & King"
+      ],
+      "sources": [
+        "https://www.caltrain.com/stations/sanfrancisco"
+      ],
+      "basis": "Caltrain's San Francisco station at 4th and King streets, published by 511 as Caltrain 4th & King."
+    },
+    {
+      "name": "Salesforce Transit Center",
+      "aliases": [
+        "Transbay",
+        "Transbay Transit Center",
+        "Transbay Terminal"
+      ],
+      "stopNames": [
+        "Salesforce Transit Center"
+      ],
+      "sources": [
+        "https://salesforcetransitcenter.com/"
+      ],
+      "basis": "The Salesforce Transit Center replaced the Transbay Terminal and is still widely called Transbay; 511 publishes it as Salesforce Transit Center."
+    },
+    {
+      "name": "Powell Street station",
+      "aliases": [
+        "Powell St",
+        "Powell Street",
+        "Powell St Station",
+        "Powell Street Station"
+      ],
+      "stopNames": [
+        "Powell"
+      ],
+      "sources": [
+        "https://www.bart.gov/stations/powl"
+      ],
+      "basis": "BART's Powell St. station (shared with Muni Metro) is published by 511 as Powell. Cable car stops whose own names include Powell St stay candidates."
     }
   ]
 }

@@ -31,7 +31,11 @@ export const attributionSchema = z.strictObject({ text: z.string(), url: z.url()
 export const resultShape = { status: z.enum(['realtime', 'scheduled_only', 'unavailable']), reasons: z.array(z.enum(VERIFICATION_REASONS)),
   asOf: instantSchema, sources: z.array(sourceSchema), attribution: z.array(attributionSchema) };
 export const candidateSchema = z.strictObject({ ref: z.string(), kind: z.enum(['agency', 'route', 'stop', 'trip']),
-  name: z.string(), coverage: z.string(), feed: z.string(), providerId: z.string(), endpoint: z.enum(['origin', 'destination']).optional() });
+  name: z.string(), coverage: z.string(), feed: z.string(), providerId: z.string(), endpoint: z.enum(['origin', 'destination']).optional(),
+  // Stops only: enough to tell a station from a street corner without another call.
+  stopType: z.enum(['station', 'platform', 'stop', 'entrance', 'other']).optional().describe('station: groups platforms; platform: part of stationRef; stop: a standalone stop such as a street corner.'),
+  modes: z.array(z.string()).optional(), routeNames: z.array(z.string()).max(10).optional().describe('Lines serving it, up to ten.'),
+  routeCount: z.number().int().nonnegative().optional(), stationRef: z.string().optional(), coordinates: coordinatesSchema.nullable().optional() });
 export type Candidate = z.infer<typeof candidateSchema>;
 /** Per endpoint/query; two-endpoint elicitation is therefore at most 100 choices. */
 export const MAX_DISCOVERY_CANDIDATES = 50;
@@ -168,21 +172,71 @@ function tripCandidate(index: DiscoveryIndex, id: string): Candidate | undefined
 export function entities(data: TransitData): readonly Candidate[] {
   return data.indexes.length === 1 ? entityIndex(data, data.indexes[0]!).list : data.indexes.flatMap(index => entityIndex(data, index).list);
 }
+const FIXED_GUIDEWAY = new Set(['subway', 'rail', 'tram', 'cable_tram', 'ferry', 'aerial', 'funicular', 'monorail']);
+type StopFacts = Required<Pick<Candidate, 'stopType' | 'modes' | 'routeNames' | 'routeCount'>> & Pick<Candidate, 'stationRef' | 'coordinates'>;
+const stopFactCache = new WeakMap<DiscoveryIndex, Map<string, StopFacts>>();
+/** What each stop is and what serves it (a station counts its platforms' lines), built
+ * once per immutable discovery index. */
+function stopFacts(index: DiscoveryIndex): Map<string, StopFacts> {
+  let facts = stopFactCache.get(index);
+  if (facts) return facts;
+  const routes = new Map(index.routes.map(route => [route.ref as string, route]));
+  const children = new Map<string, string[]>();
+  for (const stop of index.stops) if (stop.parentStationRef) children.set(stop.parentStationRef, [...children.get(stop.parentStationRef) ?? [], stop.ref]);
+  facts = new Map();
+  for (const stop of index.stops) {
+    const served = new Set<string>([stop.ref, ...children.get(stop.ref) ?? []].flatMap(ref => index.stopRoutes[ref as TransitRef] ?? []));
+    const lines = [...served].flatMap(ref => routes.get(ref) ?? []);
+    facts.set(stop.ref, {
+      stopType: stop.locationType === 1 ? 'station' : stop.locationType === 2 ? 'entrance' : stop.parentStationRef ? 'platform' : stop.locationType === 0 ? 'stop' : 'other',
+      modes: [...new Set(lines.map(route => route.mode))].sort(), routeNames: [...new Set(lines.map(routeName))].sort((a, b) => a.localeCompare(b, 'en', { numeric: true })).slice(0, 10),
+      routeCount: served.size, ...(stop.parentStationRef ? { stationRef: stop.parentStationRef } : {}),
+      coordinates: stop.latitude != null && stop.longitude != null ? { latitude: stop.latitude, longitude: stop.longitude } : null,
+    });
+  }
+  stopFactCache.set(index, facts);
+  return facts;
+}
+/** A stop candidate with what it is and what serves it; other kinds unchanged. */
+export function describeCandidate(data: TransitData, entity: Candidate): Candidate {
+  if (entity.kind !== 'stop') return entity;
+  const index = data.indexes.find(index => index.feedId === entity.feed), facts = index && stopFacts(index).get(entity.ref);
+  return facts ? { ...entity, ...facts } : entity;
+}
+/** Name matches, best first: exact or alias names, then names starting with the query, then
+ * any containing it; within each, stations before standalone stops before platforms, rail
+ * before bus, busier stops, shorter names. A platform whose station also matched is left to it. */
 export function candidates(data: TransitData, query: string, kind?: string): Candidate[] {
   const normalized = normalizeEntityName(query), aliasStops = aliasStopNames(data, normalized);
-  const found: { entity: Candidate; exact: boolean }[] = [];
+  const found: { entity: Candidate; rank: number[] }[] = [];
   for (const index of data.indexes) {
     const trip = !kind || kind === 'trip' ? tripCandidate(index, query.trim()) : undefined;
-    if (trip) found.push({ entity: trip, exact: true });
+    if (trip) found.push({ entity: trip, rank: [0] });
     const { list, names } = entityIndex(data, index);
     for (const entity of list) {
       if (kind && kind !== entity.kind) continue;
       const own = names.get(entity.ref)!, alias = aliasMatch(entity, aliasStops);
-      if (alias || own.some(name => name.includes(normalized))) found.push({ entity, exact: alias || own.includes(normalized) });
+      if (!alias && !own.some(name => name.includes(normalized))) continue;
+      const match = alias || own.includes(normalized) ? 0 : own.some(name => name.startsWith(normalized) || name.includes(` ${normalized}`)) ? 1 : 2;
+      const described = describeCandidate(data, entity);
+      const type = described.stopType === undefined || described.stopType === 'station' ? 0 : described.stopType === 'stop' ? 1 : 2;
+      const mode = described.modes === undefined ? 0 : described.modes.some(item => FIXED_GUIDEWAY.has(item)) ? 0 : described.modes.length ? 1 : 2;
+      found.push({ entity: described, rank: [match, type, mode, -(described.routeCount ?? 0), described.name.length] });
     }
   }
-  return found.sort((a, b) => Number(b.exact) - Number(a.exact) || a.entity.providerId.localeCompare(b.entity.providerId) || a.entity.ref.localeCompare(b.entity.ref))
+  const refs = new Set(found.map(item => item.entity.ref));
+  const order = (a: number[], b: number[]) => { for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) - (b[i] ?? 0); return 0; };
+  return found.filter(item => !(item.entity.stationRef && item.entity.stopType !== 'station' && refs.has(item.entity.stationRef)))
+    .sort((a, b) => order(a.rank, b.rank) || a.entity.providerId.localeCompare(b.entity.providerId) || a.entity.ref.localeCompare(b.entity.ref))
     .map(item => item.entity);
+}
+/** Stops a typed name stands for: exact names and reviewed aliases (with any stop whose own
+ * name carries the alias) when any exist, else every match. A station complex counts once. */
+export function stopMatches(data: TransitData, query: string): Candidate[] {
+  // Entrances lead into a station; they are never where a journey boards.
+  const boardable = (list: Candidate[]) => { const kept = list.filter(candidate => candidate.stopType !== 'entrance' && candidate.stopType !== 'other'); return kept.length ? kept : list; };
+  const all = boardable(candidates(data, query, 'stop')), exact = all.filter(candidate => ambiguityCandidate(data, candidate, query));
+  return sameStation(data, exact.length ? exact : all);
 }
 const normalizeEntityName = (value: string) => value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 function entityNames(data: TransitData, entity: Candidate): readonly string[] {
@@ -204,7 +258,26 @@ export const exactCandidate = (data: TransitData, entity: Candidate, query: stri
 export function ambiguityCandidate(data: TransitData, entity: Candidate, query: string): boolean {
   const normalized = normalizeEntityName(query);
   return exactCandidate(data, entity, query) || entity.kind === 'stop' && normalizeEntityName(entity.name).includes(normalized) &&
-    (data.coverage.placeAliases ?? []).some(place => place.aliases.some(alias => normalizeEntityName(alias) === normalized));
+    (data.coverage.placeAliases ?? []).some(place => place.aliases.some(alias => normalizeEntityName(alias) === normalized)) && nearAliasTargets(data, entity, normalized);
+}
+/** A stop that only carries an alias in its name ("Decoto Rd & Union Square", 40 km from San
+ * Francisco's) is that place only if it lies near the alias's own stops. */
+const ALIAS_RADIUS_METRES = 3000;
+const aliasTargetCache = new WeakMap<TransitData['indexes'], Map<string, { latitude: number; longitude: number }[]>>();
+function nearAliasTargets(data: TransitData, entity: Candidate, normalized: string): boolean {
+  let byAlias = aliasTargetCache.get(data.indexes);
+  if (!byAlias) { byAlias = new Map(); aliasTargetCache.set(data.indexes, byAlias); }
+  let targets = byAlias.get(normalized);
+  if (!targets) {
+    const names = aliasStopNames(data, normalized);
+    targets = [...stopsByRef(data).values()].filter(stop => names.has(normalizeEntityName(stop.name)) && stop.latitude != null && stop.longitude != null)
+      .map(stop => ({ latitude: stop.latitude!, longitude: stop.longitude! }));
+    byAlias.set(normalized, targets);
+  }
+  const stop = stopsByRef(data).get(entity.ref);
+  if (!targets.length || stop?.latitude == null || stop.longitude == null) return true;
+  const radians = Math.PI / 180;
+  return targets.some(target => Math.hypot((stop.longitude! - target.longitude) * radians * Math.cos(target.latitude * radians), (stop.latitude! - target.latitude) * radians) * 6_371_000 <= ALIAS_RADIUS_METRES);
 }
 /** Matches that all belong to one station complex name one place, and resolve to its
  * station. A complex is a GTFS station with its platforms and entrances, together with

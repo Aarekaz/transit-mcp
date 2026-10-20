@@ -9,7 +9,7 @@ import { DecodedShardCache } from '../../../transit/planner/schedule-index';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import { stopAccess } from '../../../transit/accessibility/equipment';
 import type { ScheduleTrip } from '../../../transit/gtfs/static/schema';
-import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, candidates, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, sameStation, stationAgencies, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, stopMatches, stationAgencies, unavailable, validRef, type TransitData } from './shared';
 import { getCoverage } from '../../../transit/core/coverage';
 
 const departureShape = { tripRef: z.string(), serviceDate: z.string(), routeRef: z.string(), routeName: z.string().describe('Public route name, e.g. "1", "A" or "Red".'),
@@ -48,7 +48,7 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
       if (!coverageId) throw new TransitToolError('ENTITY_NOT_FOUND');
       data = await loadData(context, coverageId, handler.mcpReq.signal);
       if (!data) return complete({ ...unavailable(coverageId), departures: [], frequencyWindows: [] });
-      const matches = sameStation(data, candidates(data, args.stop, 'stop'));
+      const matches = stopMatches(data, args.stop);
       if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND');
       if (matches.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...unavailable(coverageId, data, ['SCOPE_LIMIT_EXCEEDED']), departures: [], frequencyWindows: [] });
       if (matches.length > 1) throw new TransitToolError('ENTITY_AMBIGUOUS', matches);
@@ -65,7 +65,7 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     // A destination keeps only trips that stop there later: "the next train from A to B".
     let toRef = args.toStopRef;
     if (args.toStop) {
-      const matches = sameStation(data, candidates(data, args.toStop, 'stop'));
+      const matches = stopMatches(data, args.toStop);
       if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND');
       if (matches.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...unavailable(stop.coverage, data, ['SCOPE_LIMIT_EXCEEDED']), departures: [], frequencyWindows: [] });
       if (matches.length > 1) throw new TransitToolError('ENTITY_AMBIGUOUS', matches);

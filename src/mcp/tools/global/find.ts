@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { MetroMcpContext } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
 import { getCoverage } from '../../../transit/core/coverage';
-import { MAX_DISCOVERY_CANDIDATES, ambiguityCandidate, boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, effectiveCapabilities, entities, guarded, trainCandidates, inferCoverage, loadData, metadata, resultShape, unavailable, validRef } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, ambiguityCandidate, describeCandidate, boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, effectiveCapabilities, entities, guarded, trainCandidates, inferCoverage, loadData, metadata, resultShape, unavailable, validRef } from './shared';
 
 export const entitySchema = candidateSchema.extend({ scheduleVersion: z.string(), resourceUri: z.string(), coordinates: coordinatesSchema.nullable(), routeRefs: z.array(z.string()),
   agencyRef: z.string().nullable(), mode: z.string().nullable(), patterns: z.array(z.strictObject({ id: z.string(), directionId: z.number().int().nullable(), stopRefs: z.array(z.string()) })),
@@ -22,7 +22,7 @@ export function registerFindTool(server: McpServer, context: MetroMcpContext): v
   const common = { coverage: coverageSchema.optional(), context: z.strictObject({ coverage: coverageSchema.optional(), feed: boundedText.optional(), serviceDate: z.string().regex(/^\d{8}$/).optional() }).optional(), limit: z.number().int().min(1).max(50).default(20) };
   const absent = { ref: z.never().optional(), query: z.never().optional(), latitude: z.never().optional(), longitude: z.never().optional() };
   server.registerTool('find_transit', {
-    title: 'Find transit entities', description: 'Resolve a coverage, agency, route, station, stop, or a currently observed train number (where vehicle data exists); inspect an exact reference or nearby coordinates. Context ranks candidates without selecting identity. No general address geocoding. Use plan_trip for journeys.',
+    title: 'Find transit entities', description: 'Resolve a coverage, agency, route, station, stop, or a currently observed train number (where vehicle data exists); inspect an exact reference or nearby coordinates. Context ranks candidates without selecting identity. Candidates come best first (exact names and well-known place names such as SFO, then stations, then rail before bus), and each stop says what it is: stopType (station, platform or street stop), modes and the lines serving it, so you can pick the one the rider means. No general address geocoding. Use plan_trip for journeys.',
     annotations: readOnlyLive('Find transit entities'),
     inputSchema: z.union([z.strictObject({ ...common, ...absent, ref: boundedText }), z.strictObject({ ...common, ...absent, query: boundedText }),
       z.strictObject({ ...common, ...absent, latitude: coordinatesSchema.shape.latitude, longitude: coordinatesSchema.shape.longitude })]),
@@ -42,7 +42,7 @@ export function registerFindTool(server: McpServer, context: MetroMcpContext): v
       const base = { ...(data ? { ...metadata(id, data), status: 'scheduled_only' as const, reasons: [] } : unavailable(id)),
         coverages: match ? [{ id: match.id, displayName: match.displayName, aliases: [...match.aliases], supportedModes: [...match.supportedModes], available: Boolean(data), capabilities: effectiveCapabilities(context, match) }] : [],
         entities: [], clientCoordinates: args.latitude === undefined ? null : { latitude: args.latitude, longitude: args.longitude! } };
-      let found = data && !match ? args.query ? candidates(data, args.query) : entities(data).filter(entity => entity.kind === 'stop') : [];
+      let found = data && !match ? args.query ? candidates(data, args.query) : entities(data).filter(entity => entity.kind === 'stop').map(entity => describeCandidate(data, entity)) : [];
       const trains = data && !match && args.query ? await trainCandidates(context, data, args.query, handler.mcpReq.signal) : { candidates: [], sources: [] };
       if (trains.candidates.length) {
         base.sources.push(...trains.sources);

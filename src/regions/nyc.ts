@@ -25,6 +25,11 @@ const busFeeds = NYC_BUS_FEEDS.map((id, index) => ({ id, planning: false as cons
 export const NYC_COVERAGE = {
   id: 'nyc', kind: 'region', displayName: 'New York City Subway, LIRR and Metro-North',
   aliases: ['NYC', 'New York', 'New York City', 'NYC Subway', 'MTA Subway', 'MTA', 'LIRR', 'Long Island Rail Road', 'Metro-North', 'Metro-North Railroad'],
+  // Railroad terminals and the subway stations beneath them, as each MTA GTFS names them.
+  placeAliases: [
+    { aliases: ['Penn Station', 'Penn', 'New York Penn Station'], stopNames: ['Penn Station', '34 St-Penn Station'] },
+    { aliases: ['Grand Central', 'Grand Central Terminal', 'Grand Central Madison'], stopNames: ['Grand Central', 'Grand Central-42 St'] },
+  ],
   feeds: [{ id: 'mta_subway', realtime: [
     { kind: 'trip_updates', parts: NYC_TRIP_FEEDS.map(id => ({ id, url: new URL(`${mta}/nyct%2F${id}`) })), alsoPublishes: ['vehicle_positions'],
       weight: 8, minIntervalSeconds: 30, maxBytes: 4_000_000, timeoutMs: 10_000 },

@@ -340,7 +340,9 @@ describe('NYC subway through the global tools with every MTA feed', () => {
   it('never silently chooses between two stations with the same name', async () => {
     const f = await nyc();
     const found = (await callTool(f.env, 'find_transit', { query: '14 St', coverage: 'nyc' })).structuredContent;
-    expect(new Set(found.candidates.filter((c: { kind: string }) => c.kind === 'stop').map((c: { providerId: string }) => c.providerId))).toEqual(new Set(['132', '132S', 'D19', 'D19S']));
+    // Each station once (its platforms are represented by it), described so a model can choose.
+    expect(new Set(found.candidates.filter((c: { kind: string }) => c.kind === 'stop').map((c: { providerId: string }) => c.providerId))).toEqual(new Set(['132', 'D19']));
+    expect(found.candidates.find((c: { providerId: string }) => c.providerId === '132')).toMatchObject({ stopType: 'station', modes: ['subway'], routeNames: ['1', '2', 'F'] });
     const plan = await callTool(f.env, 'plan_trip', { coverage: 'nyc', origin: { query: '14 St' }, destination: { query: 'Times Sq-42 St' } });
     expect(plan.isError).toBe(true);
     expect(plan.structuredContent).toMatchObject({ code: 'ENTITY_AMBIGUOUS' });

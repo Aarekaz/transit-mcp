@@ -12,7 +12,7 @@ import type { SourceStatus, VerificationReason } from '../../../transit/core/res
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { canonicalJson, sha256 } from '../../../transit/gtfs/static/shards';
 import { DecodedShardCache } from '../../../transit/planner/schedule-index';
-import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, routeHints, routeHintsSchema, routeName, effectiveCapabilities, journeyAgencies, validRef, candidates, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, sameStation, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, routeHints, routeHintsSchema, routeName, effectiveCapabilities, journeyAgencies, validRef, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, stopMatches, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
 
 const journeyEndpoint = z.union([z.string(), coordinatesSchema]);
 const transitLeg = z.strictObject({ kind: z.literal('transit'), from: z.string(), to: z.string(), tripRef: z.string(), tripInstanceRef: z.string(), serviceDate: z.string(), instanceStartSeconds: z.number(),
@@ -87,7 +87,7 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       if ('ref' in value) { knownEntity(data, value.ref); resolved[endpoint] = asTransitRef(value.ref); }
       else if ('latitude' in value) resolved[endpoint] = value;
       else {
-        const matches = sameStation(data, candidates(data, value.query, 'stop'));
+        const matches = stopMatches(data, value.query);
         if (matches.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...unavailable(coverageId, data, ['SCOPE_LIMIT_EXCEEDED']), itineraries: [] });
         if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND');
         if (matches.length === 1) resolved[endpoint] = asTransitRef(matches[0]!.ref);
@@ -106,7 +106,7 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       for (const endpoint of ['origin', 'destination'] as const) {
         const matches = ambiguous[endpoint]; if (!matches) continue;
         choices[endpoint] = matches.map(candidate => candidate.ref);
-        shape[endpoint] = z.enum(choices[endpoint] as [string, ...string[]]).describe(matches.map(candidate => `${candidate.ref} (${candidate.coverage}/${candidate.feed}): ${candidate.name}`).join('; '));
+        shape[endpoint] = z.enum(choices[endpoint] as [string, ...string[]]).describe(matches.map(candidate => `${candidate.ref} (${candidate.coverage}/${candidate.feed}): ${candidate.name}${candidate.stopType ? ` [${candidate.stopType}${candidate.routeNames?.length ? `: ${candidate.routeNames.join(', ')}` : ''}]` : ''}`).join('; '));
       }
       return inputRequired({ inputRequests: { endpoints: inputRequired.elicit({ message: 'Choose the transit endpoints for this journey.', requestedSchema: z.object(shape) }) },
         requestState: await codec.mint({ phase: 'transit-selection', tool: 'plan_trip', requestHash, artifactVersion: data.version.artifactVersion, candidates: choices }, handler) });
