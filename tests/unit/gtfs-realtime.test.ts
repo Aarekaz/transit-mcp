@@ -220,6 +220,32 @@ describe('bounded snapshot storage and manifest policy', () => {
     await expect(new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).read('trip_updates', version)).rejects.toThrow(/integrity/i);
   });
 
+  it('stores rows column-wise without changing what a reader gets back, and keeps meaningful nulls', async () => {
+    const db = memoryStorage(), version = await snapshots.staticVersion((await realtimeFixture()).manifest);
+    const rows = [{ stopId: 'S', tripId: 't1', stopSequence: 3, arrivalTimeSeconds: 100 }, { stopId: 'S', tripId: 't2', departureTimeSeconds: 200, status: 'realtime' }];
+    await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).publish('trip_updates', { version, receivedAtSeconds: 1000, payload: rows });
+    const stored = JSON.parse(new TextDecoder().decode([...db.objects.values()][0]!));
+    expect(stored).toMatchObject({ columns: ['arrivalTimeSeconds', 'departureTimeSeconds', 'status', 'stopId', 'stopSequence', 'tripId'] });
+    // A restarted coordinator reads R2: the same records, absent fields still absent.
+    expect((await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).read('trip_updates', version))?.payload).toEqual(rows);
+    const outages = [{ id: 'EL1', stationId: 'S', estimatedReturn: null }];
+    await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).publish('equipment_outages', { version, receivedAtSeconds: 1000, payload: outages });
+    expect((await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).read('equipment_outages', version))?.payload).toEqual(outages);
+  });
+
+  it('fits a city of bus predictions (82,000 rows) in one snapshot', async () => {
+    const db = memoryStorage(), version = await snapshots.staticVersion((await realtimeFixture()).manifest);
+    const rows = Array.from({ length: 82_000 }, (_, i) => ({ entityId: `MTA NYCT_${100000 + Math.floor(i / 16)}`, tripId: `MV_E3-Weekday-SDon-0${10000 + Math.floor(i / 16)}00_M15_${i % 400}`,
+      routeId: 'M15', stopId: `${400000 + (i % 3000)}`, stopSequence: i % 40, arrivalTimeSeconds: 1_792_500_000 + i, departureTimeSeconds: 1_792_500_030 + i,
+      scheduledArrivalTimeSeconds: 1_792_500_000 + i, scheduledDepartureTimeSeconds: 1_792_500_000 + i, scheduleRelationship: 'SCHEDULED', stopScheduleRelationship: 'SCHEDULED',
+      tripInstanceRef: `tr:nyc:mta_bus_m:trip:${Buffer.from(`MV_E3-Weekday-SDon-0${10000 + Math.floor(i / 16)}00_M15_${i % 400}`).toString('base64url')}:20261020:MDk6MDA6MDA`,
+      serviceDate: '20261020', status: 'realtime', scheduleMatch: 'matched' }));
+    await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).publish('trip_updates', { version, receivedAtSeconds: 1000, payload: rows });
+    const read = await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).read<{ stopId: string }>('trip_updates', version);
+    expect(read?.payload).toHaveLength(82_000);
+    expect(read?.payload?.find(row => row.stopId === '400007')).toEqual(rows[7]);
+  });
+
   it('tags complete payloads so a reader that holds one skips the transfer', async () => {
     const db = memoryStorage(), version = await snapshots.staticVersion((await realtimeFixture()).manifest);
     await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).publish('trip_updates', { version, receivedAtSeconds: 1000, payload: [{ stopId: 'S' }, { stopId: 'T' }] });
