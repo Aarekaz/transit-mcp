@@ -10,7 +10,7 @@ import { DecodedShardCache } from '../../../transit/planner/schedule-index';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import { stopAccess } from '../../../transit/accessibility/equipment';
 import type { ScheduleTrip } from '../../../transit/gtfs/static/schema';
-import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, stopMatches, stationAgencies, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, residentShards, TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, stopMatches, stationAgencies, unavailable, validRef, type TransitData } from './shared';
 import { getCoverage } from '../../../transit/core/coverage';
 
 const departureShape = { tripRef: z.string(), serviceDate: z.string(), routeRef: z.string(), routeName: z.string().describe('Public route name, e.g. "1", "A" or "Red".'),
@@ -81,7 +81,7 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     const relevantStops = new Set(data.indexes.flatMap(index => index.stops).filter(stop => within.has(stop.ref) || stop.parentStationRef !== undefined && within.has(stop.parentStationRef)).map(stop => stop.ref));
     // One decode per shard: the scan fills this, and observed rows read trips from it.
     const decoded = new DecodedShardCache(Number.MAX_SAFE_INTEGER);
-    const pages = getScheduledDeparturePages({ manifest: data.manifest, readShard: data.readObject, decoded, readDiscovery: data.readObject, stopRef: asTransitRef(stopRef!), complexStationRefs: complex.map(asTransitRef),
+    const pages = getScheduledDeparturePages({ manifest: data.manifest, readShard: data.readObject, decoded, resident: residentShards, readDiscovery: data.readObject, stopRef: asTransitRef(stopRef!), complexStationRefs: complex.map(asTransitRef),
       instant: args.at ?? now, windowSeconds: args.windowSeconds, selection: args.selection, limit: 100, routeRefs: args.routeRefs?.map(asTransitRef), agencyRefs: stationAgencies(data, relevantStops, args.agencyRefs) });
     const scheduled: ScheduledDeparture[] = []; let schedule: ScheduledDepartures | undefined;
     // Predictions can reorder any scheduled page. Exhaust the bounded window before ranking.

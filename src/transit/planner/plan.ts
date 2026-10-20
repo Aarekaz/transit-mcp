@@ -37,7 +37,7 @@ async function planJourneyUntraced(query: JourneyQuery, signal?: AbortSignal): P
   const version = await staticVersion(query.manifest); assertNotAborted(signal);
   let bytes = 0;
   const factor = query.routeRefs ? FILTERED_SHARD_FACTOR : DECODED_SHARD_FACTOR;
-  const window = await loadScheduleWindow({ manifest: query.manifest, instant: query.departAt, windowSeconds: query.windowSeconds ?? 7200, agencyRefs: query.agencyRefs, decoded: query.decoded, readConcurrency: query.readConcurrency, ...(query.routeRefs ? { decodeRoutes: query.routeRefs } : {}), ...(query.feedIds ? { feedIds: [...query.feedIds] } : {}),
+  const window = await loadScheduleWindow({ manifest: query.manifest, instant: query.departAt, windowSeconds: query.windowSeconds ?? 7200, agencyRefs: query.agencyRefs, decoded: query.decoded, resident: query.resident, readConcurrency: query.readConcurrency, ...(query.routeRefs ? { decodeRoutes: query.routeRefs } : {}), ...(query.feedIds ? { feedIds: [...query.feedIds] } : {}),
     readShard: async key => {
       assertNotAborted(signal);
       const descriptor = query.manifest.shards.find(shard => shard.key === key)!;

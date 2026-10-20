@@ -12,6 +12,8 @@ export interface ScheduleWindowQuery {
   readShard: (key: string) => Promise<Uint8Array>;
   /** Decoded shards kept across calls by a long-lived reader (the realtime coordinator). */
   decoded?: DecodedShardCache;
+  /** Whole decodes kept across requests (the isolate's), consulted after `decoded`. */
+  resident?: DecodedShardCache;
   instant: string;
   /** Half-open interval [instant, instant + windowSeconds), maximum seven days. */
   windowSeconds: number;
@@ -60,6 +62,7 @@ export class DecodedShardCache {
     return entry.shard;
   }
   *shards(): Iterable<ScheduleShard> { for (const entry of this.#entries.values()) yield entry.shard; }
+  clear(): void { this.#entries.clear(); this.#bytes = 0; }
   set(descriptor: { sha256: string; byteLength: number }, shard: ScheduleShard, variant = ''): void {
     if (descriptor.byteLength > this.maxFileBytes) return;
     const key = `${descriptor.sha256}/${descriptor.byteLength}${variant}`;
@@ -161,10 +164,11 @@ async function loadScheduleWindowUntraced(query: ScheduleWindowQuery): Promise<S
   // With readConcurrency, up to that many reads are in flight ahead of the decoder.
   const concurrency = Math.max(1, Math.min(16, query.readConcurrency ?? 1));
   const pending = new Map<number, Promise<Uint8Array>>();
-  const prefetch = (from: number) => { for (let at = from; at < Math.min(entries.length, from + concurrency); at++) if (!pending.has(at) && !query.decoded?.get(entries[at]!.descriptor, variant)) { const read = query.readShard(entries[at]!.descriptor.key); read.catch(() => {}); pending.set(at, read); } };
+  const prefetch = (from: number) => { for (let at = from; at < Math.min(entries.length, from + concurrency); at++) if (!pending.has(at) && !query.decoded?.get(entries[at]!.descriptor, variant) && !(!variant && query.resident?.get(entries[at]!.descriptor))) { const read = query.readShard(entries[at]!.descriptor.key); read.catch(() => {}); pending.set(at, read); } };
   for (const [position, { descriptor, days, source }] of entries.entries()) {
-    let shard = query.decoded?.get(descriptor, variant);
-    if (!shard) {
+    let shard = query.decoded?.get(descriptor, variant) ?? (variant ? undefined : query.resident?.get(descriptor));
+    if (shard) query.decoded?.set(descriptor, shard, variant);
+    else {
       if (concurrency > 1) prefetch(position);
       const bytes = await (pending.get(position) ?? query.readShard(descriptor.key));
       pending.delete(position);
@@ -172,6 +176,7 @@ async function loadScheduleWindowUntraced(query: ScheduleWindowQuery): Promise<S
       shard = decodeScheduleShard(bytes, query.decodeRoutes);
       count('shardsDecoded'); count('shardBytes', bytes.byteLength);
       query.decoded?.set(descriptor, shard, variant);
+      if (!variant) query.resident?.set(descriptor, shard);
     }
     const agencyTimezones = Object.fromEntries(Object.entries(manifest.agencyTimezones).filter(([ref]) => parseTransitRef(ref)?.feed === descriptor.feedId));
     if (shard.coverageId !== manifest.coverageId || shard.feedId !== descriptor.feedId || shard.source.sha256 !== source.sha256 ||

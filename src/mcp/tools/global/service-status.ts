@@ -17,7 +17,7 @@ import type { ScheduleShard } from '../../../transit/gtfs/static/schema';
 import { AlertScopeLimitError, expandAlertScopes, matchesAlertSelector, resolveAlertSelector, type AlertScope } from '../../../transit/gtfs/realtime/alert-match';
 import { itinerarySchema } from './plan';
 import { blockedStations, currentOutage, outageStations, stationOf, type EquipmentOutage } from '../../../transit/accessibility/equipment';
-import { MAX_DISCOVERY_CANDIDATES, TransitToolError, stopMatches, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, residentShards, TransitToolError, stopMatches, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
 
 /** Per-alert detail bound: a city-wide status call stays readable for a model. */
 export const ALERT_DETAIL_LIMIT = 20;
@@ -119,7 +119,7 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       // An expired timetable cannot interpret them: fail closed rather than drop alerts.
       const patternFeeds = [...new Set([...patterns.values()].map(pattern => pattern.feedId))];
       if (patternFeeds.length) {
-        const current = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant: now, windowSeconds: 60, feedIds: patternFeeds, decoded });
+        const current = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant: now, windowSeconds: 60, feedIds: patternFeeds, decoded, resident: residentShards });
         if (current.status === 'unavailable') return scopeUnavailable(current.reasons);
       }
       for (const { feedId, date, start } of patterns.values()) {
@@ -127,7 +127,7 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
         if (!timezone) continue;
         let instant: string;
         try { instant = new Date(serviceDayOrigin(date, timezone) + parseGtfsTime(start).totalSeconds * 1000).toISOString(); } catch { continue; }
-        const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant, windowSeconds: 60, feedIds: [feedId], decoded });
+        const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant, windowSeconds: 60, feedIds: [feedId], decoded, resident: residentShards });
         for (const item of schedule.shards) if (!loaded.has(item.key)) { loaded.add(item.key); canonicalShards.push(item.shard); }
       }
     }

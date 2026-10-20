@@ -46,6 +46,8 @@ export interface JourneyQuery extends Omit<ValidationSource, 'shards'> {
   readShard: (key: string) => Promise<Uint8Array>;
   /** Receives each decoded shard, so a caller can read trips without decoding again. */
   decoded?: DecodedShardCache;
+  /** Whole decodes kept across requests (the isolate's), consulted after `decoded`. */
+  resident?: DecodedShardCache;
   origin: JourneyEndpoint; destination: JourneyEndpoint; departAt: string;
   /** Exact journeys must arrive inside this horizon (default two hours, max seven days). */
   windowSeconds?: number;
