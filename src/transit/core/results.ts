@@ -11,6 +11,9 @@ export const VERIFICATION_REASONS = [
   'VALIDATOR_REJECTED',
   'COVERAGE_UNAVAILABLE',
   'SCOPE_LIMIT_EXCEEDED',
+  // Step-free requests: no current equipment report, or an endpoint without step-free access now.
+  'ACCESSIBILITY_UNAVAILABLE',
+  'ENDPOINT_NOT_STEP_FREE',
 ] as const;
 
 export type VerificationReason = typeof VERIFICATION_REASONS[number];
@@ -27,7 +30,7 @@ export interface TransitAttribution {
 
 export interface SourceStatus {
   feedId: string;
-  kind: 'gtfs_schedule' | 'trip_updates' | 'vehicle_positions' | 'alerts' | 'native_api';
+  kind: 'gtfs_schedule' | 'trip_updates' | 'vehicle_positions' | 'alerts' | 'equipment_outages' | 'native_api';
   producerTimestamp: string | null;
   ingestedAt: string;
   ageSeconds: number | null;

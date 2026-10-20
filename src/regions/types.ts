@@ -3,7 +3,7 @@ import type { CoverageBinding } from '../transit/core/coverage';
 
 export type PublicCity = SupportedCity | 'sfbay';
 export type RegionMode = 'off' | 'dark' | 'on' | 'suspended';
-export type RealtimeFeedKind = 'trip_updates' | 'vehicle_positions' | 'service_alerts';
+export type RealtimeFeedKind = 'trip_updates' | 'vehicle_positions' | 'service_alerts' | 'equipment_outages';
 
 export interface RealtimeFeedSpec {
   kind: RealtimeFeedKind;
@@ -16,6 +16,10 @@ export interface RealtimeFeedSpec {
   /** Other kinds carried in the same documents, published from the same poll with no
    * extra upstream request (NYCT trip feeds carry each train's vehicle entity). */
   alsoPublishes?: readonly RealtimeFeedKind[];
+  /** Agency JSON format of an `equipment_outages` feed (not GTFS-Realtime). */
+  format?: 'wmata_elevator_incidents' | 'nyct_ene';
+  /** Accept header when the document is not protobuf. */
+  accept?: string;
   weight: number;
   minIntervalSeconds: number;
   maxBytes: number;

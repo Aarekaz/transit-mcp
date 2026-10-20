@@ -49,7 +49,7 @@ export async function planJourney(query: JourneyQuery, signal?: AbortSignal): Pr
   routed.reasons.forEach(reason => reasons.add(reason));
   const candidates: JourneyResult['candidates'] = [];
   const source = { manifest: query.manifest, shards: window.shards.map(item => item.shard), now: query.now,
-    realtime: query.realtime, realtimeMaxAgeSeconds: query.realtimeMaxAgeSeconds };
+    realtime: query.realtime, realtimeMaxAgeSeconds: query.realtimeMaxAgeSeconds, ...(query.stepFree ? { stepFree: query.stepFree } : {}) };
   for (const candidate of routed.candidates) {
     assertNotAborted(signal);
     if (!(await validateItinerary(candidate, source, signal)).valid) { reasons.add('VALIDATOR_REJECTED'); continue; }

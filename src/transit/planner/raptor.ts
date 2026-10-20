@@ -371,7 +371,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     const predicted = row?.status === 'realtime' ? (event === 'arrival' ? row.arrivalTimeSeconds : row.departureTimeSeconds) : undefined;
     return predicted !== undefined ? predicted * 1000 : instance.origin + (seconds + instance.shift) * 1000;
   };
-  const transferIndex = indexTransfers(transfers);
+  const transferIndex = indexTransfers(transfers), stepFree = query.stepFree;
   const inSeatTo = new Map<TransitRef, ScheduleTransfer[]>(), inSeatFrom = new Map<TransitRef, ScheduleTransfer[]>();
   for (const rule of transfers) {
     if (rule.transferType === 4 && rule.toTripRef) inSeatTo.set(rule.toTripRef, [...inSeatTo.get(rule.toTripRef) ?? [], rule]);
@@ -391,6 +391,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     for (const instance of instances) {
       assertNotAborted(signal);
       if ([...instance.updates.values()].some(row => row.status === 'canceled' || row.scheduleRelationship === 'CANCELED')) { reasons.add('TRIP_CANCELED'); continue; }
+      if (stepFree && instance.trip.wheelchairAccessible === 2) continue;
       const calls = instance.trip.stopTimes;
       for (let board = 0; board < calls.length - 1; board++) {
         const call = calls[board]!, departure = timeAt(instance, board, 'departure');
@@ -407,6 +408,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
             !(inSeatFrom.get(previousInstance.trip.ref) ?? []).some(rule => rule.toTripRef !== instance.trip.ref);
           const continuation = !!(terminal && label.legs.at(-1)?.kind === 'transit' && !rules.some(rule => rule.transferType === 5) && (linked || block));
           if ((call.pickupType !== 0 || previousInstance?.trip.stopTimes.find(c => c.sequence === previous?.alightSequence)?.dropOffType !== 0 && previous) && !continuation) continue;
+          if (stepFree && !continuation && !stepFree.usableStopRefs.has(call.stopRef)) continue;
           const boardings = label.boardings + (continuation ? 0 : 1);
           if (boardings !== round) continue;
           const minimum = Math.max(0, ...rules.map(rule => rule.minTransferSeconds ?? 0));
@@ -415,6 +417,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
             const dest = calls[alight]!, arrival = timeAt(instance, alight, 'arrival');
             if (arrival === null || arrival < departure || arrival > end || instance.updates.get(dest.sequence)?.status === 'skipped') continue;
             if (dest.dropOffType !== 0 && alight !== calls.length - 1) continue;
+            if (stepFree && !stepFree.usableStopRefs.has(dest.stopRef)) continue;
             // Prune on numbers before formatting any leg text.
             if (dominated({ stop: dest.stopRef, time: arrival, walking: label.walking, boardings, legs: [] })) continue;
             const predicted = instance.updates.get(call.sequence)?.status === 'realtime' && instance.updates.get(call.sequence)?.departureTimeSeconds !== undefined ||

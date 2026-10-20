@@ -11,7 +11,8 @@ import { credential, getRealtimeSource, publishedKinds } from '../../../transit/
 import type { CoverageCapability } from '../../../transit/core/coverage';
 import { decodeDiscoveryIndex, decodeScheduleShard, sha256 } from '../../../transit/gtfs/static/shards';
 import type { ArtifactManifestV2, DiscoveryIndex, ScheduleStop } from '../../../transit/gtfs/static/schema';
-import type { FeedRead } from '../../../transit/gtfs/realtime/hub-core';
+import { stationAccess, stepFreeStops, type EquipmentOutage } from '../../../transit/accessibility/equipment';
+import { kindThresholds, type FeedRead } from '../../../transit/gtfs/realtime/hub-core';
 import type { NormalizedVehicle } from '../../../transit/gtfs/realtime/decode';
 import type { RealtimeFeedKind } from '../../../regions/types';
 import { classifyManifestFreshness, sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
@@ -23,7 +24,7 @@ export const coverageSchema = boundedText.describe('Runtime coverage name or ide
 export const instantSchema = z.iso.datetime({ offset: true });
 export const coordinatesSchema = z.strictObject({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) });
 export const endpointSchema = z.union([z.strictObject({ ref: boundedText }), z.strictObject({ query: boundedText }), coordinatesSchema]);
-export const sourceSchema = z.strictObject({ feedId: z.string(), kind: z.enum(['gtfs_schedule', 'trip_updates', 'vehicle_positions', 'alerts', 'native_api']),
+export const sourceSchema = z.strictObject({ feedId: z.string(), kind: z.enum(['gtfs_schedule', 'trip_updates', 'vehicle_positions', 'alerts', 'equipment_outages', 'native_api']),
   producerTimestamp: instantSchema.nullable(), ingestedAt: instantSchema, ageSeconds: z.number().nonnegative().nullable(), scheduleVersion: z.string() });
 export const attributionSchema = z.strictObject({ text: z.string(), url: z.url(), license: z.string().optional() });
 export const resultShape = { status: z.enum(['realtime', 'scheduled_only', 'unavailable']), reasons: z.array(z.enum(VERIFICATION_REASONS)),
@@ -300,7 +301,8 @@ export async function detail(data: TransitData, ref: string) {
   }
   return { ...entity, scheduleVersion: data.version.artifactVersion, resourceUri: `transit://entity/${ref}?version=${data.version.artifactVersion}`,
     coordinates: stop?.latitude != null && stop.longitude != null ? { latitude: stop.latitude, longitude: stop.longitude } : null,
-    routeRefs: stop ? index.stopRoutes[stop.ref] ?? [] : [], agencyRef: route?.agencyRef ?? null, mode: route?.mode ?? null, patterns, calls };
+    routeRefs: stop ? index.stopRoutes[stop.ref] ?? [] : [], agencyRef: route?.agencyRef ?? null, mode: route?.mode ?? null, patterns, calls,
+    stepFree: stop ? stationAccess(index, stop, stopsByRef(data)) : null };
 }
 /** Source support narrowed to what this deployment can serve now: realtime kinds need
  * a bound coordinator, any required credential, and an ingested feed of that kind. */
@@ -311,7 +313,8 @@ export function effectiveCapabilities(context: MetroMcpContext, coverage: Covera
   return { ...coverage.capabilities,
     realtimeDepartures: coverage.capabilities.realtimeDepartures && ingests('trip_updates'),
     alerts: coverage.capabilities.alerts && ingests('service_alerts'),
-    vehicles: coverage.capabilities.vehicles && ingests('vehicle_positions') };
+    vehicles: coverage.capabilities.vehicles && ingests('vehicle_positions'),
+    accessibility: coverage.capabilities.accessibility && ingests('equipment_outages') };
 }
 /** Each coverage's coordinator owns exactly one static feed's realtime. */
 export type OwnedFeedRead<T> = FeedRead<T> & { feedId: string; reasons: VerificationReason[] };
@@ -322,7 +325,7 @@ export async function readFeed<T>(context: MetroMcpContext, data: TransitData, k
   const source = getRealtimeSource(data.coverage.id);
   const feedId = source?.policy.feedId ?? data.manifest.sources[0]?.feedId ?? '';
   const missing = (): OwnedFeedRead<T[]> => ({ feedId, freshness: 'unavailable', status: kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: null, warnings: [], reasons: ['REALTIME_UNAVAILABLE'] });
-  const capability = kind === 'trip_updates' ? 'realtimeDepartures' : kind === 'vehicle_positions' ? 'vehicles' : 'alerts';
+  const capability = kind === 'trip_updates' ? 'realtimeDepartures' : kind === 'vehicle_positions' ? 'vehicles' : kind === 'equipment_outages' ? 'accessibility' : 'alerts';
   if (!source || !context.env.REGION_FEED_HUB || !effectiveCapabilities(context, data.coverage, false)[capability]) return missing();
   // Without a credential the coordinator publishes nothing, so reads degrade by freshness.
   const url = new URL(`https://region-feed-hub.internal/${kind}`);
@@ -339,8 +342,7 @@ export async function readFeed<T>(context: MetroMcpContext, data: TransitData, k
     if (notModified && held && feed.etag === held.etag) feed.payload = held.payload as T[];
     else if (feed.etag && Array.isArray(feed.payload) && !(kind === 'trip_updates' && stopIds.length)) heldPayloads.set(heldKey, { etag: feed.etag, payload: feed.payload });
     const policy = data.coverage.thresholds;
-    const threshold = kind === 'trip_updates' ? policy.tripUpdates.realtimeSeconds : kind === 'vehicle_positions' ? policy.vehiclePositions.realtimeSeconds : policy.alerts.currentSeconds;
-    const expiry = kind === 'trip_updates' ? policy.tripUpdates.staleSeconds : kind === 'vehicle_positions' ? policy.vehiclePositions.unavailableSeconds : Infinity;
+    const { fresh: threshold, expired: expiry } = kindThresholds(policy, kind);
     const validStamp = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= now;
     const producerTimestampSeconds = validStamp(feed.producerTimestampSeconds) ? feed.producerTimestampSeconds : undefined;
     const receivedAtSeconds = validStamp(feed.receivedAtSeconds) ? feed.receivedAtSeconds : undefined;
@@ -349,10 +351,22 @@ export async function readFeed<T>(context: MetroMcpContext, data: TransitData, k
     const reasons: VerificationReason[] = mismatch || feed.warnings?.includes('SCHEDULE_REALTIME_MISMATCH') ? ['SCHEDULE_REALTIME_MISMATCH'] :
       feed.degraded || !feed.version || freshness === 'expired' || freshness === 'unavailable' || receivedAtSeconds === undefined || receivedAtSeconds < (producerTimestampSeconds ?? Infinity) || !Array.isArray(feed.payload) ? ['REALTIME_UNAVAILABLE'] :
       freshness === 'stale' ? ['REALTIME_STALE'] : [];
-    const usable = reasons.length === 0 || kind === 'service_alerts' && reasons[0] === 'REALTIME_STALE';
+    const usable = reasons.length === 0 || (kind === 'service_alerts' || kind === 'equipment_outages') && reasons[0] === 'REALTIME_STALE';
     return { ...feed, feedId, reasons, warnings: [], producerTimestampSeconds, receivedAtSeconds, freshness,
       status: usable ? 'realtime' : kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: usable ? feed.payload : null };
   } catch (error) { signal.throwIfAborted(); if (error instanceof Error && error.name === 'AbortError') throw error; return missing(); }
+}
+/** Platforms a step-free journey may use now, or why none can be claimed: the coverage
+ * must publish station accessibility and a current (not stale) equipment report. */
+export async function stepFreeAccess(context: MetroMcpContext, data: TransitData, now: number, signal: AbortSignal):
+  Promise<{ usable: Set<string> | null; outages: EquipmentOutage[]; reasons: VerificationReason[]; sources: SourceStatus[] }> {
+  if (!effectiveCapabilities(context, data.coverage, false).accessibility) return { usable: null, outages: [], reasons: ['ACCESSIBILITY_UNAVAILABLE'], sources: [] };
+  const feed = await readFeed<EquipmentOutage>(context, data, 'equipment_outages', now, signal);
+  const sources = realtimeSource(data, feed, 'equipment_outages', now);
+  if (feed.status !== 'realtime' || feed.freshness !== 'fresh' || !feed.payload) return { usable: null, outages: feed.payload ?? [], reasons: ['ACCESSIBILITY_UNAVAILABLE', ...feed.reasons], sources };
+  const usable = new Set<string>();
+  for (const index of data.indexes) for (const ref of stepFreeStops(index, feed.payload, now)) usable.add(ref);
+  return { usable, outages: feed.payload, reasons: [], sources };
 }
 /** Train numbers are observations, not schedule entities. Resolve one only from a fresh
  * vehicle feed, to the dated trip instance that train is running; never guess. */

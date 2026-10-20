@@ -48,6 +48,8 @@ export interface CoverageManifest {
     tripUpdates: { realtimeSeconds: number; staleSeconds: number };
     vehiclePositions: { realtimeSeconds: number; unavailableSeconds: number };
     alerts: { currentSeconds: number };
+    /** Elevator/escalator reports: current through `currentSeconds`, withdrawn after `expiredSeconds`. */
+    equipment?: { currentSeconds: number; expiredSeconds: number };
     minimumScheduleMatchRate: number;
     maximumUnverifiedWalkMetres: number;
   };

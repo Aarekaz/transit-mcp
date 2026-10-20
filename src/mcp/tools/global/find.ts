@@ -7,7 +7,8 @@ import { MAX_DISCOVERY_CANDIDATES, ambiguityCandidate, boundedText, candidateSch
 
 export const entitySchema = candidateSchema.extend({ scheduleVersion: z.string(), resourceUri: z.string(), coordinates: coordinatesSchema.nullable(), routeRefs: z.array(z.string()),
   agencyRef: z.string().nullable(), mode: z.string().nullable(), patterns: z.array(z.strictObject({ id: z.string(), directionId: z.number().int().nullable(), stopRefs: z.array(z.string()) })),
-  calls: z.array(z.strictObject({ stopRef: z.string(), sequence: z.number().int(), arrivalSeconds: z.number().int().nullable(), departureSeconds: z.number().int().nullable(), pickupType: z.number().int(), dropOffType: z.number().int() })) });
+  calls: z.array(z.strictObject({ stopRef: z.string(), sequence: z.number().int(), arrivalSeconds: z.number().int().nullable(), departureSeconds: z.number().int().nullable(), pickupType: z.number().int(), dropOffType: z.number().int() })),
+  stepFree: z.enum(['accessible', 'partial', 'not_accessible', 'unknown']).nullable().describe('Step-free access from the street per the agency\'s station data (stops only; partial = some platforms, e.g. one direction). Live elevator outages are in get_service_status.') });
 export const findOutput = z.strictObject({ ...resultShape, coverages: z.array(z.strictObject({ id: z.string(), displayName: z.string(), aliases: z.array(z.string()), supportedModes: z.array(z.string()),
   available: z.boolean(), capabilities: z.strictObject({ schedules: z.boolean(), realtimeDepartures: z.boolean(), alerts: z.boolean(), vehicles: z.boolean(), planning: z.boolean(), accessibility: z.boolean() }) })),
   candidates: z.array(candidateSchema), entities: z.array(entitySchema), clientCoordinates: coordinatesSchema.nullable() });

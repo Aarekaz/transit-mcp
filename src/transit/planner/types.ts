@@ -38,6 +38,9 @@ export interface ValidationSource {
   /** Rechecks allow an older observation only if current predictions still agree. */
   recheck?: boolean;
   realtimeReasons?: VerificationReason[];
+  /** Step-free journeys board and alight only at these stops (accessible now, no
+   * unrecovered elevator outage) and never ride a trip marked not wheelchair accessible. */
+  stepFree?: { usableStopRefs: ReadonlySet<TransitRef> };
 }
 export interface JourneyQuery extends Omit<ValidationSource, 'shards'> {
   readShard: (key: string) => Promise<Uint8Array>;

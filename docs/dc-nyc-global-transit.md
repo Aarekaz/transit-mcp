@@ -15,6 +15,17 @@ Provider rules live in `src/transit/gtfs/realtime/sources.ts` (server-side; publ
 - **NYCT** (`nyct_suffix`): realtime `trip_id` is the static `trip_id` after its first `_`; identity is (trip, service date, route) because `start_time` reports the actual dispatch. A matched train's reported stop list is its complete set of remaining calls: scheduled calls missing from it cannot be boarded (marked skipped), and reported stops outside the pattern are returned as `unscheduled_call`. Trains absent from the schedule are returned as `unmatched_trip`, never dropped. Alert agency `MTASBWY` is the static agency `MTA NYCT`; alerts naming a parent station apply to its platforms.
 - **Every NYCT document is required.** A poll publishes only when all eight trip documents loaded, and a merge is dated by its oldest document. A missing or frozen document therefore leaves NYC realtime unavailable or stale (schedule-only results with `REALTIME_UNAVAILABLE`/`REALTIME_STALE`) instead of silently partial, because a train rerouted onto a line reports in its own line's document.
 
+## Accessibility
+
+| Coverage | Station access | Live equipment |
+| --- | --- | --- |
+| `dc` | GTFS `wheelchair_boarding` (every Metrorail station and platform is 1); trips publish no `wheelchair_accessible`, so only trips marked 2 are excluded | `Incidents.svc/json/ElevatorIncidents` (key header) every 5 minutes; units map to stations by WMATA station code (`STN_A01_C01` covers A01 and C01) |
+| `nyc` | MTA Subway Stations (data.ny.gov `39hk-dx4f`) by GTFS stop and direction, checked in as `src/regions/nyc-ada.ts`; the supplemented GTFS publishes no `wheelchair_boarding` | `nyct_ene.json` (current and announced outages) with `nyct_ene_equipments.json` (unit to GTFS stations, ADA flag, backup flag, alternative route), both required, every 5 minutes |
+
+Neither equipment API has a feed clock: a complete, validated retrieval is the observation. Reports are current for 15 minutes and withdrawn after an hour. A step-free plan needs a current report and refuses otherwise (`ACCESSIBILITY_UNAVAILABLE`); an origin or destination with no step-free platform now is `ENDPOINT_NOT_STEP_FREE`. The router boards and alights only at usable platforms, and the validator rechecks every leg against the same set (`STEP_FREE`).
+
+Refresh MTA's station list when stations become accessible: `bun scripts/refresh-nyc-ada.ts`, review the diff (it records source URL, retrieval time and SHA-256), commit. The script refuses inconsistent direction flags and an implausibly short list.
+
 ## Result contract additions
 
 - `get_departures` rows carry `scheduleMatch`: `matched` (a call of a canonical scheduled trip instance), `unscheduled_call` (an observed stop outside that trip's pattern) or `unmatched_trip` (an observed train with no published schedule). Observed rows have `scheduledTime: null` and `stopSequence: null`; their headsign is the last reported stop.
@@ -110,5 +121,5 @@ Rollback target before this rollout: Worker version `5fa5d475`.
 - **NYC alert freshness.** MTA's alerts feed header advances only when alerts change, so alerts are often labeled `REALTIME_STALE` after 20 minutes.
 - **Agreement with official planners.** Current MTA and WMATA trip-planner results have not been compared journey by journey.
 - **NYC coordinates between stations.** NYC trains are located by station (stopped at, arriving, or heading to, with the station last served), never by an interpolated point. Train IDs come from NYCT's TripDescriptor extension (field 1001); its track extension is not read.
-- **Step-free routing** is not offered for any coverage.
+- **Step-free detail inside stations.** Access is per platform, not a path: an in-station change between two step-free platforms is taken as step-free, and street walks between stations are straight-line estimates. WMATA's `pathways.txt` stays excluded, so DC elevators are matched to stations, not to platforms; any station elevator outage (except garage and parking elevators) blocks the whole station. NYCT outages block the stations their unit serves when the elevator has no backup, or when two or more ADA elevators there are out.
 - **Validator coverage of edge refreshes.** Edge builds rely on the compiler's checks and the change guards; the MobilityData validator is a manual check when a base timetable changes.

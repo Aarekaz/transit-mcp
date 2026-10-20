@@ -244,6 +244,7 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
       } else if (leg.continuation) reject('CONTINUATION');
       if (!leg.continuation) changes++;
       if (boarding.pickupType !== 0 && !leg.continuation) reject('PICKUP');
+      if (source.stepFree && (trip.wheelchairAccessible === 2 || !leg.continuation && !source.stepFree.usableStopRefs.has(leg.from) || !source.stepFree.usableStopRefs.has(leg.to))) reject('STEP_FREE');
       checked.push(thisRide); previousRide = thisRide;
     }
     currentLeg = undefined;
