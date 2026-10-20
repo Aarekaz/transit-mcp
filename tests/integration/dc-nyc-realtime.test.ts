@@ -227,6 +227,21 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     expect(board.every(row => row.arrival === null)).toBe(true);
   });
 
+  it('never lets two live trains claim one scheduled trip, and plans around the contradiction', async () => {
+    // NYCT published two 7 trains under one short ID; here two entities claim the scheduled 1 train.
+    const stamp = nowSeconds();
+    const claim = (id: string, time: number) => ({ ...nyctTrip('054800_1..S03R', '1', [['129S', time]], '09:09:41'), id });
+    const f = await nyc(nycDocuments(stamp, { 'nyct/gtfs': feedBytes(stamp, [claim('A', civil('09:14:00')), claim('B', civil('09:21:00')),
+      nyctTrip('055400_1..S03R', '1', [['129S', civil('09:19:00')]], '09:14:00')]) }));
+    const rows = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '129'), windowSeconds: 3600 })).structuredContent.departures as Row[];
+    const claimed = rows.filter(row => tripId(row).endsWith('054800_1..S03R'));
+    // Neither claim is presented as the scheduled trip.
+    expect(claimed.every(row => row.scheduleMatch !== 'matched' || row.status === 'scheduled_only')).toBe(true);
+    const plan = (await callTool(f.env, 'plan_trip', { origin: { ref: f.ref('stop', '127') }, destination: { ref: f.ref('stop', '132') }, maxWalkMetres: 0 })).structuredContent;
+    // The rest of the network still plans.
+    expect(plan.itineraries.length).toBeGreaterThan(0);
+  });
+
   it('lists departures across every station of a complex', async () => {
     const f = await nyc();
     // 725 has no scheduled service of its own; the 1 and 2 leave from 127 in the same complex.

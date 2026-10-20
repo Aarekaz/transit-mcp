@@ -97,9 +97,12 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
   const reasons = new Set<VerificationReason>();
   const updates = new Map<string, Map<number, NormalizedStopUpdate>>();
   const observedStarts = new Map<string, Set<number>>();
+  // Two predictions for one call contradict each other: that trip is left out of the search
+  // rather than ridden on a guess, and the rest of the network still plans.
+  const contradicted = new Set<string>();
   for (const row of realtime) if (row.tripInstanceRef && row.stopSequence !== undefined) {
     const calls = updates.get(row.tripInstanceRef) ?? new Map<number, NormalizedStopUpdate>();
-    if (calls.has(row.stopSequence)) throw new Error('Ambiguous realtime stop update');
+    if (calls.has(row.stopSequence)) { contradicted.add(row.tripInstanceRef); continue; }
     calls.set(row.stopSequence, row); updates.set(row.tripInstanceRef, calls);
     const parsed = parseTransitRef(row.tripInstanceRef);
     if (parsed?.kind === 'trip' && 'serviceDate' in parsed) {
@@ -135,7 +138,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
             }
             if (!overlaps) return;
           }
-          if (seen.has(ref)) return;
+          if (seen.has(ref) || contradicted.has(ref)) return;
           const charge = 1024 + ref.length * 8;
           if (baseBytes + realtimeBytes + stops.size * 512 + instanceBytes + charge >= 48 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
           instanceBytes += charge; seen.add(ref);

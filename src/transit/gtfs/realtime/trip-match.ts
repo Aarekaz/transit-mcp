@@ -49,7 +49,7 @@ export interface AppliedTripUpdates {
   version: StaticVersion; trips: NormalizedTripUpdate[]; stopUpdates: NormalizedStopUpdate[];
   match: { eligible: number; matched: number; rate: number };
   /** Trips proven to serve no rider; never part of the match rate. */
-  excluded: { nonRevenue: number; invalidExtras: number; unrepresentableAdded: number; beyondWindow: number; expired?: number }; degraded: boolean; warnings: string[];
+  excluded: { nonRevenue: number; invalidExtras: number; unrepresentableAdded: number; beyondWindow: number; expired?: number; contested?: number }; degraded: boolean; warnings: string[];
   /** Up to five unmatched trips and why (`no_instance` or `calls_rejected`), for diagnosis. */
   unmatchedSample?: string[];
 }
@@ -474,6 +474,16 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
   const routeIds = new Set(shardsInFeed.flatMap(shard => shard.routes.map(route => route.providerId)));
   const stopIds = new Set(shardsInFeed.flatMap(shard => shard.stops.map(stop => stop.providerId)));
   const nyct = context.tripMatching === 'nyct_suffix';
+  // Two live entities claiming one scheduled instance (NYCT has published two 7 trains under
+  // one short ID) contradict each other: neither is that trip, so both stay unmatched.
+  const matches = new Map<NormalizedTripUpdate, MatchedTripInstance | null>(), claims = new Map<string, number>();
+  for (const update of feed.trips) {
+    if (['ADDED', 'REPLACEMENT', 'DUPLICATED'].includes(update.scheduleRelationship)) continue;
+    const match = matchIndexedTrip(update, context, index);
+    matches.set(update, match);
+    if (match) claims.set(match.tripInstanceRef, (claims.get(match.tripInstanceRef) ?? 0) + 1);
+  }
+  let contested = 0;
   for (const update of feed.trips) {
     // A move on a route the schedule does not publish, skipping every stop it lists,
     // serves no rider (e.g. WMATA non-revenue "NR" moves); it is not a match failure.
@@ -503,8 +513,9 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
       // Without a start time, a trip predicted only past the loaded timetable is out of scope.
       if (context.horizonEndSeconds !== undefined && times.length && Math.min(...times) > context.horizonEndSeconds) { beyondWindow++; continue; }
     }
-    eligible++;
-    const match = matchIndexedTrip(update, context, index);
+    let match = matches.has(update) ? matches.get(update)! : matchIndexedTrip(update, context, index);
+    // Contested identity says nothing about the timetable: out of the rate, like non-revenue moves.
+    if (match && (claims.get(match.tripInstanceRef) ?? 0) > 1) { match = null; contested++; } else eligible++;
     if (nyct) {
       const rows = match ? nyctMatchedUpdates(update, match, stopIds) : nyctObservedUpdates(update, context, stopIds, routeIds);
       if (match && rows) matched++;
@@ -533,6 +544,6 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
   const threshold = context.minimumScheduleMatchRate ?? SFBAY_COVERAGE.thresholds.minimumScheduleMatchRate;
   const mismatched = eligible >= MIN_ELIGIBLE_FOR_MATCH_RATE ? rate < threshold : eligible > 0 && matched === 0;
   const degraded = invalidExtras > 0 || mismatched;
-  return { version: context.version, trips: feed.trips, stopUpdates, unmatchedSample, match: { eligible, matched, rate }, excluded: { nonRevenue, invalidExtras, unrepresentableAdded, beyondWindow, ...(context.expiredBeforeSeconds !== undefined ? { expired } : {}) }, degraded,
+  return { version: context.version, trips: feed.trips, stopUpdates, unmatchedSample, match: { eligible, matched, rate }, excluded: { nonRevenue, invalidExtras, unrepresentableAdded, beyondWindow, ...(context.expiredBeforeSeconds !== undefined ? { expired } : {}), ...(contested ? { contested } : {}) }, degraded,
     warnings: [...feed.warnings, ...(degraded ? ['SCHEDULE_REALTIME_MISMATCH'] : [])] };
 }
