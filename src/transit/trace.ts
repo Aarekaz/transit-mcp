@@ -5,12 +5,15 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  * remainder of the call is computation. Counts record reads, bytes and decodes. */
 interface Trace { phases: Record<string, number>; counts: Record<string, number> }
 const traces = new AsyncLocalStorage<Trace>();
+/** Which isolate served the call and how many it has served: caches only help a reused isolate. */
+const isolate = Math.random().toString(36).slice(2, 8);
+let served = 0;
 
 export async function traced<T>(tool: string, run: () => Promise<T>): Promise<T> {
-  const trace: Trace = { phases: {}, counts: {} }, started = Date.now();
+  const trace: Trace = { phases: {}, counts: {} }, started = Date.now(), call = ++served;
   try { return await traces.run(trace, run); }
   finally {
-    console.info(JSON.stringify({ event: 'tool_timing', tool, ms: Date.now() - started, ...Object.fromEntries(Object.entries(trace.phases).map(([name, ms]) => [`${name}Ms`, ms])), ...trace.counts }));
+    console.info(JSON.stringify({ event: 'tool_timing', tool, isolate, call, ms: Date.now() - started, ...Object.fromEntries(Object.entries(trace.phases).map(([name, ms]) => [`${name}Ms`, ms])), ...trace.counts }));
   }
 }
 
