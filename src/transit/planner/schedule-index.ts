@@ -126,6 +126,8 @@ export async function loadScheduleWindow(query: ScheduleWindowQuery): Promise<Sc
         const group = chosen.timeRange ? descriptors.filter(descriptor => descriptor.timeRange && sameWindow(descriptor, chosen)) : [chosen];
         for (const descriptor of group) {
           if (descriptor.timeRange && !(origin + descriptor.timeRange.start * 1000 < end && origin + descriptor.timeRange.end * 1000 >= start)) continue;
+          // An agency-split band serves only the agencies it names.
+          if (descriptor.agencyRefs && !descriptor.agencyRefs.includes(agencyRef as TransitRef)) continue;
           let entry = selected.get(descriptor.key);
           if (!entry) { entry = { descriptor, days: [], source }; selected.set(descriptor.key, entry); }
           entry.days.push({ agencyRef: agencyRef as TransitRef, timezone, serviceDate: date, startTime: formatInstant(origin, timezone) });
@@ -149,7 +151,8 @@ export async function loadScheduleWindow(query: ScheduleWindowQuery): Promise<Sc
       canonicalJson(shard.source) !== canonicalJson(source) || canonicalJson(shard.agencyTimezones) !== canonicalJson(agencyTimezones) ||
       shard.maxStopTimeSeconds !== descriptor.maxStopTimeSeconds || shard.window.startDate !== descriptor.window.startDate || shard.window.endDate !== descriptor.window.endDate ||
       canonicalJson(shard.timeRange ?? null) !== canonicalJson(descriptor.timeRange ?? null) ||
-      days.some(day => shard.agencyTimezones[day.agencyRef] !== day.timezone)) throw new Error('Schedule shard identity mismatch');
+      days.some(day => shard.agencyTimezones[day.agencyRef] !== day.timezone) ||
+      descriptor.agencyRefs && shard.routes.some(route => !descriptor.agencyRefs!.includes(route.agencyRef))) throw new Error('Schedule shard identity mismatch');
     result.shards.push({ shard, key: descriptor.key, serviceDays: days });
   }
   return result;

@@ -102,7 +102,9 @@ export interface ArtifactManifestV2 {
   schemaVersion: 2; coverageId: string; sources: SourceMetadata[];
   agencyTimezones: Record<TransitRef, string>;
   discoveries: (ArtifactObject & { feedId: string })[];
-  shards: (ArtifactObject & { feedId: string; window: ServiceWindow; maxStopTimeSeconds: number; timeRange?: ShardTimeRange })[];
+  shards: (ArtifactObject & { feedId: string; window: ServiceWindow; maxStopTimeSeconds: number; timeRange?: ShardTimeRange;
+    /** Present when a band is split by agency: the only agencies whose trips it holds. */
+    agencyRefs?: TransitRef[] })[];
   validator?: ValidatorEvidence;
 }
 export interface CompileScheduleInput {

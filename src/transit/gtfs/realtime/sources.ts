@@ -8,7 +8,8 @@ import { SF511_QUOTA_NAMESPACE } from './snapshot-store';
 /** Server-side provider adapters. Public coverage manifests stay credential-free. */
 const policies: Readonly<Record<string, RealtimeSourcePolicy>> = {
   sfbay: { namespace: SF511_QUOTA_NAMESPACE, feedId: 'sf511', auth: { kind: 'query_token', secretEnv: SFBAY_REGION.secretEnv },
-    budget: SFBAY_REGION.realtime.budget, tripMatching: 'exact' },
+    // Predictions reach about an hour ahead; three hours of agency-split shards per group suffice.
+    budget: SFBAY_REGION.realtime.budget, tripMatching: 'exact', matchWindowSeconds: 3 * 3600 },
   dc: { namespace: 'dc:wmata', feedId: 'wmata', auth: { kind: 'header', header: 'api_key', secretEnv: 'WMATA_API_KEY' },
     // Shares the legacy tools' key: stay far below WMATA's default daily allowance.
     budget: { requestsPerHour: 600, safetyFactor: 0.8, reserveForStatic: 0 }, tripMatching: 'exact' },

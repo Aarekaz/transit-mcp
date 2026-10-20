@@ -53,6 +53,8 @@ export interface JourneyQuery extends Omit<ValidationSource, 'shards'> {
   maxWalkMetres?: number;
   /** Vehicle changes, default three, maximum four. In-seat continuation does not consume one. */
   maxTransfers?: number;
+  /** For agency-split schedules: the agencies whose service this search may use. */
+  agencyRefs?: TransitRef[];
 }
 export interface ValidationResult {
   valid: boolean;

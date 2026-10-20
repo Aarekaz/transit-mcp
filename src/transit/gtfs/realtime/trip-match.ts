@@ -350,6 +350,19 @@ function addedUpdates(update: NormalizedTripUpdate, context: TripMatchContext): 
 }
 
 /** Normalize only against shards already checked by loadScheduleWindow. Never fetches. */
+/** Combines matching done one agency group at a time. The schedule-identity verdict is
+ * taken once over all groups: a small group alone is never evidence of a wrong schedule. */
+export function mergeAppliedTripUpdates(parts: AppliedTripUpdates[], trips: NormalizedTripUpdate[], version: StaticVersion, minimumScheduleMatchRate: number, warnings: string[]): AppliedTripUpdates {
+  const eligible = parts.reduce((sum, part) => sum + part.match.eligible, 0), matched = parts.reduce((sum, part) => sum + part.match.matched, 0);
+  const excluded = { nonRevenue: 0, invalidExtras: 0, unrepresentableAdded: 0 };
+  for (const part of parts) for (const key of Object.keys(excluded) as (keyof typeof excluded)[]) excluded[key] += part.excluded[key];
+  const rate = eligible ? matched / eligible : 1;
+  const mismatched = eligible >= MIN_ELIGIBLE_FOR_MATCH_RATE ? rate < minimumScheduleMatchRate : eligible > 0 && matched === 0;
+  const degraded = excluded.invalidExtras > 0 || mismatched;
+  return { version, trips, stopUpdates: parts.flatMap(part => part.stopUpdates), match: { eligible, matched, rate }, excluded, degraded,
+    warnings: [...new Set([...warnings, ...parts.flatMap(part => part.warnings.filter(warning => warning !== 'SCHEDULE_REALTIME_MISMATCH')), ...(degraded ? ['SCHEDULE_REALTIME_MISMATCH'] : [])])] };
+}
+
 export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: TripMatchContext): Promise<AppliedTripUpdates> {
   assertIdentity(context);
   if (!sameStaticVersion(await staticVersion(context.manifest), context.version)) throw new Error('Realtime static artifact version mismatch');

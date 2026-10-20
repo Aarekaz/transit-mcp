@@ -5,6 +5,7 @@ import { complete } from '../../shared';
 import { getCoverage, getCoverages, type CoverageManifest } from '../../../transit/core/coverage';
 import { getCoverageMode } from '../../../regions/manifest';
 import { formatEntityRef, parseTransitRef, type TransitRef } from '../../../transit/core/refs';
+import { BACKBONE_MODES } from '../../../transit/gtfs/static/partition';
 import { VERIFICATION_REASONS, type SourceStatus, type VerificationReason } from '../../../transit/core/results';
 import { StaticArtifactStore, readBoundedObject, sameStaticVersion, type StaticVersion } from '../../../transit/gtfs/realtime/snapshot-store';
 import { credential, getRealtimeSource, publishedKinds } from '../../../transit/gtfs/realtime/sources';
@@ -249,6 +250,44 @@ export function routeName(route: { shortName: string; longName: string }): strin
   const initial = route.shortName.length === 1 && route.longName.toUpperCase().startsWith(route.shortName.toUpperCase());
   return sanitizeTransitText(!route.shortName || initial ? route.longName || route.shortName : route.shortName, 120);
 }
+/** For agency-split schedules only (else undefined, meaning every agency): the agencies a
+ * journey can use. A station or stop endpoint brings the agencies serving it; a point
+ * brings those with a stop within the walking limit; the regional backbone (agencies
+ * running only rail, subway or ferry) joins them. A journey needing a third local agency
+ * between the two ends is not searched. */
+export function journeyAgencies(data: TransitData, endpoints: readonly (TransitRef | { latitude: number; longitude: number })[], walkMetres: number): TransitRef[] | undefined {
+  if (!data.manifest.shards.some(shard => shard.agencyRefs)) return undefined;
+  const routes = new Map(data.indexes.flatMap(index => index.routes).map(route => [route.ref as string, route]));
+  const agencies = new Set<TransitRef>(), modes = new Map<string, Set<string>>();
+  for (const route of routes.values()) { const set = modes.get(route.agencyRef) ?? new Set<string>(); set.add(route.mode); modes.set(route.agencyRef, set); }
+  for (const [agency, set] of modes) if ([...set].every(mode => BACKBONE_MODES.has(mode))) agencies.add(agency as TransitRef);
+  const serve = (stop: string) => { for (const index of data.indexes) for (const route of index.stopRoutes[stop as TransitRef] ?? []) { const agency = routes.get(route)?.agencyRef; if (agency) agencies.add(agency); } };
+  const metres = (a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }) => {
+    const radians = Math.PI / 180, x = (b.longitude - a.longitude) * radians * Math.cos((a.latitude + b.latitude) * radians / 2), y = (b.latitude - a.latitude) * radians;
+    return Math.hypot(x, y) * 6_371_000;
+  };
+  for (const endpoint of endpoints) {
+    if (typeof endpoint === 'string') {
+      serve(endpoint);
+      for (const index of data.indexes) for (const stop of index.stops) if (stop.parentStationRef === endpoint) serve(stop.ref);
+      continue;
+    }
+    for (const index of data.indexes) for (const stop of index.stops) {
+      if (stop.latitude !== null && stop.longitude !== null && metres(endpoint, { latitude: stop.latitude, longitude: stop.longitude }) <= walkMetres) serve(stop.ref);
+    }
+  }
+  return [...agencies].sort();
+}
+/** Agencies to decode for a station board: the caller's filter, narrowed for agency-split
+ * schedules to the agencies whose routes serve these stops. */
+export function stationAgencies(data: TransitData, stopRefs: ReadonlySet<string>, requested?: readonly string[]): TransitRef[] | undefined {
+  const filter = requested?.map(asTransitRef);
+  if (!data.manifest.shards.some(shard => shard.agencyRefs)) return filter;
+  const routes = new Map(data.indexes.flatMap(index => index.routes).map(route => [route.ref as string, route.agencyRef]));
+  const serving = new Set<TransitRef>();
+  for (const index of data.indexes) for (const stop of stopRefs) for (const route of index.stopRoutes[stop as TransitRef] ?? []) { const agency = routes.get(route); if (agency) serving.add(agency); }
+  return [...serving].filter(agency => !filter || filter.includes(agency)).sort();
+}
 /** The other stations in a station's complex (Times Sq-42 St is published as four). */
 export function complexStations(data: TransitData, stationRef: string): string[] {
   const station = stopsByRef(data).get(stationRef);
@@ -282,7 +321,9 @@ export async function detail(data: TransitData, ref: string) {
     const start = 'startTime' in parsed ? parseGtfsTime(parsed.startTime).totalSeconds : undefined;
     const descriptors = data.manifest.shards.filter(shard => shard.feedId === entity.feed && (!shard.timeRange || day === undefined || day >= shard.window.startDate && day <= shard.window.endDate) &&
       (!('serviceDate' in parsed) || parsed.serviceDate >= shard.window.startDate && parsed.serviceDate <= shard.window.endDate) &&
-      (start === undefined || !shard.timeRange || start >= shard.timeRange.bandStart && start < shard.timeRange.bandEnd));
+      (start === undefined || !shard.timeRange || start >= shard.timeRange.bandStart && start < shard.timeRange.bandEnd) &&
+      // A route's patterns live only in its own agency's split shards.
+      (!shard.agencyRefs || !route || shard.agencyRefs.includes(route.agencyRef)));
     let total = 0;
     for (const descriptor of descriptors) {
       total += descriptor.byteLength;

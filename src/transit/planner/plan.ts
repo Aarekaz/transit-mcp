@@ -28,7 +28,7 @@ export async function planJourney(query: JourneyQuery, signal?: AbortSignal): Pr
   const reasons = new Set<VerificationReason>();
   const version = await staticVersion(query.manifest); assertNotAborted(signal);
   let bytes = 0;
-  const window = await loadScheduleWindow({ manifest: query.manifest, instant: query.departAt, windowSeconds: query.windowSeconds ?? 7200, decoded: query.decoded,
+  const window = await loadScheduleWindow({ manifest: query.manifest, instant: query.departAt, windowSeconds: query.windowSeconds ?? 7200, agencyRefs: query.agencyRefs, decoded: query.decoded,
     readShard: async key => {
       assertNotAborted(signal);
       const descriptor = query.manifest.shards.find(shard => shard.key === key)!;

@@ -10,7 +10,7 @@ import type { SourceStatus, VerificationReason } from '../../../transit/core/res
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { canonicalJson, sha256 } from '../../../transit/gtfs/static/shards';
 import { DecodedShardCache } from '../../../transit/planner/schedule-index';
-import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, candidates, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, sameStation, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, journeyAgencies, candidates, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, sameStation, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
 
 const journeyEndpoint = z.union([z.string(), coordinatesSchema]);
 const transitLeg = z.strictObject({ kind: z.literal('transit'), from: z.string(), to: z.string(), tripRef: z.string(), tripInstanceRef: z.string(), serviceDate: z.string(), instanceStartSeconds: z.number(),
@@ -116,7 +116,9 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       windowSeconds: args.windowSeconds, maxWalkMetres: args.maxWalkMetres, maxTransfers: args.maxTransfers, realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds,
       // Journeys come only from schedule data; observed-only rows cannot form legs.
       realtime: feed.payload !== null && feed.version && feed.receivedAtSeconds !== undefined ? { ...feed, payload: scheduledRealtimeRows(feed.payload), version: feed.version, receivedAtSeconds: feed.receivedAtSeconds } : undefined,
-      ...(stepFree ? { stepFree } : {}) }, handler.mcpReq.signal);
+      ...(stepFree ? { stepFree } : {}),
+      // Agency-split schedules (SF Bay) decode only the agencies this journey can use.
+      ...(() => { const agencyRefs = journeyAgencies(data, [resolved.origin!, resolved.destination!], Math.min(800, args.maxWalkMetres ?? 800)); return agencyRefs ? { agencyRefs } : {}; })() }, handler.mcpReq.signal);
     let result: Awaited<typeof planned>;
     // A search too large for this isolate is a scope limit, not missing coverage.
     try { result = await planned; }

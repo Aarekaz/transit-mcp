@@ -1,13 +1,14 @@
 import type { Env } from '../../../types';
 import type { RealtimeFeedKind, RealtimeFeedSpec } from '../../../regions/types';
 import { allocatePollIntervals } from '../upstream/budget';
-import { decodeRealtimeFeed, type NormalizedAlert, type NormalizedRealtimeFeed } from './decode';
+import { decodeRealtimeFeed, type NormalizedAlert, type NormalizedRealtimeFeed, type NormalizedVehicle } from './decode';
 import { RegionalFeedHubCore } from './hub-core';
 import { ApiKeyQuota, RealtimeSnapshotStore, StaticArtifactStore, readBoundedObject, type StaticVersion } from './snapshot-store';
 import { DecodedShardCache, loadScheduleWindow } from '../../planner/schedule-index';
-import { applyTripUpdates, applyVehiclePositions, matchVehicles, settleStoppedVehicles } from './trip-match';
+import { applyTripUpdates, applyVehiclePositions, matchVehicles, mergeAppliedTripUpdates, settleStoppedVehicles } from './trip-match';
 import { decodeDiscoveryIndex, sha256 } from '../static/shards';
-import type { DiscoveryIndex } from '../static/schema';
+import type { ArtifactManifestV2, DiscoveryIndex } from '../static/schema';
+import type { TransitRef } from '../../core/refs';
 import { decodeEquipmentOutages } from '../../accessibility/equipment';
 import { feedParts, getRealtimeSource, getRealtimeSources, ingestionActive, publishedKinds, upstreamRequest, type RealtimeSource } from './sources';
 
@@ -48,6 +49,13 @@ export function mergeRealtimeParts(parts: NormalizedRealtimeFeed[]): NormalizedR
     // An empty document is still a complete answer for its lines.
     warnings: [...new Set(parts.flatMap(part => part.warnings))],
   };
+}
+
+/** The agency groups of an agency-split schedule, or null when shards are not split. */
+export function agencyGroups(manifest: ArtifactManifestV2): Set<string>[] | null {
+  const groups = new Map<string, Set<string>>();
+  for (const shard of manifest.shards) if (shard.agencyRefs) groups.set(shard.agencyRefs.join('\n'), new Set(shard.agencyRefs));
+  return groups.size ? [...groups.values()] : null;
 }
 
 /** Reviewed provider aliases only; unknown agency IDs remain unmatched. */
@@ -202,6 +210,19 @@ export class RegionFeedHub implements DurableObject {
     console.info(JSON.stringify({ event: 'regional_feed_polled', region: source.coverage.id, feed: spec.kind, outages: decoded.outages.length }));
   }
 
+  /** The feed's verified discovery index, decoded once per artifact version. */
+  async #discoveryIndex(feedId: string, manifest: ArtifactManifestV2): Promise<DiscoveryIndex> {
+    const descriptors = manifest.discoveries.filter(item => item.feedId === feedId);
+    if (descriptors.length !== 1) throw new Error('Discovery identity missing or ambiguous');
+    const descriptor = descriptors[0]!;
+    if (this.#discovery?.sha256 !== descriptor.sha256) {
+      const discoveryBytes = await readBoundedObject(this.#env.TRANSIT_ARTIFACTS!, descriptor.key, Math.min(descriptor.byteLength, 64 * 1024 * 1024));
+      if (discoveryBytes.length !== descriptor.byteLength || await sha256(discoveryBytes) !== descriptor.sha256) throw new Error('Discovery integrity failure');
+      this.#discovery = { sha256: descriptor.sha256, index: decodeDiscoveryIndex(discoveryBytes) };
+    }
+    return this.#discovery.index;
+  }
+
   async #poll(source: RealtimeSource, spec: RealtimeFeedSpec, nowSeconds: number): Promise<void> {
     const { coverage, policy } = source;
     try {
@@ -229,18 +250,36 @@ export class RegionFeedHub implements DurableObject {
         windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [policy.feedId], decoded: this.#shards });
       const matching = { manifest: current.manifest, version: current.version, feedId: policy.feedId, tripMatching: policy.tripMatching,
         minimumScheduleMatchRate: coverage.thresholds.minimumScheduleMatchRate };
-      if (spec.kind === 'trip_updates') {
+      // Agency-split schedules (SF Bay) are matched one agency group at a time, so the
+      // coordinator never holds the whole region's timetable.
+      const groups = agencyGroups(current.manifest);
+      if (spec.kind === 'trip_updates' && groups) {
+        const discovery = await this.#discoveryIndex(policy.feedId, current.manifest);
+        lap('discovery');
+        const parts: Awaited<ReturnType<typeof applyTripUpdates>>[] = [], vehicleParts: NormalizedVehicle[][] = [];
+        const agencyOf = new Map(discovery.routes.map(route => [route.providerId, route.agencyRef as string]));
+        for (const group of [...groups, null]) {
+          // The last pass holds trips on routes the schedule does not publish: all unmatched.
+          const inGroup = (routeId: string | undefined) => group ? group.has(agencyOf.get(routeId ?? '') ?? '') : !groups.some(known => known.has(agencyOf.get(routeId ?? '') ?? ''));
+          const trips = decoded.trips.filter(trip => inGroup(trip.routeId));
+          if (!trips.length) continue;
+          const window = group ? await loadScheduleWindow({ manifest: current.manifest, instant: new Date(nowSeconds * 1000).toISOString(),
+            windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [policy.feedId], agencyRefs: [...group] as TransitRef[] }) : null;
+          const shards = window?.shards.map(entry => entry.shard) ?? [];
+          parts.push(await applyTripUpdates({ ...decoded, trips }, { ...matching, shards, discoveries: [discovery] }));
+          if (spec.alsoPublishes?.includes('vehicle_positions')) vehicleParts.push(matchVehicles(decoded.vehicles.filter(vehicle => inGroup(vehicle.routeId)), { ...matching, shards }));
+        }
+        lap('matched');
+        const applied = mergeAppliedTripUpdates(parts, decoded.trips, current.version, coverage.thresholds.minimumScheduleMatchRate, decoded.warnings);
+        payload = applied.stopUpdates; degraded = applied.degraded; warnings = applied.warnings;
+        if (spec.alsoPublishes?.includes('vehicle_positions')) vehicles = vehicleParts.flat();
+        Object.assign(timings, { rows: payload.length, groups: groups.length });
+        console.info(JSON.stringify({ event: 'regional_trip_match', region: coverage.id, ...applied.match, ...applied.excluded }));
+        await this.#state.storage.put('stats:trip_updates', { artifactVersion: current.version.artifactVersion, ...applied.match, atSeconds: nowSeconds });
+      } else if (spec.kind === 'trip_updates') {
         const window = await matchWindow();
         lap('schedule');
-        const descriptors = current.manifest.discoveries.filter(item => item.feedId === policy.feedId);
-        if (descriptors.length !== 1) throw new Error('Discovery identity missing or ambiguous');
-        const descriptor = descriptors[0]!;
-        if (this.#discovery?.sha256 !== descriptor.sha256) {
-          const discoveryBytes = await readBoundedObject(this.#env.TRANSIT_ARTIFACTS, descriptor.key, Math.min(descriptor.byteLength, 64 * 1024 * 1024));
-          if (discoveryBytes.length !== descriptor.byteLength || await sha256(discoveryBytes) !== descriptor.sha256) throw new Error('Discovery integrity failure');
-          this.#discovery = { sha256: descriptor.sha256, index: decodeDiscoveryIndex(discoveryBytes) };
-        }
-        const discovery = this.#discovery.index;
+        const discovery = await this.#discoveryIndex(policy.feedId, current.manifest);
         lap('discovery');
         const applied = await applyTripUpdates(decoded, { ...matching, shards: window.shards.map(entry => entry.shard), discoveries: [discovery] });
         lap('matched');
@@ -252,7 +291,21 @@ export class RegionFeedHub implements DurableObject {
         // The schedule refresh compares this before and after publishing a new artifact.
         await this.#state.storage.put('stats:trip_updates', { artifactVersion: current.version.artifactVersion, ...applied.match, atSeconds: nowSeconds });
       }
-      if (spec.kind === 'vehicle_positions') {
+      if (spec.kind === 'vehicle_positions' && groups) {
+        const discovery = await this.#discoveryIndex(policy.feedId, current.manifest);
+        const agencyOf = new Map(discovery.routes.map(route => [route.providerId, route.agencyRef as string]));
+        const matched: NormalizedVehicle[] = [];
+        for (const group of groups) {
+          const own = decoded.vehicles.filter(vehicle => group.has(agencyOf.get(vehicle.routeId ?? '') ?? ''));
+          if (!own.length) continue;
+          const window = await loadScheduleWindow({ manifest: current.manifest, instant: new Date(nowSeconds * 1000).toISOString(),
+            windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [policy.feedId], agencyRefs: [...group] as TransitRef[] });
+          matched.push(...await applyVehiclePositions(own, { ...matching, shards: window.shards.map(entry => entry.shard) }));
+        }
+        // Vehicles on routes the schedule does not publish stay as observed, unmatched.
+        matched.push(...decoded.vehicles.filter(vehicle => !groups.some(group => group.has(agencyOf.get(vehicle.routeId ?? '') ?? ''))).map(({ tripInstanceRef: _unverified, ...vehicle }) => vehicle));
+        payload = matched;
+      } else if (spec.kind === 'vehicle_positions') {
         const window = await matchWindow();
         payload = await applyVehiclePositions(decoded.vehicles, { ...matching, shards: window.shards.map(entry => entry.shard) });
       }
