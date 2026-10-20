@@ -5,9 +5,17 @@ import { getCoverage, type CoverageManifest } from '../../core/coverage';
 export interface StaticSourcePolicy {
   coverageId: string;
   feedId: string;
-  /** Official, credential-free archive URL (credentials travel as headers). */
+  /** Official, credential-free archive URL; a credential is added only at request time. */
   url: string;
-  auth: { kind: 'header'; header: string; secretEnv: 'WMATA_API_KEY' } | { kind: 'none' };
+  auth: { kind: 'header'; header: string; secretEnv: 'WMATA_API_KEY' } | { kind: 'query'; param: string; secretEnv: 'SF511_API_KEY' } | { kind: 'none' };
+  /** The credential's hourly allowance is owned by this coverage's realtime coordinator:
+   * every archive request claims its reserved static share first. */
+  quota?: boolean;
+  /** Stream the archive into storage instead of holding it in memory (large feeds). */
+  stream?: boolean;
+  /** `offline`: the cron stores new archives but never starts an edge build; a reviewed,
+   * validator-gated offline build publishes. Defaults to `edge`. */
+  build?: 'edge' | 'offline';
   /** The publisher answers If-None-Match with 304, so a check costs no body. */
   conditional: boolean;
   checkIntervalSeconds: number;
@@ -28,6 +36,11 @@ const policies: readonly StaticSourcePolicy[] = [
     auth: { kind: 'none' },
     // MTA republishes planned service changes several times a day.
     conditional: true, checkIntervalSeconds: 5 * 60, windowDays: 7, maxArchiveBytes: 64_000_000 },
+  // 511's consolidated regional feed (operator RG). The token's 60 requests an hour are
+  // shared with realtime polling; one archive request per check comes from the reserve.
+  { coverageId: 'sfbay', feedId: 'sf511', url: 'https://api.511.org/transit/datafeeds?operator_id=RG',
+    auth: { kind: 'query', param: 'api_key', secretEnv: 'SF511_API_KEY' }, quota: true, stream: true, build: 'offline',
+    conditional: false, checkIntervalSeconds: 12 * 3600, windowDays: 7, maxArchiveBytes: 128_000_000 },
 ];
 
 export function getStaticSources(): readonly (StaticSourcePolicy & { coverage: CoverageManifest })[] {

@@ -211,6 +211,46 @@ export async function collectGarbage(bucket: R2Bucket, coverageId: string, runAr
   return { deleted: garbage.length };
 }
 
+/** Claims one request from the coordinator that owns this coverage's credential budget. */
+async function claimStaticQuota(env: Env, coverageId: string): Promise<boolean> {
+  const realtime = getRealtimeSource(coverageId);
+  if (!realtime || !env.REGION_FEED_HUB) return false;
+  const response = await env.REGION_FEED_HUB.get(env.REGION_FEED_HUB.idFromName(realtime.policy.namespace))
+    .fetch('https://region-feed-hub.internal/quota/static', { method: 'POST' });
+  return response.ok && (await response.json<{ allowed: boolean }>()).allowed === true;
+}
+
+const hex = (buffer: ArrayBuffer) => [...new Uint8Array(buffer)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+/** Streams a large archive into a staging object while hashing it, then moves it to its
+ * content address only when it is new. Memory stays flat whatever the archive's size. */
+async function storeStreamedArchive(bucket: R2Bucket, policy: StaticSourcePolicy, body: ReadableStream<Uint8Array>, declared: number, previous?: string): Promise<string> {
+  const keys = sourceKeys(policy.coverageId), staging = `sources/${policy.coverageId}/incoming.zip`;
+  let total = 0;
+  const counted = body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({ transform(chunk, controller) {
+    total += chunk.byteLength;
+    if (total > policy.maxArchiveBytes) throw new Error('source_too_large');
+    controller.enqueue(chunk);
+  } }));
+  let hash: string;
+  if (typeof crypto.DigestStream === 'function' && Number.isFinite(declared) && declared > 0) {
+    const [toHash, toStore] = counted.tee(), digest = new crypto.DigestStream('SHA-256');
+    await Promise.all([toHash.pipeTo(digest), bucket.put(staging, toStore.pipeThrough(new FixedLengthStream(declared)))]);
+    hash = hex(await digest.digest);
+  } else {
+    // No streaming digest or declared length (tests, chunked replies): buffer once.
+    const bytes = new Uint8Array(await new Response(counted).arrayBuffer());
+    hash = await sha256(bytes);
+    await bucket.put(staging, bytes);
+  }
+  if (hash !== previous && !await bucket.head(keys.archive(hash))) {
+    const object = await bucket.get(staging);
+    if (!object) throw new Error('source_staging_missing');
+    await bucket.put(keys.archive(hash), typeof FixedLengthStream === 'function' ? object.body.pipeThrough(new FixedLengthStream(object.size)) : await object.arrayBuffer());
+  }
+  await bucket.delete(staging);
+  return hash;
+}
+
 /** Cron: cheap change detection. A conditional GET usually answers 304 with no body;
  * only a new archive hash starts a refresh. Never throws for one coverage's failure. */
 export async function checkStaticSources(env: Env, now: number): Promise<void> {
@@ -221,23 +261,28 @@ export async function checkStaticSources(env: Env, now: number): Promise<void> {
     try {
       const state = await readJson<SourceState>(bucket, keys.state) ?? { checkedAt: 0 };
       if (now - state.checkedAt < policy.checkIntervalSeconds * 1000 - 30_000) return;
-      const headers: Record<string, string> = {};
-      if (policy.auth.kind === 'header') {
+      const headers: Record<string, string> = {}, target = new URL(policy.url);
+      if (policy.auth.kind !== 'none') {
         const key = env[policy.auth.secretEnv];
         if (!key) throw new Error('source_credential_missing');
-        headers[policy.auth.header] = key;
+        if (policy.auth.kind === 'header') headers[policy.auth.header] = key; else target.searchParams.set(policy.auth.param, key);
       }
       if (policy.conditional && state.etag) headers['if-none-match'] = state.etag;
-      const response = await fetch(policy.url, { headers, signal: AbortSignal.timeout(25_000) });
+      if (policy.quota && !await claimStaticQuota(env, policy.coverageId)) throw new Error('source_quota_exhausted');
+      const response = await fetch(target, { headers, signal: AbortSignal.timeout(policy.stream ? 120_000 : 25_000) });
       let next: SourceState = { ...state, checkedAt: now };
       if (response.status !== 304) {
         if (!response.ok) throw new Error(`source_status_${response.status}`);
         const declared = Number(response.headers.get('content-length'));
         if (Number.isFinite(declared) && declared > policy.maxArchiveBytes) throw new Error('source_too_large');
-        const bytes = new Uint8Array(await response.arrayBuffer());
-        if (bytes.length > policy.maxArchiveBytes) throw new Error('source_too_large');
-        const hash = await sha256(bytes);
-        if (hash !== state.sha256) await putAbsent(bucket, keys.archive(hash), bytes);
+        let hash: string;
+        if (policy.stream && response.body) hash = await storeStreamedArchive(bucket, policy, response.body, declared, state.sha256);
+        else {
+          const bytes = new Uint8Array(await response.arrayBuffer());
+          if (bytes.length > policy.maxArchiveBytes) throw new Error('source_too_large');
+          hash = await sha256(bytes);
+          if (hash !== state.sha256) await putAbsent(bucket, keys.archive(hash), bytes);
+        }
         next = { sha256: hash, etag: response.headers.get('etag') ?? undefined, checkedAt: now,
           retrievedAt: hash === state.sha256 ? state.retrievedAt : new Date(now).toISOString(),
           ...(hash === state.sha256 && state.restarts ? { restarts: state.restarts } : {}) };
@@ -246,7 +291,7 @@ export async function checkStaticSources(env: Env, now: number): Promise<void> {
       // Start (or keep) a refresh until the published version came from this archive.
       const published = await new StaticArtifactStore(bucket, policy.coverageId).current().catch(() => null);
       const publishedArchive = published?.manifest.sources[0]?.derivedFrom?.archiveSha256 ?? published?.manifest.sources[0]?.archiveSha256;
-      if (next.sha256 && next.retrievedAt && publishedArchive !== next.sha256) {
+      if (policy.build !== 'offline' && next.sha256 && next.retrievedAt && publishedArchive !== next.sha256) {
         const id = `refresh-${policy.coverageId}-${next.sha256.slice(0, 32)}`;
         try {
           await workflow.create({ id, params: { coverageId: policy.coverageId, archiveSha256: next.sha256, retrievedAt: next.retrievedAt } satisfies RefreshParams });

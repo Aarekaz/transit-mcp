@@ -217,6 +217,37 @@ describe('edge refresh workflow', () => {
     expect(warnings).toHaveBeenCalledWith(expect.stringContaining('schedule_refresh_gave_up'));
   });
 
+  it('fetches the 511 archive only within its quota, streams it to storage and leaves the build offline', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW));
+    const db = memoryStorage(), archive = await zip({ 'agency.txt': 'agency_id\n' }), hash = await sha256(archive);
+    let allowed = false, claims = 0;
+    const created: unknown[] = [];
+    const env = { TRANSIT_ARTIFACTS: db.bucket, SFBAY_MODE: 'dark', TRANSIT_COVERAGE_MODES: '{}', SF511_API_KEY: 'secret-token',
+      REGION_FEED_HUB: { idFromName: (name: string) => name, get: (name: string) => ({ fetch: async (url: string) => {
+        expect(name).toBe('sfbay:511'); expect(url).toContain('/quota/static'); claims++;
+        return Response.json({ allowed });
+      } }) },
+      TRANSIT_REFRESH: { create: async (options: unknown) => { created.push(options); }, get: async () => { throw new Error('unused'); } } } as unknown as Env;
+    const requests: Request[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => { const request = new Request(input as RequestInfo, init); requests.push(request); return new Response(archive); });
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // The coordinator refuses: no request leaves, and the failure names no token.
+    await checkStaticSources(env, Date.now());
+    expect(claims).toBe(1); expect(requests).toHaveLength(0);
+    expect(warnings.mock.calls.flat().join(' ')).toContain('source_quota_exhausted');
+    expect(warnings.mock.calls.flat().join(' ')).not.toContain('secret-token');
+    allowed = true;
+    await checkStaticSources(env, Date.now() + 60_000);
+    expect(requests).toHaveLength(1);
+    expect(new URL(requests[0]!.url).searchParams.get('operator_id')).toBe('RG');
+    expect(new URL(requests[0]!.url).searchParams.get('api_key')).toBe('secret-token');
+    expect(await db.bucket.head(sourceKeys('sfbay').archive(hash))).not.toBeNull();
+    expect(await db.bucket.head('sources/sfbay/incoming.zip')).toBeNull();
+    // A reviewed offline build publishes SF; the cron never starts an edge build.
+    expect(created).toEqual([]);
+    expect(JSON.stringify(await (await db.bucket.get(sourceKeys('sfbay').state))!.json())).not.toContain('secret-token');
+  });
+
   it('checks sources cheaply: conditional requests, one refresh per new archive', async () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW));
     const db = memoryStorage(), archive = await zip(NYC_FILES as Record<string, string>), hash = await sha256(archive);
