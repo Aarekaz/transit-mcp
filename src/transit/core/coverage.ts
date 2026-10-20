@@ -20,7 +20,18 @@ export type CoverageWorkerBindings = {
   /** JSON object of known coverage IDs to rollout modes. New coverage defaults off.
    * SFBAY_MODE remains authoritative for SF and its existing ingestion coordinator. */
   TRANSIT_COVERAGE_MODES?: string;
+  /** JSON array of coverage IDs this deployment serves without journey planning: their
+   * departures, alerts and vehicles stay on while plan_trip says PLANNING_UNAVAILABLE. */
+  TRANSIT_PLANNING_OFF?: string;
 };
+
+/** Whether this deployment withholds journey planning for a coverage. Malformed is off for all. */
+export function planningWithheld(id: string, bindings: CoverageWorkerBindings): boolean {
+  try {
+    const off: unknown = JSON.parse(bindings.TRANSIT_PLANNING_OFF ?? '[]');
+    return !Array.isArray(off) || off.includes(id);
+  } catch { return true; }
+}
 
 /** Source support, independent of whether a coverage is publicly enabled. */
 export interface CoverageCapability {

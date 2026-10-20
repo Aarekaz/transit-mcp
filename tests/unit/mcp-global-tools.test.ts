@@ -519,6 +519,17 @@ describe('global transit MCP boundary', () => {
     const value = await call(env, 'plan_trip', { origin: { ref: ref('stop', 'A') }, destination: { ref: ref('stop', 'C') }, ...extra });
     expect(value.error ?? value.result?.isError).toBeTruthy();
   });
+  it('withholds planning for a coverage the deployment lists, keeping its other tools', async () => {
+    const { env } = await fixture();
+    const plan = async (planningOff?: string) => (await call({ ...env, ...(planningOff ? { TRANSIT_PLANNING_OFF: planningOff } : {}) } as typeof env, 'plan_trip',
+      { origin: { ref: ref('stop', 'A') }, destination: { ref: ref('stop', 'C') }, departAt: at('08:59:00') })).result.structuredContent;
+    expect(await plan('["sfbay"]')).toMatchObject({ status: 'unavailable', reasons: ['PLANNING_UNAVAILABLE'], itineraries: [] });
+    expect((await plan()).reasons).not.toContain('PLANNING_UNAVAILABLE');
+    const found = (await call({ ...env, TRANSIT_PLANNING_OFF: '["sfbay"]' } as typeof env, 'find_transit', { query: 'sfbay' })).result.structuredContent;
+    expect(found.coverages[0].capabilities).toMatchObject({ planning: false, schedules: true });
+    // Malformed configuration withholds planning everywhere rather than guessing.
+    expect(await plan('not json')).toMatchObject({ reasons: ['PLANNING_UNAVAILABLE'] });
+  });
   it('returns deterministic candidate errors without elicitation and resolves both choices in one round', async () => {
     const { env } = await fixture(true);
     const args = { coverage: 'sfbay', origin: { query: 'Origin' }, destination: { query: 'Destination' }, departAt: at('08:59:00'), maxWalkMetres: 0 };

@@ -608,7 +608,7 @@
     <header class="hero">
       <div>
         <h1>Docs for the <span class="accent">live transit MCP</span>.</h1>
-        <p class="lede">Transit MCP exposes DC Metro and NYC Subway data through MCP tools, resources, and prompts. SF Bay support is in development. This page covers setup, endpoints, tool capabilities, and official data sources.</p>
+        <p class="lede">Transit MCP exposes DC Metro, NYC Subway and SF Bay Area data through MCP tools, resources, and prompts. This page covers setup, endpoints, tool capabilities, and official data sources.</p>
         <aside class="rename-notice" aria-label="Project rename">
           <p><strong>Metro MCP is now Transit MCP.</strong> The new home is <a href="https://transitmcp.com/">transitmcp.com</a> and the docs now live at <a href="https://transitmcp.com/docs/">transitmcp.com/docs</a>. It is the same server with the same docs. The old endpoint <code>https://metro-mcp.anuragd.me/mcp</code> and the old site will continue to be supported and keep working.</p>
         </aside>
@@ -714,7 +714,7 @@
             </div>
             <div class="tool-card">
               <h3>San Francisco Bay Area</h3>
-              <p>SF Bay support is in development. The global tools report it as unavailable until its data passes the same checks. Data attribution remains with 511 SF Bay and participating operators.</p>
+              <p>The global tools serve departures, service alerts and vehicle locations for every operator in 511 SF Bay's regional feed (Muni, BART, Caltrain, AC Transit, VTA, SamTrans and more). Journey planning is not offered in the Bay Area yet: <code>plan_trip</code> returns <code>PLANNING_UNAVAILABLE</code>. Data attribution remains with 511 SF Bay and participating operators.</p>
             </div>
             <div class="tool-card">
               <h3>Progress and safety hints</h3>
@@ -754,7 +754,7 @@
             <article class="source-card">
               <header>
                 <h3>511 SF Bay: regional transit</h3>
-                <p class="note">Development pipeline only; not available through public MCP tools. Transit data provided by 511 SF Bay and participating Bay Area operators.</p>
+                <p class="note">Regional schedule and realtime feeds for the global tools (departures, alerts, vehicles). Transit data provided by 511 SF Bay and participating Bay Area operators.</p>
               </header>
               <div class="table-wrap"><table><thead><tr><th>Capability</th><th>Source</th><th>Freshness</th></tr></thead><tbody>
                 <tr><td>Stops and routes</td><td>Regional GTFS static artifact</td><td>Versioned artifact</td></tr>

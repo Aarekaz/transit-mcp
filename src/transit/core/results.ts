@@ -14,6 +14,8 @@ export const VERIFICATION_REASONS = [
   // Step-free requests: no current equipment report, or an endpoint without step-free access now.
   'ACCESSIBILITY_UNAVAILABLE',
   'ENDPOINT_NOT_STEP_FREE',
+  // The coverage serves departures, alerts and vehicles but does not plan journeys (SF Bay).
+  'PLANNING_UNAVAILABLE',
 ] as const;
 
 export type VerificationReason = typeof VERIFICATION_REASONS[number];

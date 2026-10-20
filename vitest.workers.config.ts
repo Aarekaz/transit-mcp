@@ -20,6 +20,9 @@ export default defineConfig({
         MCP_ALLOWED_ORIGIN_HOSTNAMES: 'transitmcp.com,metro-mcp.anuragd.me',
         MCP_REQUEST_STATE_KEY: 'test-mrtr-request-state-key-32-bytes-minimum',
         WMATA_API_KEY: 'test-wmata-api-key',
+        // The assembled-Worker suite exercises the SF planner on synthetic data, which a
+        // deployment may withhold (TRANSIT_PLANNING_OFF); keep it searchable here.
+        TRANSIT_PLANNING_OFF: '[]',
         ENVIRONMENT: 'production',
       },
     },
