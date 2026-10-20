@@ -22,7 +22,18 @@ const PAYLOAD_BYTES = 32 * 1024 * 1024;
 const METADATA_BYTES = 120 * 1024;
 export const SF511_QUOTA_NAMESPACE = 'sfbay:511';
 
+/** Versions of resident manifests, which are never edited in place: hashing a large
+ * manifest (SF Bay's lists every band) costs more than a whole small plan. */
+const versions = new WeakMap<ArtifactManifestV2, { shards: unknown; sources: unknown; version: Promise<StaticVersion> }>();
 export async function staticVersion(manifest: ArtifactManifestV2): Promise<StaticVersion> {
+  const held = versions.get(manifest);
+  if (held && held.shards === manifest.shards && held.sources === manifest.sources) return held.version;
+  const version = computeStaticVersion(manifest);
+  versions.set(manifest, { shards: manifest.shards, sources: manifest.sources, version });
+  version.catch(() => versions.delete(manifest));
+  return version;
+}
+async function computeStaticVersion(manifest: ArtifactManifestV2): Promise<StaticVersion> {
   if (manifest.schemaVersion !== 2 || typeof manifest.coverageId !== 'string' || !/^[a-z0-9_]+$/.test(manifest.coverageId) || !manifest.sources.length ||
       new Set(manifest.sources.map(s => s.feedId)).size !== manifest.sources.length ||
       manifest.sources.some(s => !/^[a-f0-9]{64}$/.test(s.sha256))) throw new Error('Invalid static source identity');

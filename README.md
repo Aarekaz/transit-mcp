@@ -6,7 +6,7 @@ It covers:
 
 - **New York:** the subway, the Long Island Rail Road, Metro-North and NYC buses.
 - **Washington DC:** Metrorail and Metrobus.
-- **SF Bay Area:** every operator in 511 SF Bay's regional feed, including BART, Muni, Caltrain, AC Transit, VTA, SamTrans and the ferries. Departures, alerts and vehicles work there, and so does planning along lines you name; the open fastest-route search is not offered in the Bay Area yet.
+- **SF Bay Area:** every operator in 511 SF Bay's regional feed, including BART, Muni, Caltrain, AC Transit, VTA, SamTrans and the ferries. Departures, alerts and vehicles work there, and so does trip planning.
 
 **Metro MCP is now Transit MCP.**
 
@@ -71,14 +71,13 @@ All three regions serve the five global tools. Here's what they do:
 - `find_transit` resolves stations, stops, routes and train IDs. Stations rank ahead of street stops and rail ahead of bus, each candidate says what it is (station, platform or street stop, modes, lines), and a few reviewed place names work, such as SFO, Union Square, Penn Station, Grand Central and Dulles.
 - `get_vehicle_status` shows where trains and buses are: on a line, on a dated trip from a departure board or planned journey, or at a station (every station of a complex). Each train reports its train ID (MTA's, such as `1A 1023 207/FAR`, or WMATA's number), the station it is stopped at or heading to, the station it last served, and its destination. DC trains carry GPS coordinates. MTA publishes stations rather than coordinates, so an NYC train stopped at a station is placed there and one between stations has no coordinates rather than a guessed one.
 
-The NYC coverage also carries the Long Island Rail Road, Metro-North and NYC buses, and DC carries Metrobus. The open search uses rail (subway, LIRR, Metro-North, Metrorail) and changes between lines on foot at stations such as Penn Station, Grand Central and Atlantic Terminal; LIRR and Metro-North departures show the track. Buses are planned only along named lines (`routes`): a city's whole bus network is too big to search inside one Worker isolate. NYC bus predictions, locations and alerts come from MTA Bus Time; a self-hosted Worker without its key (`MTA_BUS_API_KEY`) serves NYC buses from the timetable only.
+The NYC coverage also carries the Long Island Rail Road, Metro-North and NYC buses, and DC carries Metrobus. Journeys use every mode, buses included, and change between them on foot at stations such as Penn Station, Grand Central and Atlantic Terminal; LIRR and Metro-North departures show the track. The network planner searches compact timetables a cron builds in R2, then plans and validates the proposed lines exactly (see `src/transit/planner/network-plan.ts`). NYC bus predictions, locations and alerts come from MTA Bus Time; a self-hosted Worker without its key (`MTA_BUS_API_KEY`) serves NYC buses from the timetable only.
 
 Timetables refresh automatically at the edge whenever WMATA, MTA or 511 SF Bay publish a new one. An update that would remove most of a day's service is rejected, and one that makes live matching worse is rolled back. See [DC and NYC global transit](docs/dc-nyc-global-transit.md) for how that works and what has been verified. SF Bay data comes from 511 SF Bay and participating operators, with their attribution on every result.
 
 ### Honest limits
 
-- No open "fastest route" search in the SF Bay Area yet. Guided planning on named lines works.
-- Buses are planned only along named lines, never by open search.
+- Late at night, when nothing runs within walking distance, `plan_trip` finds nothing and hands back `routeHints` instead.
 - NYC trains between stations have no coordinates; MTA reports stations, not GPS.
 - The first call after a quiet spell can take several seconds while the timetable loads.
 - The 13 original tools are still here and unchanged for older clients.

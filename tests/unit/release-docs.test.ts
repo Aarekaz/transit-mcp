@@ -46,14 +46,13 @@ describe('release operator documentation', () => {
     expect(llmsText).toContain('do not provide a full journey planner');
     expect(llmsText).toContain('minutesAway');
   });
-  it('documents SF Bay departures, alerts, vehicles and guided planning without claiming open SF search', () => {
+  it('documents SF Bay departures, alerts, vehicles and planning', () => {
     expect(landingPage).toMatch(/SF Bay Area/);
     expect(landingPage).not.toMatch(/in development/i);
     for (const [name, document] of [['README', readme], ['public docs', publicDocs], ['LLM index', llmsText]] as const) {
       expect(document, name).toMatch(/departures, (?:service )?alerts and vehicle(?: location)?s/i);
-      // Open search is withheld in SF Bay; planning along named lines (`routes`) works there.
-      expect(document, name).toMatch(/open (?:fastest-route |`plan_trip` )?search[^.]{0,80}not offered/i);
-      expect(document, name).toMatch(/routeHints/);
+      expect(document, name).toMatch(/plan_trip|planning/);
+      expect(document, name).not.toMatch(/plan(?:ning|_trip)[^.]{0,80}not offered/i);
     }
     expect(llmsText).toContain('PLANNING_UNAVAILABLE');
     // Pages not rewritten for the launch still make no live SF claim.

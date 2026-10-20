@@ -16,19 +16,21 @@ export type CorpusScenario = keyof typeof corpus.realtime;
 export const corpusRef = (kind: 'stop' | 'route' | 'trip' | 'agency', id: string) => formatEntityRef({ coverage: 'sfbay', feed: 'sf511', kind, id });
 
 /** Only storage and transport are substituted. Compile, decode, match and freshness are real. */
-export async function sfBayCorpusFixture(scenario: CorpusScenario = 'scheduled', bucket = memoryStorage().bucket, files: GtfsScheduleFiles = corpus.files) {
-  const compiled = await compileSchedule({ coverage: SFBAY_COVERAGE, feedId: 'sf511', files,
-    window: { startDate: '20261019', endDate: '20261020' },
-    source: { url: corpus.provenance.sourceUrl, retrievedAt: '2026-10-18T00:00:00Z' } });
+/** `daily` publishes one shard per service date, as refresh does, instead of one for both. */
+export async function sfBayCorpusFixture(scenario: CorpusScenario = 'scheduled', bucket = memoryStorage().bucket, files: GtfsScheduleFiles = corpus.files, daily = false) {
+  const windows = daily ? [{ startDate: '20261019', endDate: '20261019' }, { startDate: '20261020', endDate: '20261020' }] : [{ startDate: '20261019', endDate: '20261020' }];
+  const parts = await Promise.all(windows.map(window => compileSchedule({ coverage: SFBAY_COVERAGE, feedId: 'sf511', files, window,
+    source: { url: corpus.provenance.sourceUrl, retrievedAt: '2026-10-18T00:00:00Z' } })));
+  const compiled = { ...parts[0]!, manifest: { ...parts[0]!.manifest, shards: parts.flatMap(part => part.manifest.shards) } };
   await bucket.put(compiled.manifest.discoveries[0]!.key, compiled.discoveryBytes);
-  await bucket.put(compiled.manifest.shards[0]!.key, compiled.shardBytes);
+  for (const part of parts) await bucket.put(part.manifest.shards[0]!.key, part.shardBytes);
   const version = await new StaticArtifactStore(bucket).publish(compiled.manifest);
   const nowSeconds = Date.parse(corpus.now) / 1000, event = corpus.realtime[scenario];
   const timestamp = nowSeconds - event.ageSeconds;
   const decoded = decodeRealtimeFeed(transit_realtime.FeedMessage.encode({
     header: { gtfsRealtimeVersion: '2.0', timestamp }, entity: event.entities,
   }).finish());
-  const applied = await applyTripUpdates(decoded, { manifest: compiled.manifest, shards: [compiled.shard], version, feedId: 'sf511' });
+  const applied = await applyTripUpdates(decoded, { manifest: compiled.manifest, shards: parts.map(part => part.shard), version, feedId: 'sf511' });
   const core = new RegionalFeedHubCore(SFBAY_COVERAGE.thresholds);
   const snapshot = { version, producerTimestampSeconds: timestamp, receivedAtSeconds: nowSeconds };
   core.replace('trip_updates', { ...snapshot, payload: applied.stopUpdates, degraded: applied.degraded, warnings: applied.warnings });
@@ -44,7 +46,7 @@ export async function sfBayCorpusFixture(scenario: CorpusScenario = 'scheduled',
     } }),
   } as unknown as DurableObjectNamespace;
   return { compiled, bucket, version, hub, core, source: {
-    manifest: compiled.manifest, shards: [compiled.shard], now: corpus.now,
+    manifest: compiled.manifest, shards: parts.map(part => part.shard), now: corpus.now,
     realtimeMaxAgeSeconds: SFBAY_COVERAGE.thresholds.tripUpdates.realtimeSeconds,
     realtime: { ...snapshot, payload: applied.stopUpdates, degraded: applied.degraded },
   } };

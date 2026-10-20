@@ -3,7 +3,7 @@ import { count, phase } from '../../../transit/trace';
 import { z } from 'zod';
 import type { MetroMcpContext, TransitRequestState } from '../../context';
 import { complete } from '../../shared';
-import { getCoverage, getCoverages, planningWithheld, type CoverageManifest } from '../../../transit/core/coverage';
+import { getCoverage, getCoverages, networkPlanning, planningWithheld, type CoverageManifest } from '../../../transit/core/coverage';
 import { getCoverageMode } from '../../../regions/manifest';
 import { formatEntityRef, parseTransitRef, type TransitRef } from '../../../transit/core/refs';
 import { BACKBONE_MODES } from '../../../transit/gtfs/static/partition';
@@ -486,7 +486,8 @@ export function effectiveCapabilities(context: MetroMcpContext, coverage: Covera
   const ingests = (kind: RealtimeFeedKind) => !!context.env.REGION_FEED_HUB && sources.some(source =>
     (!requireCredential || credential(source, context.env) !== null) && publishedKinds(source).has(kind));
   return { ...coverage.capabilities,
-    planning: coverage.capabilities.planning && !planningWithheld(coverage.id, context.env),
+    // A withheld whole-feed search still plans through the network planner where it is on.
+    planning: coverage.capabilities.planning && (!planningWithheld(coverage.id, context.env) || networkPlanning(coverage.id, context.env)),
     realtimeDepartures: coverage.capabilities.realtimeDepartures && ingests('trip_updates'),
     alerts: coverage.capabilities.alerts && ingests('service_alerts'),
     vehicles: coverage.capabilities.vehicles && ingests('vehicle_positions'),

@@ -39,6 +39,11 @@ export function parseInstant(instant: string): number {
 }
 
 export function formatInstant(milliseconds: number, timezone: string): string {
+  // UTC has no offset to look up; the router formats every walk it considers this way.
+  if (timezone === 'UTC' && Number.isFinite(milliseconds)) {
+    const text = new Date(milliseconds).toISOString(), year = text.slice(0, 4);
+    if (!text.startsWith('+') && !text.startsWith('-') && year >= '1000') return `${text.slice(0, 19)}${text.slice(20, 23) === '000' ? '' : text.slice(19, 23)}+00:00`;
+  }
   const format = formatter(timezone), p = civilParts(milliseconds, format);
   const offsetMinutes = offsetAt(milliseconds, format) / 60_000;
   const absolute = Math.abs(offsetMinutes), pad = (n: number) => String(n).padStart(2, '0');

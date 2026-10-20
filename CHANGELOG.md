@@ -8,8 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Network journey planner: `plan_trip` searches every line of DC, NYC and SF Bay, buses included, over compact timetables a cron builds in R2 (`compact/<coverage>/`), then plans and validates the proposed lines with the exact planner. Switch: `TRANSIT_NETWORK_PLANNING`; without its compact bands a coverage plans as before.
 
-- SF Bay Area (511 SF Bay regional feed, every operator): departures, service alerts and vehicle locations through the global tools. The open `plan_trip` search is not offered there yet; it returns `PLANNING_UNAVAILABLE` (deployment setting `TRANSIT_PLANNING_OFF`) with `routeHints`.
+- SF Bay Area (511 SF Bay regional feed, every operator): departures, service alerts and vehicle locations through the global tools. Journeys there are planned by the network planner only; until its compact bands are built, `plan_trip` returns `PLANNING_UNAVAILABLE` with `routeHints`.
 - Guided planning: `plan_trip` takes `routes`, up to four route refs to ride, and finds the actual trips, boarding stops, transfers and walks on only those lines, validated like any other itinerary. It works in every coverage, including SF Bay and buses. When a plan finds nothing (`PLANNING_UNAVAILABLE`, `SCOPE_LIMIT_EXCEEDED` or no journey) it returns `routeHints`: the lines near each end and the `direct` lines serving both.
 - Itineraries carry rider `steps` (walk, ride, get off) alongside the legs.
 - "Next train from A to B": `get_departures` accepts `toStop`/`toStopRef` and lists only trips that go on to that stop, each with its `arrival`.
@@ -30,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Production enables DC and NYC global coverage (`TRANSIT_COVERAGE_MODES`) and SF Bay (`SFBAY_MODE=on`, open planning withheld); preview leaves DC and NYC off and SF Bay dark. The server registers 18 tools (13 compatible plus five global) and four transit resource templates; the legacy tools are unchanged.
+- Production enables DC and NYC global coverage (`TRANSIT_COVERAGE_MODES`) and SF Bay (`SFBAY_MODE=on`, planned by the network planner only); preview leaves DC and NYC off and SF Bay dark. The server registers 18 tools (13 compatible plus five global) and four transit resource templates; the legacy tools are unchanged.
 - Faster global tools: planner transfer rules are indexed (NYC plans about 10x faster), entity lookups are built once per timetable, and city-wide alert results report exact counts with bounded detail.
 
 - The landing page, docs, README and `/info` describe all three regions: New York, DC and the SF Bay Area, with the honest limits.

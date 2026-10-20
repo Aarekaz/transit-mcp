@@ -1,11 +1,53 @@
 import { formatTripInstanceRef, parseTransitRef, type TransitRef } from '../core/refs';
 import { sameStaticVersion, staticVersion } from '../gtfs/realtime/snapshot-store';
 import type { ScheduleShard, ScheduleStop, ScheduleTrip } from '../gtfs/static/schema';
-import { canonicalJson } from '../gtfs/static/shards';
+import { canonicalRecord } from '../gtfs/static/shards';
 import { isServiceActive, parseInstant, serviceDayOrigin } from './service-day';
 import type { Itinerary, JourneyEndpoint, TransitLeg, ValidationResult, ValidationSource } from './types';
 
 interface CheckedRide { index: number; leg: TransitLeg; trip: ScheduleTrip; shard: ScheduleShard; board: number; alight: number }
+
+/** Stops, pathways and station complexes of a set of shards, derived from canonical data
+ * only. Kept per shards array: one search validates every candidate against the same set. */
+const graphs = new WeakMap<readonly ScheduleShard[], ReturnType<typeof deriveStationGraph>>();
+function stationGraph(shards: readonly ScheduleShard[]) {
+  let graph = graphs.get(shards);
+  if (!graph) { graph = deriveStationGraph(shards); graphs.set(shards, graph); }
+  return graph;
+}
+function deriveStationGraph(shards: readonly ScheduleShard[]) {
+  const allStops = shards.flatMap(shard => shard.stops);
+  // First occurrence wins, as a scan would: bands of a feed repeat the same stop rows.
+  const stopRows = new Map<TransitRef, ScheduleStop>();
+  for (const value of allStops) if (!stopRows.has(value.ref)) stopRows.set(value.ref, value);
+  const pathwayDefinitions = new Map<string, ScheduleShard['pathways'][number]>();
+  let pathwayConflict = false;
+  for (const shard of shards) for (const definition of shard.pathways) {
+    const identity = JSON.stringify([shard.feedId, shard.source.sha256, definition.id]);
+    const prior = pathwayDefinitions.get(identity);
+    if (prior && canonicalRecord(prior) !== canonicalRecord(definition)) pathwayConflict = true;
+    else pathwayDefinitions.set(identity, definition);
+  }
+  const canonicalPathways = [...pathwayDefinitions.values()];
+  // Independently discover station/complex components from canonical parents
+  // and pathways; no routing connectivity or union-find is reused.
+  const connections = new Map<TransitRef, Set<TransitRef>>();
+  const connect = (a: TransitRef, b: TransitRef) => {
+    for (const [from, to] of [[a, b], [b, a]] as const) { const neighbours = connections.get(from) ?? new Set<TransitRef>(); neighbours.add(to); connections.set(from, neighbours); }
+  };
+  for (const location of allStops) if (location.parentStationRef) connect(location.ref, location.parentStationRef);
+  for (const path of canonicalPathways) connect(path.fromStopRef, path.toStopRef);
+  const complex = new Map<TransitRef, TransitRef>();
+  for (const location of allStops) {
+    if (complex.has(location.ref)) continue;
+    const pending = [location.ref]; complex.set(location.ref, location.ref);
+    for (let cursor = 0; cursor < pending.length; cursor++) for (const neighbour of connections.get(pending[cursor]!) ?? []) {
+      if (!complex.has(neighbour)) { complex.set(neighbour, location.ref); pending.push(neighbour); }
+    }
+  }
+  const controlledComplexes = new Set(canonicalPathways.map(path => complex.get(path.fromStopRef)));
+  return { stopRows, pathwayConflict, canonicalPathways, complex, controlledComplexes };
+}
 
 /** Independent proof over canonical GTFS rows. No router import, labels, route
  * indexes, scan order, predecessor graph or candidate-repair path is used. */
@@ -38,33 +80,9 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
       stamp !== undefined && Number.isFinite(stamp) && stamp > 0 && stamp <= now && now - stamp <= (source.realtimeMaxAgeSeconds ?? 90) &&
       Number.isFinite(snapshot.receivedAtSeconds) && snapshot.receivedAtSeconds >= stamp && snapshot.receivedAtSeconds <= now;
     const rows = fresh ? snapshot.payload! : [];
-    const allStops = source.shards.flatMap(shard => shard.stops);
-    const stop = (ref: TransitRef): ScheduleStop | undefined => allStops.find(value => value.ref === ref);
-    const pathwayDefinitions = new Map<string, ScheduleShard['pathways'][number]>();
-    for (const shard of source.shards) for (const definition of shard.pathways) {
-      const identity = JSON.stringify([shard.feedId, shard.source.sha256, definition.id]);
-      const prior = pathwayDefinitions.get(identity);
-      if (prior && canonicalJson(prior) !== canonicalJson(definition)) reject('PATHWAY_CONFLICT');
-      else pathwayDefinitions.set(identity, definition);
-    }
-    const canonicalPathways = [...pathwayDefinitions.values()];
-    // Independently discover station/complex components from canonical parents
-    // and pathways; no routing connectivity or union-find is reused.
-    const connections = new Map<TransitRef, Set<TransitRef>>();
-    const connect = (a: TransitRef, b: TransitRef) => {
-      for (const [from, to] of [[a, b], [b, a]] as const) { const neighbours = connections.get(from) ?? new Set<TransitRef>(); neighbours.add(to); connections.set(from, neighbours); }
-    };
-    for (const location of allStops) if (location.parentStationRef) connect(location.ref, location.parentStationRef);
-    for (const path of canonicalPathways) connect(path.fromStopRef, path.toStopRef);
-    const complex = new Map<TransitRef, TransitRef>();
-    for (const location of allStops) {
-      if (complex.has(location.ref)) continue;
-      const pending = [location.ref]; complex.set(location.ref, location.ref);
-      for (let cursor = 0; cursor < pending.length; cursor++) for (const neighbour of connections.get(pending[cursor]!) ?? []) {
-        if (!complex.has(neighbour)) { complex.set(neighbour, location.ref); pending.push(neighbour); }
-      }
-    }
-    const controlledComplexes = new Set(canonicalPathways.map(path => complex.get(path.fromStopRef)));
+    const { stopRows, pathwayConflict, canonicalPathways, complex, controlledComplexes } = stationGraph(source.shards);
+    if (pathwayConflict) reject('PATHWAY_CONFLICT');
+    const stop = (ref: TransitRef): ScheduleStop | undefined => stopRows.get(ref);
     const streetAccessible = (ref: TransitRef) => !controlledComplexes.has(complex.get(ref)) || stop(ref)?.locationType === 2;
     const endpointEqual = (a: JourneyEndpoint, b: JourneyEndpoint) => typeof a === 'string' || typeof b === 'string' ? a === b : a.latitude === b.latitude && a.longitude === b.longitude;
     const point = (value: JourneyEndpoint) => typeof value === 'string' ? stop(value) : value;
