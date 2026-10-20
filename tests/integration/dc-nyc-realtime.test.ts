@@ -182,6 +182,42 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     expect(pointerReads()).toBe(1);
   });
 
+  it('plans along the lines a model names where an open search is withheld, and hints which lines could', async () => {
+    const f = await nyc();
+    (f.env as { TRANSIT_PLANNING_OFF?: string }).TRANSIT_PLANNING_OFF = '["nyc"]';
+    const ask = (extra: Record<string, unknown> = {}) => callTool(f.env, 'plan_trip', { origin: { ref: f.ref('stop', '127') }, destination: { ref: f.ref('stop', '132') }, maxWalkMetres: 0, ...extra });
+    const refused = (await ask()).structuredContent;
+    expect(refused).toMatchObject({ status: 'unavailable', reasons: ['PLANNING_UNAVAILABLE'], itineraries: [] });
+    // Both the 1 and the 2 serve Times Sq and 14 St: one-seat rides.
+    expect(refused.routeHints.direct.map((hint: { name: string }) => hint.name).sort()).toEqual(['1', '2']);
+    expect(refused.routeHints.origin[0]).toMatchObject({ stopName: 'Times Sq-42 St', walkMetres: 0 });
+    const guided = (await ask({ routes: [f.ref('route', '1')] })).structuredContent;
+    expect(guided.itineraries.length).toBeGreaterThan(0);
+    expect(guided.itineraries.flatMap((itinerary: { legs: { kind: string; routeRef?: string }[] }) => itinerary.legs.filter(leg => leg.kind === 'transit').map(leg => leg.routeRef)))
+      .toEqual(guided.itineraries.map(() => f.ref('route', '1')));
+    expect(guided.itineraries.every((itinerary: { legs: { validatorOutcome: string }[] }) => itinerary.legs.every(leg => leg.validatorOutcome === 'valid'))).toBe(true);
+    // A route from another coverage is not a proposal for this one.
+    expect((await ask({ routes: ['tr:dc:wmata:route:UkVE'] })).structuredContent).toMatchObject({ code: 'INVALID_TRANSIT_REF' });
+  });
+
+  it('lists the next trips from A that reach B, each with its arrival there', async () => {
+    const f = await nyc();
+    type Row = { tripInstanceRef: string; routeName: string; scheduledTime: string; arrival: { stopName: string; scheduledTime: string | null; predictedTime: string | null } };
+    const to14 = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '127'), toStopRef: f.ref('stop', '132'), windowSeconds: 3600 })).structuredContent.departures as Row[];
+    expect(to14.length).toBeGreaterThan(0);
+    expect(to14.every(row => row.arrival.stopName === '14 St' && Date.parse(row.arrival.scheduledTime!) > Date.parse(row.scheduledTime))).toBe(true);
+    // The 1 skipping 23 and 18 St still reaches 14 St, predicted at 09:20.
+    const local = to14.find(row => tripId(row as never) === 'AFA25GEN-1092-Weekday-00_054800_1..S03R')!;
+    expect(local.arrival).toMatchObject({ scheduledTime: new Date(civil('09:18:00') * 1000).toISOString(), predictedTime: new Date(civil('09:20:00') * 1000).toISOString() });
+    // The 2 express is not scheduled to stop at 28 St: it is not a way there.
+    const to28 = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '127'), toStop: '28 St', coverage: 'nyc', windowSeconds: 3600 })).structuredContent.departures as Row[];
+    expect(to28.length).toBeGreaterThan(0);
+    expect(to28.every(row => row.routeName === '1')).toBe(true);
+    // Without a destination nothing changes, and arrival is null.
+    const board = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '127'), windowSeconds: 3600 })).structuredContent.departures as Row[];
+    expect(board.every(row => row.arrival === null)).toBe(true);
+  });
+
   it('lists departures across every station of a complex', async () => {
     const f = await nyc();
     // 725 has no scheduled service of its own; the 1 and 2 leave from 127 in the same complex.

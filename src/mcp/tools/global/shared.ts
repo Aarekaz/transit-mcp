@@ -303,6 +303,46 @@ export function stationAgencies(data: TransitData, stopRefs: ReadonlySet<string>
   for (const index of data.indexes) for (const stop of stopRefs) for (const route of index.stopRoutes[stop as TransitRef] ?? []) { const agency = routes.get(route); if (agency) serving.add(agency); }
   return [...serving].filter(agency => !filter || filter.includes(agency)).sort();
 }
+/** A line a model can ride, with the stop that makes it reachable. */
+export const routeHintSchema = z.strictObject({ ref: z.string(), name: z.string(), mode: z.string(), agencyRef: z.string(),
+  stopRef: z.string().describe('The nearest stop the line serves.'), stopName: z.string(), walkMetres: z.number().nonnegative() });
+export const routeHintsSchema = z.strictObject({
+  direct: z.array(routeHintSchema).describe('Lines serving stops near both ends: a one-seat ride may exist.'),
+  origin: z.array(routeHintSchema), destination: z.array(routeHintSchema),
+}).describe('Lines near each end. Pass the ones you would ride (in plan_trip.routes) to have their trips searched and validated.');
+const ROUTE_HINT_LIMIT = 12;
+/** Lines within walking distance of each end of a journey, nearest stop first. Computed from
+ * the resident discovery index: no timetable is read, so it answers even where a search cannot. */
+export function routeHints(data: TransitData, origin: TransitRef | { latitude: number; longitude: number }, destination: TransitRef | { latitude: number; longitude: number }, walkMetres: number): z.infer<typeof routeHintsSchema> {
+  const stops = stopsByRef(data), routes = new Map(data.indexes.flatMap(index => index.routes).map(route => [route.ref as string, route]));
+  const at = (endpoint: TransitRef | { latitude: number; longitude: number }) => {
+    if (typeof endpoint !== 'string') return endpoint;
+    const stop = stops.get(endpoint), parent = stop?.parentStationRef ? stops.get(stop.parentStationRef) : undefined;
+    const latitude = stop?.latitude ?? parent?.latitude, longitude = stop?.longitude ?? parent?.longitude;
+    return latitude != null && longitude != null ? { latitude, longitude } : undefined;
+  };
+  const near = (endpoint: TransitRef | { latitude: number; longitude: number }) => {
+    const point = at(endpoint), best = new Map<string, z.infer<typeof routeHintSchema>>();
+    if (!point) return best;
+    const radians = Math.PI / 180, cos = Math.cos(point.latitude * radians);
+    for (const index of data.indexes) for (const [stopRef, routeRefs] of Object.entries(index.stopRoutes)) {
+      const stop = stops.get(stopRef);
+      if (stop?.latitude == null || stop.longitude == null) continue;
+      const metres = Math.hypot((stop.longitude - point.longitude) * radians * cos, (stop.latitude - point.latitude) * radians) * 6_371_000;
+      if (metres > walkMetres) continue;
+      const parent = stop.parentStationRef ? stops.get(stop.parentStationRef) : undefined;
+      for (const ref of routeRefs) {
+        const route = routes.get(ref), held = best.get(ref);
+        if (!route || held && held.walkMetres <= metres) continue;
+        best.set(ref, { ref, name: routeName(route), mode: route.mode, agencyRef: route.agencyRef, stopRef, stopName: sanitizeTransitText(parent?.name ?? stop.name, 200), walkMetres: Math.round(metres) });
+      }
+    }
+    return best;
+  };
+  const from = near(origin), to = near(destination);
+  const ranked = (hints: Iterable<z.infer<typeof routeHintSchema>>) => [...hints].sort((a, b) => a.walkMetres - b.walkMetres || a.name.localeCompare(b.name) || a.ref.localeCompare(b.ref)).slice(0, ROUTE_HINT_LIMIT);
+  return { direct: ranked([...from.values()].filter(hint => to.has(hint.ref))), origin: ranked(from.values()), destination: ranked(to.values()) };
+}
 /** The other stations in a station's complex (Times Sq-42 St is published as four), all in
  * the station's own feed: a departure board reads one feed's predictions. */
 export function complexStations(data: TransitData, stationRef: string): string[] {

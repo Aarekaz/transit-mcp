@@ -57,6 +57,9 @@ export interface JourneyQuery extends Omit<ValidationSource, 'shards'> {
   agencyRefs?: TransitRef[];
   /** Feeds the search may use; all of the manifest's when omitted. */
   feedIds?: readonly string[];
+  /** Only trips on these routes, e.g. the lines a model proposes. The search still finds
+   * the trips, boarding stops, transfers and walks; every result is validated as usual. */
+  routeRefs?: ReadonlySet<TransitRef>;
 }
 export interface ValidationResult {
   valid: boolean;

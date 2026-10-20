@@ -11,7 +11,7 @@ import type { SourceStatus, VerificationReason } from '../../../transit/core/res
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { canonicalJson, sha256 } from '../../../transit/gtfs/static/shards';
 import { DecodedShardCache } from '../../../transit/planner/schedule-index';
-import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, effectiveCapabilities, journeyAgencies, candidates, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, sameStation, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, routeHints, routeHintsSchema, effectiveCapabilities, journeyAgencies, validRef, candidates, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, sameStation, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
 
 const journeyEndpoint = z.union([z.string(), coordinatesSchema]);
 const transitLeg = z.strictObject({ kind: z.literal('transit'), from: z.string(), to: z.string(), tripRef: z.string(), tripInstanceRef: z.string(), serviceDate: z.string(), instanceStartSeconds: z.number(),
@@ -27,7 +27,8 @@ export const itinerarySchema = z.strictObject({ coverageId: z.string(), artifact
 
 export const planInput = z.strictObject({ origin: endpointSchema, destination: endpointSchema, coverage: coverageSchema.optional(), departAt: instantSchema.optional(),
   windowSeconds: z.number().int().min(1).max(604800).default(7200), maxWalkMetres: z.number().min(0).max(800).default(800), maxTransfers: z.number().int().min(0).max(4).default(3),
-  accessibility: z.enum(['no_preference', 'step_free']).default('no_preference').describe('step_free: only platforms reachable without stairs, avoiding current elevator outages.') });
+  accessibility: z.enum(['no_preference', 'step_free']).default('no_preference').describe('step_free: only platforms reachable without stairs, avoiding current elevator outages.'),
+  routes: z.array(boundedText).min(1).max(4).optional().describe('Route refs (from find_transit) the journey may ride, e.g. the lines you would take: BART from SFO, then a Muni line. The server finds the actual trips, boarding stops, transfers and walks on only these routes and validates them. Works where full search is unavailable (SF Bay) and for buses.') });
 export const planState = z.strictObject({ phase: z.literal('transit-selection'), tool: z.literal('plan_trip'), requestHash: z.string().regex(/^[a-f0-9]{64}$/),
   artifactVersion: z.string().regex(/^[a-f0-9]{64}$/),
   candidates: z.strictObject({ origin: z.array(z.string()).min(2).max(MAX_DISCOVERY_CANDIDATES).optional(), destination: z.array(z.string()).min(2).max(MAX_DISCOVERY_CANDIDATES).optional() }) });
@@ -43,10 +44,10 @@ export function verifyPlanChoices(state: z.infer<typeof planState>, inputRespons
 
 export function registerPlanTool(server: McpServer, context: MetroMcpContext, codec: RequestStateCodec<TransitRequestState>): void {
   server.registerTool('plan_trip', {
-    title: 'Plan a transit journey', description: 'Plan an origin-to-destination journey when find_transit reports available coverage with planning enabled. Returns up to three independently validated itineraries and resolves named endpoints together; departure defaults to now. The whole journey must finish within windowSeconds (default two hours): if none is found for a long trip, retry with a larger window. Each transit leg carries a tripInstanceRef; pass it to get_vehicle_status to see where that train is now. For a wheelchair user or anyone avoiding stairs, set accessibility: "step_free": journeys then board, alight and change only at platforms step-free from the street per the agency (partial stations by direction), avoiding stations cut off by a current elevator outage; in-station changes between such platforms are taken as step-free. It refuses with ACCESSIBILITY_UNAVAILABLE when no current elevator report exists and ENDPOINT_NOT_STEP_FREE when an endpoint has no step-free platform now (get_service_status lists the outages). Never assemble or repair journeys from get_departures.',
+    title: 'Plan a transit journey', description: 'Plan an origin-to-destination journey. Returns up to three independently validated itineraries and resolves named endpoints together; departure defaults to now. When no itinerary is possible (planning withheld, as in SF Bay; a search too large; or nothing found, such as a bus trip) it returns routeHints: lines near each end and direct lines serving both. Call again with routes (the lines you would ride, from routeHints or your own knowledge) to plan along only those lines, which works wherever schedules exist. Present only returned itineraries as confirmed. The whole journey must finish within windowSeconds (default two hours): if none is found for a long trip, retry with a larger window. Each transit leg carries a tripInstanceRef; pass it to get_vehicle_status to see where that train is now. For a wheelchair user or anyone avoiding stairs, set accessibility: "step_free": journeys then board, alight and change only at platforms step-free from the street per the agency (partial stations by direction), avoiding stations cut off by a current elevator outage; in-station changes between such platforms are taken as step-free. It refuses with ACCESSIBILITY_UNAVAILABLE when no current elevator report exists and ENDPOINT_NOT_STEP_FREE when an endpoint has no step-free platform now (get_service_status lists the outages). Never present a journey pieced together from get_departures as confirmed; check it here with routes.',
     annotations: readOnlyLive('Plan a transit journey'),
     inputSchema: planInput,
-    outputSchema: z.strictObject({ ...resultShape, itineraries: z.array(itinerarySchema).max(3) }),
+    outputSchema: z.strictObject({ ...resultShape, itineraries: z.array(itinerarySchema).max(3), routeHints: routeHintsSchema.optional() }),
   }, async (args, handler) => guarded(handler, async () => {
     const state = checkState(handler, 'plan_trip');
     const requestHash = await planRequestHash(args);
@@ -57,7 +58,14 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     if (!coverageId || originCoverage && destinationCoverage && originCoverage !== destinationCoverage) return noData();
     const data = await loadData(context, coverageId, handler.mcpReq.signal, state?.phase === 'transit-selection' ? state.artifactVersion : undefined);
     if (!data) return noData();
-    if (!effectiveCapabilities(context, data.coverage, false).planning) return complete({ ...unavailable(coverageId, data, ['PLANNING_UNAVAILABLE']), itineraries: [] });
+    // Proposed routes keep the search to a few lines, so it runs even where an open
+    // search is withheld (SF Bay) and on feeds too large to search whole (buses).
+    const viaRoutes = args.routes?.map(ref => {
+      const parsed = validRef(ref, ['route']);
+      if (parsed.coverage !== coverageId) throw new TransitToolError('INVALID_TRANSIT_REF');
+      knownEntity(data, ref);
+      return asTransitRef(ref);
+    });
     const resolved: Partial<Record<'origin' | 'destination', JourneyEndpoint>> = {};
     const ambiguous: Partial<Record<'origin' | 'destination', Candidate[]>> = {};
     const accepted = state?.phase === 'transit-selection' ? acceptedContent(handler.mcpReq.inputResponses, 'endpoints', z.strictObject({ origin: z.string().optional(), destination: z.string().optional() })) : undefined;
@@ -94,8 +102,12 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       return inputRequired({ inputRequests: { endpoints: inputRequired.elicit({ message: 'Choose the transit endpoints for this journey.', requestedSchema: z.object(shape) }) },
         requestState: await codec.mint({ phase: 'transit-selection', tool: 'plan_trip', requestHash, artifactVersion: data.version.artifactVersion, candidates: choices }, handler) });
     }
+    // Without an itinerary, say which lines could carry the journey so the model can propose them.
+    const walkMetres = Math.min(800, args.maxWalkMetres ?? 800);
+    const hinted = (reasons: VerificationReason[]) => complete({ ...unavailable(coverageId, data, reasons), itineraries: [], routeHints: routeHints(data, resolved.origin!, resolved.destination!, walkMetres) });
+    if (!viaRoutes && !effectiveCapabilities(context, data.coverage, false).planning) return hinted(['PLANNING_UNAVAILABLE']);
     // Only the published feeds a journey can ride: a bus feed's state says nothing about a rail plan.
-    const planning = planningFeedIds(data.coverage).filter(feedId => data.version.sourceVersions[feedId] !== undefined);
+    const planning = (viaRoutes ? [...new Set(viaRoutes.map(ref => parseTransitRef(ref)!.feed))] : planningFeedIds(data.coverage)).filter(feedId => data.version.sourceVersions[feedId] !== undefined);
     const now = new Date().toISOString(), feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', Date.parse(now) / 1000, handler.mcpReq.signal, [], planning);
     // Step-free: board, alight and change only where access is step-free now. Without a
     // current equipment report, or with an endpoint cut off, refuse rather than guess.
@@ -130,12 +142,13 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       realtime: feed.payload !== null && feed.version && feed.receivedAtSeconds !== undefined ? { ...feed, payload: scheduledRealtimeRows(feed.payload), version: feed.version, receivedAtSeconds: feed.receivedAtSeconds } : undefined,
       ...(stepFree ? { stepFree } : {}),
       // Agency-split schedules (SF Bay) decode only the agencies this journey can use.
-      ...(() => { const agencyRefs = journeyAgencies(data, [resolved.origin!, resolved.destination!], Math.min(800, args.maxWalkMetres ?? 800)); return agencyRefs ? { agencyRefs } : {}; })() }, handler.mcpReq.signal);
+      ...(viaRoutes ? { routeRefs: new Set(viaRoutes), agencyRefs: [...new Set(viaRoutes.map(ref => data.indexes.flatMap(index => index.routes).find(route => route.ref === ref)!.agencyRef))] }
+        : (() => { const agencyRefs = journeyAgencies(data, [resolved.origin!, resolved.destination!], Math.min(800, args.maxWalkMetres ?? 800)); return agencyRefs ? { agencyRefs } : {}; })()) }, handler.mcpReq.signal);
     let result: Awaited<typeof planned>;
     // A search too large for this isolate is a scope limit, not missing coverage.
     try { result = await planned; }
     catch (error) {
-      if (error instanceof Error && error.message.startsWith('Planner working-set budget exceeded')) return complete({ ...unavailable(coverageId, data, ['SCOPE_LIMIT_EXCEEDED']), itineraries: [] });
+      if (error instanceof Error && error.message.startsWith('Planner working-set budget exceeded')) return hinted(['SCOPE_LIMIT_EXCEEDED']);
       throw error;
     }
     const legTrips = new Set(result.candidates.flatMap(candidate => candidate.legs.flatMap(leg => leg.kind === 'transit' ? [leg.tripRef as string] : [])));
@@ -150,6 +163,6 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       const route = routes.find(route => route.ref === leg.routeRef)!;
       return { ...leg, mode: route.mode, agencyRef: route.agencyRef, intermediateStopCount: (sequences.get(leg.tripRef) ?? []).filter(sequence => sequence > leg.boardSequence && sequence < leg.alightSequence).length,
         transferRequired: candidate.legs.slice(0, index).some(prior => prior.kind === 'transit') && !leg.continuation, sources: meta.sources.filter(source => source.scheduleVersion === leg.scheduleVersion), validatorOutcome: 'valid' as const };
-    }) })) });
+    }) })), ...(result.candidates.length ? {} : { routeHints: routeHints(data, resolved.origin!, resolved.destination!, walkMetres) }) });
   }, () => complete({ ...unavailable(args.coverage), itineraries: [] })));
 }

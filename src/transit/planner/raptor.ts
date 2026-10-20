@@ -114,7 +114,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     const routes = new Map(shard.routes.map(route => [route.ref, route]));
     for (const trip of shard.trips) {
       const route = routes.get(trip.routeRef)!, first = trip.stopTimes[0]?.departureSeconds;
-      if (first == null) continue;
+      if (first == null || query.routeRefs && !query.routeRefs.has(trip.routeRef)) continue;
       const intervals = shard.frequencies.filter(f => f.tripRef === trip.ref);
       for (const day of serviceDays) {
         if (route.agencyRef !== day.agencyRef || !isServiceActive(shard.calendars[trip.serviceId]!, day.serviceDate)) continue;
