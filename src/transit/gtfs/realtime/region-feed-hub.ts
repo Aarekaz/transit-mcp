@@ -140,6 +140,12 @@ export class RegionFeedHub implements DurableObject {
   // Polls reuse the verified timetable and discovery index while their hashes are unchanged.
   readonly #shards = new DecodedShardCache(24 * 1024 * 1024);
   readonly #discoveries = new Map<string, { sha256: string; index: DiscoveryIndex }>();
+  /** The published artifact as of this coordinator's last poll or mismatched read. Reads never
+   * wait on R2 for it: while a poll uploads a snapshot, R2 connections are all in use. */
+  #current?: { version: StaticVersion; manifest: ArtifactManifestV2 };
+  async #artifact(): Promise<{ version: StaticVersion; manifest: ArtifactManifestV2 } | undefined> {
+    return this.#current = await this.#artifacts?.current() ?? undefined;
+  }
 
   constructor(state: DurableObjectState, env: Env) {
     this.#state = state;
@@ -182,7 +188,8 @@ export class RegionFeedHub implements DurableObject {
     }
     const now = Number(url.searchParams.get('now')) || Math.floor(Date.now() / 1_000);
     const core = new RegionalFeedHubCore(source.coverage.thresholds);
-    const current = await this.#artifacts?.current();
+    // A request for another version (a refresh or rollback just happened) rereads the pointer.
+    const current = this.#current?.version.artifactVersion === url.searchParams.get('artifact') ? this.#current : await this.#artifact();
     if (!current || !this.#snapshots) return Response.json(core.read(kind, now));
     if (url.searchParams.get('artifact') !== current.version.artifactVersion) {
       return Response.json({ ...core.read(kind, now), version: current.version, degraded: true, warnings: ['SCHEDULE_REALTIME_MISMATCH'] });
@@ -261,7 +268,7 @@ export class RegionFeedHub implements DurableObject {
   async #poll(source: RealtimeSource, spec: RealtimeFeedSpec, nowSeconds: number): Promise<void> {
     const { coverage, policy } = source;
     try {
-      const current = await this.#artifacts?.current();
+      const current = await this.#artifact();
       if (!current || !this.#snapshots || !this.#env.TRANSIT_ARTIFACTS) return;
       // A feed whose schedule is not published yet has nothing to match: spend no request.
       const feedIds = sourceFeedIds(policy).filter(feedId => current.manifest.sources.some(item => item.feedId === feedId));
