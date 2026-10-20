@@ -1,6 +1,6 @@
 # Transit MCP
 
-Transit MCP is an anonymous, read-only Model Context Protocol server for live DC Metro and NYC Subway transit information. SF Bay support is in development and is not available on the production MCP surface.
+Transit MCP is an anonymous, read-only Model Context Protocol server for live DC Metro and NYC Subway transit information. In the SF Bay Area the global tools serve departures, service alerts and vehicle locations for every 511 SF Bay operator; journey planning there is not offered yet.
 
 **Metro MCP is now Transit MCP.**
 
@@ -59,8 +59,11 @@ DC Metro and the NYC Subway serve all five global tools:
 
 - `plan_trip` plans trips between stations, or from map coordinates with short walks, using the published WMATA and MTA timetables and live predictions. Every itinerary is checked by an independent validator before it is returned.
 - `get_departures` merges the timetable with live trip updates. In NYC that includes rerouted trains and trains missing from the timetable, which are marked as observed rather than dropped. You can pass a station name directly; a station complex such as Times Sq-42 St or 14 St-Union Sq counts as one place and lists departures from every line in it, and genuinely different stations with the same name come back as choices.
-- `get_service_status` returns the agencies' own alerts for a city, line, station, or trip.
-- `get_vehicle_status` shows where trains are: on a line, on a dated trip from a departure board or planned journey, or at a station (every station of a complex). Each train reports the station it is stopped at or heading to, the station it last served, and its destination. DC trains carry GPS coordinates. MTA publishes stations rather than coordinates, so an NYC train stopped at a station is placed there and one between stations has no coordinates rather than a guessed one.
+- `get_service_status` returns the agencies' own alerts for a city, line, station, or trip, plus elevator and escalator outages there: whether each is on the step-free path, whether a backup elevator exists, and MTA's suggested way around.
+- `plan_trip` with `accessibility: "step_free"` plans journeys that only board, alight and change where the platform is reachable without stairs, and avoids stations cut off by a current elevator outage. Station access comes from WMATA's GTFS and MTA's station list (including stations accessible in one direction only); if the live elevator report is missing or stale, it says so instead of guessing.
+- `get_vehicle_status` shows where trains are: on a line, on a dated trip from a departure board or planned journey, or at a station (every station of a complex). Each train reports its train ID (MTA's, such as `1A 1023 207/FAR`, or WMATA's number), the station it is stopped at or heading to, the station it last served, and its destination. DC trains carry GPS coordinates. MTA publishes stations rather than coordinates, so an NYC train stopped at a station is placed there and one between stations has no coordinates rather than a guessed one.
+
+The NYC coverage also carries the Long Island Rail Road, Metro-North and NYC buses, and DC carries Metrobus. Journeys use rail (subway, LIRR, Metro-North, Metrorail) and change between them on foot at stations such as Penn Station, Grand Central and Atlantic Terminal; LIRR and Metro-North departures show the track. Buses serve departures, vehicles and alerts but are not planned: the planner cannot search a city's bus network inside one Worker isolate, so a journey from a bus stop walks to rail. NYC bus predictions and locations come from MTA Bus Time and stay off until its key (`MTA_BUS_API_KEY`) is configured.
 
 Timetables refresh automatically at the edge whenever WMATA or MTA publish a new one. An update that would remove most of a day's service is rejected, and one that makes live matching worse is rolled back. See [DC and NYC global transit](docs/dc-nyc-global-transit.md) for how that works and what has been verified. SF Bay support is in development; its global coverage stays dark, with attribution to 511 SF Bay and participating operators.
 

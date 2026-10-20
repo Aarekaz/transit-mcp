@@ -28,7 +28,7 @@ export async function planJourney(query: JourneyQuery, signal?: AbortSignal): Pr
   const reasons = new Set<VerificationReason>();
   const version = await staticVersion(query.manifest); assertNotAborted(signal);
   let bytes = 0;
-  const window = await loadScheduleWindow({ manifest: query.manifest, instant: query.departAt, windowSeconds: query.windowSeconds ?? 7200,
+  const window = await loadScheduleWindow({ manifest: query.manifest, instant: query.departAt, windowSeconds: query.windowSeconds ?? 7200, agencyRefs: query.agencyRefs, decoded: query.decoded, ...(query.feedIds ? { feedIds: [...query.feedIds] } : {}),
     readShard: async key => {
       assertNotAborted(signal);
       const descriptor = query.manifest.shards.find(shard => shard.key === key)!;
@@ -49,7 +49,7 @@ export async function planJourney(query: JourneyQuery, signal?: AbortSignal): Pr
   routed.reasons.forEach(reason => reasons.add(reason));
   const candidates: JourneyResult['candidates'] = [];
   const source = { manifest: query.manifest, shards: window.shards.map(item => item.shard), now: query.now,
-    realtime: query.realtime, realtimeMaxAgeSeconds: query.realtimeMaxAgeSeconds };
+    realtime: query.realtime, realtimeMaxAgeSeconds: query.realtimeMaxAgeSeconds, ...(query.stepFree ? { stepFree: query.stepFree } : {}) };
   for (const candidate of routed.candidates) {
     assertNotAborted(signal);
     if (!(await validateItinerary(candidate, source, signal)).valid) { reasons.add('VALIDATOR_REJECTED'); continue; }

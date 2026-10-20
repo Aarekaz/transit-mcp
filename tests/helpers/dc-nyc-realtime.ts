@@ -5,6 +5,7 @@ import { getCoverage } from '../../src/transit/core/coverage';
 import { formatEntityRef } from '../../src/transit/core/refs';
 import { compileSchedule } from '../../src/transit/gtfs/static/compiler';
 import { partitionSchedule } from '../../src/transit/gtfs/static/partition';
+import { composeManifest } from '../../src/transit/gtfs/static/compose';
 import { StaticArtifactStore } from '../../src/transit/gtfs/realtime/snapshot-store';
 import { RegionFeedHub } from '../../src/transit/gtfs/realtime/region-feed-hub';
 import type { GtfsScheduleFiles } from '../../src/transit/gtfs/static/schema';
@@ -53,10 +54,11 @@ export const NYC_FILES: GtfsScheduleFiles = {
 };
 export const DC_FILES: GtfsScheduleFiles = {
   'agency.txt': 'agency_id,agency_name,agency_url,agency_timezone\n1,WMATA,http://www.wmata.com,America/New_York\n',
-  'stops.txt': ['stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station',
-    'STN_A03,Dupont Circle,38.909499,-77.04362,1,', 'PF_A03_C,Dupont Circle,38.909499,-77.04362,0,STN_A03',
-    'STN_A02,Farragut North,38.903192,-77.039766,1,', 'PF_A02_C,Farragut North,38.903192,-77.039766,0,STN_A02',
-    'STN_A01,Metro Center,38.898303,-77.028099,1,', 'PF_A01_C,Metro Center,38.898303,-77.028099,0,STN_A01'].join('\n') + '\n',
+  // WMATA marks every station and platform wheelchair_boarding=1.
+  'stops.txt': ['stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station,wheelchair_boarding',
+    'STN_A03,Dupont Circle,38.909499,-77.04362,1,,1', 'PF_A03_C,Dupont Circle,38.909499,-77.04362,0,STN_A03,1',
+    'STN_A02,Farragut North,38.903192,-77.039766,1,,1', 'PF_A02_C,Farragut North,38.903192,-77.039766,0,STN_A02,1',
+    'STN_A01,Metro Center,38.898303,-77.028099,1,,1', 'PF_A01_C,Metro Center,38.898303,-77.028099,0,STN_A01,1'].join('\n') + '\n',
   'routes.txt': 'route_id,agency_id,route_short_name,route_long_name,route_type\nRED,1,R,Red,1\nSHUTTLE,1,SHUTTLE,,3\n',
   'trips.txt': 'route_id,service_id,trip_id,trip_headsign,direction_id\nRED,Weekday,14362694_20741,Glenmont,0\nRED,Weekday,14362719_20741,Glenmont,0\nSHUTTLE,Weekday,16568_20744,Foggy Bottom-GWU LCL,0\n',
   'stop_times.txt': ['trip_id,arrival_time,departure_time,stop_id,stop_sequence',
@@ -79,15 +81,70 @@ export async function bandedArtifact(coverageId: 'dc' | 'nyc', db = memoryStorag
   return { db, coverageId, feedId, compiled, partitioned, version, ref: (kind: 'stop' | 'route' | 'trip' | 'agency', id: string) => formatEntityRef({ coverage: coverageId, feed: feedId, kind, id }) };
 }
 
-type Entity = transit_realtime.IFeedEntity;
-export const feedBytes = (timestamp: number, entity: Entity[]) =>
-  transit_realtime.FeedMessage.encode(transit_realtime.FeedMessage.fromObject({ header: { gtfsRealtimeVersion: '2.0', incrementality: 0, timestamp }, entity })).finish();
-export function nyctTrip(tripId: string, routeId: string, stops: [stopId: string, time: number][], startTime = '09:08:00', startDate = SERVICE_DATE): Entity {
-  return { id: tripId, tripUpdate: { trip: { tripId, routeId, startDate, startTime }, stopTimeUpdate: stops.map(([stopId, time]) => ({ stopId, arrival: { time }, departure: { time } })) } };
+/** Adds one more feed to a published coverage, as an edge refresh of that feed does. */
+export async function composeFeed(db: ReturnType<typeof memoryStorage>, coverageId: 'dc' | 'nyc', feedId: string, files: GtfsScheduleFiles, bandSeconds = 3600) {
+  const compiled = await compileSchedule({ coverage: getCoverage(coverageId)!, feedId, files, window: { startDate: '20261018', endDate: '20261021' },
+    source: { url: `https://example.org/${feedId}.zip`, retrievedAt: '2026-10-18T00:00:00Z' } });
+  const partitioned = await partitionSchedule(compiled, bandSeconds);
+  for (const { key, bytes } of partitioned.objects) await db.bucket.put(key, bytes);
+  const store = new StaticArtifactStore(db.bucket, coverageId);
+  return store.publish(composeManifest((await store.current())?.manifest ?? null, partitioned.manifest));
 }
+
+type Entity = transit_realtime.IFeedEntity;
+const T = transit_realtime;
+const varint = (value: number) => { const out: number[] = []; while (value >= 0x80) { out.push((value % 0x80) | 0x80); value = Math.floor(value / 0x80); } out.push(value); return out; };
+const join = (...parts: (Uint8Array | number[])[]) => Uint8Array.from(parts.flatMap(part => [...part]));
+const field = (number: number, body: Uint8Array) => join(varint(number * 8 + 2), varint(body.length), body);
+/** An entity whose trip carries NYCT's train ID extension (TripDescriptor field 1001). */
+type NyctEntity = Entity & { nyctTrainId?: string };
+function entityBytes(entity: NyctEntity): Uint8Array {
+  const { nyctTrainId, ...plain } = entity;
+  if (!nyctTrainId) return T.FeedEntity.encode(T.FeedEntity.fromObject(plain)).finish();
+  const extension = field(1001, join(field(1, new TextEncoder().encode(nyctTrainId)), [2 * 8, 1]));
+  const withTrip = (trip: transit_realtime.ITripDescriptor, rest: Uint8Array) => join(field(1, join(T.TripDescriptor.encode(T.TripDescriptor.fromObject(trip)).finish(), extension)), rest);
+  const body = plain.tripUpdate
+    ? field(3, withTrip(plain.tripUpdate.trip!, T.TripUpdate.encode(T.TripUpdate.fromObject({ ...plain.tripUpdate, trip: undefined })).finish()))
+    : field(4, withTrip(plain.vehicle!.trip!, T.VehiclePosition.encode(T.VehiclePosition.fromObject({ ...plain.vehicle, trip: undefined })).finish()));
+  return join(field(1, new TextEncoder().encode(plain.id!)), body);
+}
+export const feedBytes = (timestamp: number, entity: NyctEntity[]) => join(
+  field(1, T.FeedHeader.encode(T.FeedHeader.fromObject({ gtfsRealtimeVersion: '2.0', incrementality: 0, timestamp })).finish()),
+  ...entity.map(item => field(2, entityBytes(item))));
+export function nyctTrip(tripId: string, routeId: string, stops: [stopId: string, time: number][], startTime = '09:08:00', startDate = SERVICE_DATE, nyctTrainId?: string): NyctEntity {
+  return { ...nyctTrainId ? { nyctTrainId } : {}, id: tripId, tripUpdate: { trip: { tripId, routeId, startDate, startTime }, stopTimeUpdate: stops.map(([stopId, time]) => ({ stopId, arrival: { time }, departure: { time } })) } };
+}
+/** NYCT equipment register: 14 St (132) has one ADA elevator with no backup; Times Sq
+ * (127/725) has two that back each other up; plus an escalator. */
+export const NYC_EQUIPMENT = [
+  { station: '14 St', borough: '', trainno: '1/2/3', equipmentno: 'EL132A', equipmenttype: 'EL', serving: 'Street to platforms', ADA: 'Y', isactive: 'Y', nonNYCT: 'N',
+    shortdescription: 'Street to platforms', linesservedbyelevator: '1/2/3', elevatorsgtfsstopid: '132', elevatormrn: '1', stationcomplexid: '1', nextadanorth: '', nextadasouth: '',
+    redundant: 0, busconnections: '', alternativeroute: 'Take a downtown 1 to Christopher St and an M8 bus back.' },
+  ...['EL127A', 'EL127B'].map(equipmentno => ({ station: 'Times Sq-42 St', borough: '', trainno: '1/2/3/7', equipmentno, equipmenttype: 'EL', serving: 'Mezzanine to platforms', ADA: 'Y',
+    isactive: 'Y', nonNYCT: 'N', shortdescription: '', linesservedbyelevator: '1/2/3/7', elevatorsgtfsstopid: '127/725', elevatormrn: '2', stationcomplexid: '2', nextadanorth: '', nextadasouth: '',
+    redundant: 1, busconnections: '', alternativeroute: '' })),
+  { station: 'Times Sq-42 St', borough: '', trainno: '1/2/3', equipmentno: 'ES127C', equipmenttype: 'ES', serving: 'Street to mezzanine', ADA: 'N', isactive: 'Y', nonNYCT: 'N',
+    shortdescription: '', linesservedbyelevator: '', elevatorsgtfsstopid: '127/725', elevatormrn: '', stationcomplexid: '2', nextadanorth: '', nextadasouth: '', redundant: 0, busconnections: '', alternativeroute: '' },
+];
+/** An NYCT outage record (times in New York's zone, as MTA formats them). */
+export function nyctOutage(equipment: string, options: { upcoming?: boolean; since?: string; until?: string } = {}) {
+  const unit = NYC_EQUIPMENT.find(item => item.equipmentno === equipment)!;
+  return { station: unit.station, borough: '', trainno: unit.trainno, equipment, equipmenttype: unit.equipmenttype, serving: unit.serving, ADA: unit.ADA,
+    outagedate: options.since ?? '10/19/2026 06:00:00 AM', estimatedreturntoservice: options.until ?? '10/19/2026 11:00:00 PM', reason: 'Repair',
+    isupcomingoutage: options.upcoming ? 'Y' : 'N', ismaintenanceoutage: 'N' };
+}
+export const nyctEquipmentDocuments = (outages: object[] = []) => ({
+  'nyct/nyct_ene.json': new TextEncoder().encode(JSON.stringify(outages)), 'nyct/nyct_ene_equipments.json': new TextEncoder().encode(JSON.stringify(NYC_EQUIPMENT)) });
+/** WMATA ElevatorIncidents (local Washington times, no zone). */
+export function wmataIncident(unit: string, station: string, type: 'ELEVATOR' | 'ESCALATOR', location: string) {
+  return { UnitName: unit, UnitType: type, UnitStatus: null, StationCode: station, StationName: null, LocationDescription: location, SymptomCode: null, SymptomDescription: 'Service Call',
+    TimeOutOfService: '0600', DisplayOrder: 0, DateOutOfServ: '2026-10-19T06:00:00', DateUpdated: '2026-10-19T08:00:00', EstimatedReturnToService: '2026-10-21T23:59:59' };
+}
+export const wmataIncidentDocument = (incidents: object[] = []) => ({ 'Incidents.svc/json/ElevatorIncidents': new TextEncoder().encode(JSON.stringify({ ElevatorIncidents: incidents })) });
+
 /** A train as NYCT reports it: a stop and status, no coordinates. Status 0 incoming, 1 stopped, 2 in transit. */
-export function nyctVehicle(tripId: string, routeId: string, stopId: string, currentStatus: 0 | 1 | 2, timestamp: number, startDate = SERVICE_DATE): Entity {
-  return { id: `v-${tripId}`, vehicle: { trip: { tripId, routeId, startDate }, stopId, currentStatus, timestamp } };
+export function nyctVehicle(tripId: string, routeId: string, stopId: string, currentStatus: 0 | 1 | 2, timestamp: number, startDate = SERVICE_DATE, nyctTrainId?: string): NyctEntity {
+  return { ...nyctTrainId ? { nyctTrainId } : {}, id: `v-${tripId}`, vehicle: { trip: { tripId, routeId, startDate }, stopId, currentStatus, timestamp } };
 }
 
 /** Upstream documents by URL path; any path absent from `documents` answers 503. */

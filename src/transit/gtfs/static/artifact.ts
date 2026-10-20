@@ -7,11 +7,16 @@ export type { ArtifactManifestV2, ScheduleShard, DiscoveryIndex } from './schema
 
 const validatorReportSchema = z.object({
   summary: z.object({ validatorVersion: z.string().trim().min(1), validatedAt: z.iso.datetime({ offset: true }) }),
-  notices: z.array(z.object({ code: z.string().trim().min(1), severity: z.enum(['ERROR', 'WARNING', 'INFO']), totalNotices: z.number().int().nonnegative() })),
+  notices: z.array(z.object({ code: z.string().trim().min(1), severity: z.enum(['ERROR', 'WARNING', 'INFO']), totalNotices: z.number().int().nonnegative(),
+    sampleNotices: z.array(z.record(z.string(), z.unknown())).optional() })),
 });
 const warningAllowlistSchema = z.object({
   coverageId: z.string(),
   warnings: z.array(z.object({ code: z.string().trim().min(1), reason: z.string().trim().min(1), expires: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })),
+  /** Reviewed ERRORs about publisher inputs the build never reads (`file` or `file:field`).
+   * Accepted only while the build declares every named input unused. */
+  errors: z.array(z.object({ code: z.string().trim().min(1), reason: z.string().trim().min(1), expires: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    unusedInputs: z.array(z.string().regex(/^[a-z_]+\.txt(:[a-z_]+)?$/)).min(1) })).optional(),
 });
 
 /** NoticeContainer.exportSystemErrors -> ValidationReportDeserializer.serialize.
@@ -27,7 +32,7 @@ export async function validateMobilityDataSystemErrors(systemErrorsJson: string)
 
 /** Validate a caller-supplied canonical MobilityData report before any publication. */
 export async function validateMobilityDataReport(
-  reportJson: string, allowlistInput: unknown, coverageId: string, today: string,
+  reportJson: string, allowlistInput: unknown, coverageId: string, today: string, unusedInputs: ReadonlySet<string> = new Set(),
 ): Promise<Omit<ValidatorEvidence, 'systemErrorsSha256' | 'systemErrorsFormat'>> {
   let report;
   try { report = validatorReportSchema.parse(JSON.parse(reportJson)); }
@@ -43,13 +48,35 @@ export async function validateMobilityDataReport(
     if (entries.has(entry.code)) throw new Error('Duplicate validator warning allowlist entry');
     entries.set(entry.code, entry);
   }
+  const errors = new Map<string, { unusedInputs: string[] }>();
+  for (const entry of allowlist.data.errors ?? []) {
+    parseServiceDate(entry.expires.replaceAll('-', ''));
+    if (entry.expires <= today) throw new Error('Expired validator error allowlist entry');
+    if (errors.has(entry.code)) throw new Error('Duplicate validator error allowlist entry');
+    errors.set(entry.code, entry);
+  }
+  const acceptedErrors: string[] = [];
   for (const notice of report.notices) {
     if (notice.totalNotices === 0) continue;
-    if (notice.severity === 'ERROR') throw new Error('MobilityData validator error blocks publication');
+    if (notice.severity === 'ERROR') {
+      // Only an error about inputs this build provably does not read can be accepted.
+      const entry = errors.get(notice.code);
+      if (!entry || !entry.unusedInputs.every(input => unusedInputs.has(input))) throw new Error('MobilityData validator error blocks publication');
+      // A generic code (duplicate_key, number_out_of_range) is accepted only where every
+      // instance is visible and names one of the declared unused files.
+      const files = new Set(entry.unusedInputs.map(input => input.split(':')[0]!));
+      const samples = notice.sampleNotices ?? [];
+      if (samples.some(sample => 'filename' in sample) && (samples.length !== notice.totalNotices || samples.some(sample => !files.has(String(sample.filename))))) {
+        throw new Error('MobilityData validator error blocks publication');
+      }
+      acceptedErrors.push(notice.code);
+      continue;
+    }
     if (notice.severity === 'WARNING' && !entries.has(notice.code)) throw new Error(`Unallowlisted validator warning: ${notice.code}`);
   }
   return { name: 'MobilityData GTFS Validator', version: report.summary.validatorVersion,
-    validatedAt: report.summary.validatedAt, reportSha256: await sha256(new TextEncoder().encode(reportJson)) };
+    validatedAt: report.summary.validatedAt, reportSha256: await sha256(new TextEncoder().encode(reportJson)),
+    ...(acceptedErrors.length ? { acceptedErrors: acceptedErrors.sort() } : {}) };
 }
 
 export interface ArtifactStop {

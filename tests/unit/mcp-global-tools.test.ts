@@ -92,7 +92,7 @@ describe('global transit MCP boundary', () => {
   it('makes public instructions and the commute prompt capability-driven with honest legacy lookups', async () => {
     const env = createMockEnv();
     const instructions = (await wire(env, 'server/discover', {})).result.instructions;
-    expect(instructions).toMatch(/plan_trip only when.*available.*planning/i);
+    expect(instructions).toMatch(/plan_trip again with routes/);
     expect(instructions).toContain('get_station_predictions'); expect(instructions).toContain('get_incidents');
     expect(instructions).toContain('DC-only'); expect(instructions).toContain('NYC-only'); expect(instructions).toContain('minutesAway');
     const prompt = (await wire(env, 'prompts/get', { name: 'commute-planner', arguments: { city: 'dc', fromStation: 'Dupont', toStation: 'DCA' } })).result.messages[0].content.text;
@@ -101,7 +101,9 @@ describe('global transit MCP boundary', () => {
     expect(prompt).toContain('get_station_predictions'); expect(prompt).toContain('get_incidents');
     expect(prompt).toContain('do not provide a full journey planner');
     const catalog = (await wire(env, 'tools/list', {})).result.tools;
-    expect(catalog.find((tool: any) => tool.name === 'plan_trip').description).toMatch(/available.*planning/i);
+    // General-purpose agents read the catalog: a refusal must say how to continue.
+    expect(catalog.find((tool: any) => tool.name === 'plan_trip').description).toMatch(/routeHints.*routes/);
+    expect(catalog.find((tool: any) => tool.name === 'get_departures').description).toMatch(/toStop/);
   });
   it('filters bounded alert periods by the explicit 24-hour scope and itinerary times, with safe identifiers', async () => {
     const f = await fixture(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
@@ -518,6 +520,17 @@ describe('global transit MCP boundary', () => {
     const { env } = await fixture();
     const value = await call(env, 'plan_trip', { origin: { ref: ref('stop', 'A') }, destination: { ref: ref('stop', 'C') }, ...extra });
     expect(value.error ?? value.result?.isError).toBeTruthy();
+  });
+  it('withholds planning for a coverage the deployment lists, keeping its other tools', async () => {
+    const { env } = await fixture();
+    const plan = async (planningOff?: string) => (await call({ ...env, ...(planningOff ? { TRANSIT_PLANNING_OFF: planningOff } : {}) } as typeof env, 'plan_trip',
+      { origin: { ref: ref('stop', 'A') }, destination: { ref: ref('stop', 'C') }, departAt: at('08:59:00') })).result.structuredContent;
+    expect(await plan('["sfbay"]')).toMatchObject({ status: 'unavailable', reasons: ['PLANNING_UNAVAILABLE'], itineraries: [] });
+    expect((await plan()).reasons).not.toContain('PLANNING_UNAVAILABLE');
+    const found = (await call({ ...env, TRANSIT_PLANNING_OFF: '["sfbay"]' } as typeof env, 'find_transit', { query: 'sfbay' })).result.structuredContent;
+    expect(found.coverages[0].capabilities).toMatchObject({ planning: false, schedules: true });
+    // Malformed configuration withholds planning everywhere rather than guessing.
+    expect(await plan('not json')).toMatchObject({ reasons: ['PLANNING_UNAVAILABLE'] });
   });
   it('returns deterministic candidate errors without elicitation and resolves both choices in one round', async () => {
     const { env } = await fixture(true);

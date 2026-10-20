@@ -1,0 +1,8 @@
+{
+  "coverageId": "nyc",
+  "warnings": [
+    { "code": "missing_recommended_file", "reason": "Metro-North publishes no feed_info.txt; service dates come from calendar_dates.txt.", "expires": "2026-12-31" },
+    { "code": "single_shape_point", "reason": "Four one-point shapes; shapes are not used for routing or display.", "expires": "2026-12-31" },
+    { "code": "unused_shape", "reason": "Shapes no trip references; shapes are not used for routing or display.", "expires": "2026-12-31" }
+  ]
+}

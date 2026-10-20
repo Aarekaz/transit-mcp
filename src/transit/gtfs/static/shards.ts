@@ -26,7 +26,8 @@ const metadataSchema = z.object({
   timeRange: z.object({ bandStart: uint, bandEnd: uint, start: uint, end: uint })
     .refine(value => value.bandStart < value.bandEnd && value.start <= value.end).optional(),
   source: z.object({ feedId: id, url: z.url(), retrievedAt: id.refine(value => Number.isFinite(Date.parse(value))), sha256: hash, archiveSha256: hash.optional(),
-    derivedFrom: z.object({ archiveSha256: hash, excludedFiles: z.array(id).min(1), reason: z.string().min(1).max(500) }).optional(),
+    derivedFrom: z.object({ archiveSha256: hash, excludedFiles: z.array(id), reason: z.string().min(1).max(500), ignoredFields: z.array(id).min(1).optional() })
+      .refine(value => value.excludedFiles.length > 0 || !!value.ignoredFields?.length).optional(),
     feedInfo: z.array(z.record(z.string(), z.string())), anonymousAgencyRef: agencyRef.optional() }),
   agencyTimezones: z.record(agencyRef, timezone),
   stops: z.array(z.object({ ref: stopRef, providerId: id, name: z.string(), latitude: z.number().nullable(), longitude: z.number().nullable(),
@@ -35,7 +36,7 @@ const metadataSchema = z.object({
     mode: z.enum(['tram', 'subway', 'rail', 'bus', 'ferry', 'cable_tram', 'aerial', 'funicular', 'trolleybus', 'monorail']),
     routeType: uint, color: z.string(), textColor: z.string() })),
   trips: z.array(z.object({ ...tripIdentity, patternId: hash, headsign: z.string(), directionId: direction,
-    blockId: z.string(), wheelchairAccessible: uint.max(2), bikesAllowed: uint.max(2) })),
+    blockId: z.string(), wheelchairAccessible: uint.max(2), bikesAllowed: uint.max(2), shortName: id.optional() })),
   patterns: z.array(z.object({ id: hash, routeRef, directionId: direction, stopRefs: z.array(stopRef).min(1),
     pickupTypes: z.array(uint.max(3)), dropOffTypes: z.array(uint.max(3)) })),
   calendars: z.record(id, calendar),

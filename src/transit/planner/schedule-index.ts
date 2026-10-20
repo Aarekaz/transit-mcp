@@ -9,11 +9,16 @@ export interface ScheduleWindowQuery {
   manifest: ArtifactManifestV2;
   /** Reads one immutable object. Implementations must also cap transport size. */
   readShard: (key: string) => Promise<Uint8Array>;
+  /** Decoded shards kept across calls by a long-lived reader (the realtime coordinator). */
+  decoded?: DecodedShardCache;
   instant: string;
   /** Half-open interval [instant, instant + windowSeconds), maximum seven days. */
   windowSeconds: number;
   feedIds?: string[];
   agencyRefs?: TransitRef[];
+  /** Fetch this many shards' bytes at once (decoding stays sequential). For a reader whose
+   * window is many small objects, such as one agency group's hourly bands. Default 1. */
+  readConcurrency?: number;
 }
 export interface ScheduleDay {
   agencyRef: TransitRef; timezone: string; serviceDate: string; startTime: string;
@@ -38,6 +43,31 @@ function withinFeed(source: SourceMetadata, date: string): boolean {
 }
 
 /** Pure selection plus an injected immutable-byte reader; no R2 or global clock dependency. */
+/** Verified, decoded shards by content hash, least recently used first out. Objects are
+ * immutable: shards are content-addressed and never edited after decoding. */
+export class DecodedShardCache {
+  readonly #entries = new Map<string, { shard: ScheduleShard; bytes: number }>();
+  #bytes = 0;
+  constructor(private readonly maxFileBytes: number) {}
+  get(descriptor: { sha256: string; byteLength: number }): ScheduleShard | undefined {
+    const key = `${descriptor.sha256}/${descriptor.byteLength}`, entry = this.#entries.get(key);
+    if (!entry) return undefined;
+    this.#entries.delete(key); this.#entries.set(key, entry);
+    return entry.shard;
+  }
+  *shards(): Iterable<ScheduleShard> { for (const entry of this.#entries.values()) yield entry.shard; }
+  set(descriptor: { sha256: string; byteLength: number }, shard: ScheduleShard): void {
+    if (descriptor.byteLength > this.maxFileBytes) return;
+    const key = `${descriptor.sha256}/${descriptor.byteLength}`;
+    if (this.#entries.has(key)) return;
+    this.#entries.set(key, { shard, bytes: descriptor.byteLength }); this.#bytes += descriptor.byteLength;
+    for (const [old, entry] of this.#entries) {
+      if (this.#bytes <= this.maxFileBytes) break;
+      this.#entries.delete(old); this.#bytes -= entry.bytes;
+    }
+  }
+}
+
 export async function loadScheduleWindow(query: ScheduleWindowQuery): Promise<ScheduleWindow> {
   const start = parseInstant(query.instant), end = start + query.windowSeconds * 1000;
   if (!Number.isInteger(query.windowSeconds) || query.windowSeconds <= 0 || query.windowSeconds > 7 * 86400) throw new Error('TIME_OUTSIDE_WINDOW: search window must be between 1 second and 7 days');
@@ -99,6 +129,8 @@ export async function loadScheduleWindow(query: ScheduleWindowQuery): Promise<Sc
         const group = chosen.timeRange ? descriptors.filter(descriptor => descriptor.timeRange && sameWindow(descriptor, chosen)) : [chosen];
         for (const descriptor of group) {
           if (descriptor.timeRange && !(origin + descriptor.timeRange.start * 1000 < end && origin + descriptor.timeRange.end * 1000 >= start)) continue;
+          // An agency-split band serves only the agencies it names.
+          if (descriptor.agencyRefs && !descriptor.agencyRefs.includes(agencyRef as TransitRef)) continue;
           let entry = selected.get(descriptor.key);
           if (!entry) { entry = { descriptor, days: [], source }; selected.set(descriptor.key, entry); }
           entry.days.push({ agencyRef: agencyRef as TransitRef, timezone, serviceDate: date, startTime: formatInstant(origin, timezone) });
@@ -109,16 +141,27 @@ export async function loadScheduleWindow(query: ScheduleWindowQuery): Promise<Sc
   const bytesRequired = [...selected.values()].reduce((sum, item) => sum + item.descriptor.byteLength, 0);
   if (bytesRequired > BYTE_BUDGET) throw new Error('Schedule shard byte budget exceeded');
   // Sequential decoding bounds the transient byte buffers and pins one source per feed.
-  for (const { descriptor, days, source } of selected.values()) {
-    const bytes = await query.readShard(descriptor.key);
-    if (bytes.byteLength !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Schedule shard integrity failure');
-    const shard = decodeScheduleShard(bytes);
+  // With readConcurrency, up to that many reads are in flight ahead of the decoder.
+  const entries = [...selected.values()], concurrency = Math.max(1, Math.min(16, query.readConcurrency ?? 1));
+  const pending = new Map<number, Promise<Uint8Array>>();
+  const prefetch = (from: number) => { for (let at = from; at < Math.min(entries.length, from + concurrency); at++) if (!pending.has(at) && !query.decoded?.get(entries[at]!.descriptor)) { const read = query.readShard(entries[at]!.descriptor.key); read.catch(() => {}); pending.set(at, read); } };
+  for (const [position, { descriptor, days, source }] of entries.entries()) {
+    let shard = query.decoded?.get(descriptor);
+    if (!shard) {
+      if (concurrency > 1) prefetch(position);
+      const bytes = await (pending.get(position) ?? query.readShard(descriptor.key));
+      pending.delete(position);
+      if (bytes.byteLength !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Schedule shard integrity failure');
+      shard = decodeScheduleShard(bytes);
+      query.decoded?.set(descriptor, shard);
+    }
     const agencyTimezones = Object.fromEntries(Object.entries(manifest.agencyTimezones).filter(([ref]) => parseTransitRef(ref)?.feed === descriptor.feedId));
     if (shard.coverageId !== manifest.coverageId || shard.feedId !== descriptor.feedId || shard.source.sha256 !== source.sha256 ||
       canonicalJson(shard.source) !== canonicalJson(source) || canonicalJson(shard.agencyTimezones) !== canonicalJson(agencyTimezones) ||
       shard.maxStopTimeSeconds !== descriptor.maxStopTimeSeconds || shard.window.startDate !== descriptor.window.startDate || shard.window.endDate !== descriptor.window.endDate ||
       canonicalJson(shard.timeRange ?? null) !== canonicalJson(descriptor.timeRange ?? null) ||
-      days.some(day => shard.agencyTimezones[day.agencyRef] !== day.timezone)) throw new Error('Schedule shard identity mismatch');
+      days.some(day => shard.agencyTimezones[day.agencyRef] !== day.timezone) ||
+      descriptor.agencyRefs && shard.routes.some(route => !descriptor.agencyRefs!.includes(route.agencyRef))) throw new Error('Schedule shard identity mismatch');
     result.shards.push({ shard, key: descriptor.key, serviceDays: days });
   }
   return result;

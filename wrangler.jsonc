@@ -11,6 +11,10 @@
   "name": "metro-mcp",
   "main": "src/index.ts",
   "compatibility_date": "2026-04-07",
+  // Cloudflare may run several refresh Workflow steps in one invocation, and the CPU limit
+  // covers the invocation: a bus timetable step inherited the previous step's use and died
+  // at the 30 s default. Requests use only the CPU they need; this raises the ceiling.
+  "limits": { "cpu_ms": 300000 },
   "compatibility_flags": [
     "nodejs_compat",
     "global_fetch_strictly_public"
@@ -66,9 +70,11 @@
     "MCP_PUBLIC_ORIGIN": "https://transitmcp.com",
     "MCP_ALLOWED_HOSTNAMES": "transitmcp.com,metro-mcp.anuragd.me",
     "MCP_ALLOWED_ORIGIN_HOSTNAMES": "transitmcp.com,metro-mcp.anuragd.me",
-    "SFBAY_MODE": "dark",
+    "SFBAY_MODE": "on",
     // DC/NYC global tools: off | dark (ingest and validate only) | on | suspended.
     "TRANSIT_COVERAGE_MODES": "{\"dc\":\"on\",\"nyc\":\"on\"}",
+    // SF Bay planning needs a dedicated planner (docs/sfbay-rollout.md); its other tools are on.
+    "TRANSIT_PLANNING_OFF": "[\"sfbay\"]",
     "ENVIRONMENT": "production"
   },
 

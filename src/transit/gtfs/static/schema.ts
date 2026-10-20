@@ -19,7 +19,9 @@ export interface SourceMetadata {
   /** Hash of the exact archive bytes the validator report describes. */
   archiveSha256?: string;
   /** Present when the validated archive was derived from the publisher's archive. */
-  derivedFrom?: { archiveSha256: string; excludedFiles: string[]; reason: string };
+  derivedFrom?: { archiveSha256: string; excludedFiles: string[]; reason: string;
+    /** Publisher fields the build did not use (`file:field`), with the same reason. */
+    ignoredFields?: string[] };
   feedInfo: Record<string, string>[];
   /** Deterministic normalization only when the single source agency omits its ID. */
   anonymousAgencyRef?: TransitRef;
@@ -44,6 +46,8 @@ export interface ScheduleTrip {
   ref: TransitRef; providerId: string; routeRef: TransitRef; serviceId: string;
   patternId: string; headsign: string; directionId: number | null; blockId: string;
   wheelchairAccessible: number; bikesAllowed: number; stopTimes: TripStopTime[];
+  /** Publisher trip_short_name (a railroad train number); absent when not published. */
+  shortName?: string;
 }
 export interface SchedulePattern {
   id: string; routeRef: TransitRef; directionId: number | null;
@@ -95,13 +99,20 @@ export interface ArtifactObject { key: string; sha256: string; byteLength: numbe
 export interface ValidatorEvidence {
   name: 'MobilityData GTFS Validator'; version: string; reportSha256: string; validatedAt: string;
   systemErrorsSha256: string; systemErrorsFormat: 'MobilityData notices';
+  /** ERROR codes accepted because they concern only inputs this build does not read. */
+  acceptedErrors?: string[];
 }
 export interface ArtifactManifestV2 {
   schemaVersion: 2; coverageId: string; sources: SourceMetadata[];
   agencyTimezones: Record<TransitRef, string>;
   discoveries: (ArtifactObject & { feedId: string })[];
-  shards: (ArtifactObject & { feedId: string; window: ServiceWindow; maxStopTimeSeconds: number; timeRange?: ShardTimeRange })[];
+  shards: (ArtifactObject & { feedId: string; window: ServiceWindow; maxStopTimeSeconds: number; timeRange?: ShardTimeRange;
+    /** Present when a band is split by agency: the only agencies whose trips it holds. */
+    agencyRefs?: TransitRef[] })[];
+  /** Validator evidence of a single-feed manifest. */
   validator?: ValidatorEvidence;
+  /** Validator evidence per feed once a coverage composes several (see composeManifest). */
+  validators?: Record<string, ValidatorEvidence>;
 }
 export interface CompileScheduleInput {
   coverage: CoverageManifest; feedId: string; files: GtfsScheduleFiles;
@@ -109,7 +120,11 @@ export interface CompileScheduleInput {
   /** Set when one archive is compiled in parts (per service date): every part carries the
    * whole feed's identity and feed-wide timetable bound instead of its own. */
   identity?: { sha256: string; maxStopTimeSeconds: number } & Pick<SourceMetadata, 'archiveSha256' | 'derivedFrom'>;
+  /** Publisher fields left unused. `trips.txt:block_id` drops in-seat block continuations:
+   * riders transfer at the same stop instead. Recorded in the source's derivation. */
+  ignoredFields?: readonly IgnorableField[];
 }
+export type IgnorableField = 'trips.txt:block_id';
 export interface CompiledSchedule {
   manifest: ArtifactManifestV2; discovery: DiscoveryIndex; shard: ScheduleShard;
   discoveryBytes: Uint8Array; shardBytes: Uint8Array;

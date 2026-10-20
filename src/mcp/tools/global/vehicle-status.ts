@@ -6,8 +6,7 @@ import { formatEntityRef, parseTransitRef } from '../../../transit/core/refs';
 import { getCoverage } from '../../../transit/core/coverage';
 import type { NormalizedVehicle } from '../../../transit/gtfs/realtime/decode';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
-import { MAX_DISCOVERY_CANDIDATES, TransitToolError, boundedText, candidates, checkState, complexStations, coordinatesSchema, coverageSchema, guarded, instantSchema, knownEntity, loadData,
-  metadata, readFeed, realtimeSource, resultShape, routeName, sameStation, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, TransitToolError, boundedText, checkState, complexStations, coordinatesSchema, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, routeName, stopMatches, unavailable, validRef, type TransitData } from './shared';
 
 const STOP_STATUS = { STOPPED_AT: 'stopped_at', INCOMING_AT: 'incoming_at', IN_TRANSIT_TO: 'in_transit_to' } as const;
 
@@ -21,7 +20,9 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
       stop: boundedText.optional().describe('Station name, with coverage. Give this or ref.'), coverage: coverageSchema.optional(),
       limit: z.number().int().min(1).max(100).default(20),
     }),
-    outputSchema: z.strictObject({ ...resultShape, vehicles: z.array(z.strictObject({ id: z.string(), tripInstanceRef: z.string().nullable(), routeRef: z.string().nullable(),
+    outputSchema: z.strictObject({ ...resultShape, vehicles: z.array(z.strictObject({ id: z.string(),
+      trainId: z.string().nullable().describe('The agency\'s train identifier: an NYCT train ID such as "1A 1023 207/FAR" (line, scheduled origin time, origin/destination) or the label WMATA publishes. find_transit resolves it to this train\'s trip.'),
+      tripInstanceRef: z.string().nullable(), routeRef: z.string().nullable(),
       routeName: z.string().nullable().describe('Public route name, e.g. "A" or "Red".'), headsign: z.string().nullable(),
       stopStatus: z.enum(['stopped_at', 'incoming_at', 'in_transit_to']).nullable().describe('Relation to stopRef: stopped there, arriving, or travelling towards it.'),
       stopRef: z.string().nullable(), stopName: z.string().nullable(),
@@ -38,7 +39,7 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
       if (!coverageId) throw new TransitToolError('ENTITY_NOT_FOUND');
       data = await loadData(context, coverageId, handler.mcpReq.signal);
       if (!data) return complete({ ...unavailable(coverageId), vehicles: [] });
-      const matches = sameStation(data, candidates(data, args.stop, 'stop'));
+      const matches = stopMatches(data, args.stop);
       if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND');
       if (matches.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...unavailable(coverageId, data, ['SCOPE_LIMIT_EXCEEDED']), vehicles: [] });
       if (matches.length > 1) throw new TransitToolError('ENTITY_AMBIGUOUS', matches);
@@ -51,8 +52,8 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
     const stopIndex = data.indexes.flatMap(index => index.stops), byRef = new Map(stopIndex.map(stop => [stop.ref as string, stop]));
     const within = parsed.kind === 'stop' ? new Set([ref!, ...complexStations(data, ref!)]) : undefined;
     const atStop = within && new Set(stopIndex.filter(stop => within.has(stop.ref) || stop.parentStationRef !== undefined && within.has(stop.parentStationRef)).map(stop => stop.providerId));
-    const now = Math.floor(Date.now() / 1000), feed = await readFeed<NormalizedVehicle>(context, data, 'vehicle_positions', now, handler.mcpReq.signal);
-    const fresh = feed?.feedId === parsed.feed && feed?.status === 'realtime' && feed.producerTimestampSeconds !== undefined && now >= feed.producerTimestampSeconds && now - feed.producerTimestampSeconds <= data.coverage.thresholds.vehiclePositions.realtimeSeconds;
+    const now = Math.floor(Date.now() / 1000), feed = await readFeed<NormalizedVehicle>(context, data, 'vehicle_positions', now, handler.mcpReq.signal, [], [parsed.feed]);
+    const fresh = (feed.feedIds ?? [feed.feedId]).includes(parsed.feed) && feed?.status === 'realtime' && feed.producerTimestampSeconds !== undefined && now >= feed.producerTimestampSeconds && now - feed.producerTimestampSeconds <= data.coverage.thresholds.vehiclePositions.realtimeSeconds;
     const routes = data.indexes.find(index => index.feedId === parsed.feed)?.routes ?? [];
     const stopRef = (providerId: string | undefined) => {
       const candidate = providerId === undefined ? undefined : formatEntityRef({ coverage: parsed.coverage, feed: parsed.feed, kind: 'stop', id: providerId });
@@ -74,7 +75,8 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
         const coordinates = vehicle.latitude !== undefined && vehicle.longitude !== undefined ? { coordinates: { latitude: vehicle.latitude, longitude: vehicle.longitude }, coordinatesSource: 'vehicle' as const } :
           vehicle.currentStatus === 'STOPPED_AT' && stationLatitude != null && stationLongitude != null ? { coordinates: { latitude: stationLatitude, longitude: stationLongitude }, coordinatesSource: 'stop' as const } :
           { coordinates: null, coordinatesSource: null };
-        return { id: vehicle.vehicleId ?? vehicle.entityId, tripInstanceRef: vehicle.tripInstanceRef ?? null, routeRef: route?.ref ?? null,
+        const trainId = vehicle.trainId ?? vehicle.label;
+        return { id: vehicle.vehicleId ?? vehicle.entityId, trainId: trainId ? sanitizeTransitText(trainId, 40) : null, tripInstanceRef: vehicle.tripInstanceRef ?? null, routeRef: route?.ref ?? null,
           routeName: route ? routeName(route) : null, headsign: vehicle.headsign ? sanitizeTransitText(vehicle.headsign, 200) : null,
           stopStatus: at !== null && vehicle.currentStatus ? STOP_STATUS[vehicle.currentStatus] : null, stopRef: at, stopName: stopName(at),
           previousStopRef: previous, previousStopName: stopName(previous), ...coordinates,

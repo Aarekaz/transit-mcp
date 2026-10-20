@@ -1,7 +1,7 @@
 import { SFBAY_COVERAGE } from '../../../regions/sfbay';
 import type { RealtimeSourcePolicy } from '../../../regions/types';
 import { formatTripInstanceRef, parseTransitRef } from '../../core/refs';
-import { isServiceActive, serviceDayOrigin, shiftServiceDate } from '../../planner/service-day';
+import { isServiceActive, serviceDateAtInstant, serviceDayOrigin, shiftServiceDate } from '../../planner/service-day';
 import type { ArtifactManifestV2, DiscoveryIndex, ScheduleShard, ScheduleTrip } from '../static/schema';
 import { canonicalJson, decodeDiscoveryIndex, encodeScheduleShard, sha256 } from '../static/shards';
 import { parseGtfsTime, parseServiceDate } from '../static/time';
@@ -13,6 +13,24 @@ export interface TripMatchContext {
   /** Provider identity rule; defaults to exact trip IDs. */
   tripMatching?: RealtimeSourcePolicy['tripMatching'];
   minimumScheduleMatchRate?: number;
+  /** Epoch seconds the loaded timetable reaches. A trip scheduled to start later is out of
+   * scope for this poll (providers publish predictions hours ahead): neither matched nor
+   * judged, and counted as `beyondWindow`. */
+  horizonEndSeconds?: number;
+  /** For providers that omit start_date on unambiguous trips (GTFS-Realtime allows it):
+   * the epoch span a trip instance must overlap to be resolved from today's or yesterday's
+   * service day. Only an exactly-one instance matches; absent, undated trips never match. */
+  undatedWindow?: { startSeconds: number; endSeconds: number };
+  /** The provider renumbers stop_sequence (511 sends Muni and VTA one lower than the
+   * timetable): a call is identified by stop_id, and the sequence only chooses between
+   * repeated visits, else the next visit in order. An exact repeat of a call is skipped. */
+  renumberedStopSequences?: boolean;
+  /** The provider sends actual start times: a non-frequency trip instance is identified by
+   * trip ID and service date alone, as GTFS defines it. */
+  advisoryStartTimes?: boolean;
+  /** Epoch seconds: a trip whose every predicted time is earlier is a stale entity, counted
+   * as `expired` rather than judged. */
+  expiredBeforeSeconds?: number;
 }
 /** Below this many eligible trips a match rate is not evidence about the schedule. */
 export const MIN_ELIGIBLE_FOR_MATCH_RATE = 20;
@@ -31,7 +49,9 @@ export interface AppliedTripUpdates {
   version: StaticVersion; trips: NormalizedTripUpdate[]; stopUpdates: NormalizedStopUpdate[];
   match: { eligible: number; matched: number; rate: number };
   /** Trips proven to serve no rider; never part of the match rate. */
-  excluded: { nonRevenue: number; invalidExtras: number; unrepresentableAdded: number }; degraded: boolean; warnings: string[];
+  excluded: { nonRevenue: number; invalidExtras: number; unrepresentableAdded: number; beyondWindow: number; expired?: number; contested?: number }; degraded: boolean; warnings: string[];
+  /** Up to five unmatched trips and why (`no_instance` or `calls_rejected`), for diagnosis. */
+  unmatchedSample?: string[];
 }
 function timeString(seconds: number): string {
   return `${String(Math.floor(seconds / 3600)).padStart(2, '0')}:${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
@@ -49,7 +69,35 @@ function assertIdentity(context: TripMatchContext): void {
   }
 }
 
-/** Date is never inferred from wall time. An ambiguous/missing frequency start is not a match. */
+/** Canonical encodings already hashed, by object. Decoded shards and indexes are never
+ * edited, so a long-lived coordinator proves each object once, not on every poll. */
+const verified = new WeakMap<object, { sha256: string; byteLength: number }>();
+async function assertShardInManifest(shard: ScheduleShard, manifest: ArtifactManifestV2): Promise<void> {
+  let proven = verified.get(shard);
+  if (!proven) {
+    const bytes = encodeScheduleShard(shard);
+    proven = { sha256: await sha256(bytes), byteLength: bytes.length }; verified.set(shard, proven);
+  }
+  if (!manifest.shards.some(descriptor => descriptor.feedId === shard.feedId && descriptor.sha256 === proven.sha256 && descriptor.byteLength === proven.byteLength)) throw new Error('Realtime schedule integrity failure');
+}
+
+/** Shards the window loader just read are already checked byte-for-byte against their
+ * manifest descriptor; record that, so matching does not re-encode them to prove it again. */
+export function recordVerifiedShards(entries: readonly { shard: ScheduleShard; key: string }[], manifest: ArtifactManifestV2): void {
+  for (const { shard, key } of entries) {
+    const descriptor = manifest.shards.find(item => item.key === key);
+    if (descriptor && !verified.has(shard)) verified.set(shard, { sha256: descriptor.sha256, byteLength: descriptor.byteLength });
+  }
+}
+
+/** A discovery index the coordinator decoded from bytes it checked against the manifest. */
+export function recordVerifiedDiscovery(index: DiscoveryIndex, descriptor: { sha256: string; byteLength: number }): void {
+  if (!verified.has(index)) verified.set(index, { sha256: descriptor.sha256, byteLength: descriptor.byteLength });
+}
+const tripIdSets = new WeakMap<DiscoveryIndex, ReadonlySet<string>>();
+
+/** Date is never inferred from wall time, except under undatedWindow (see there). An
+ * ambiguous or missing frequency start is not a match. */
 export function matchTripInstance(update: NormalizedTripUpdate, context: TripMatchContext): MatchedTripInstance | null {
   assertIdentity(context);
   return matchIndexedTrip(update, context, tripIndex(context));
@@ -59,10 +107,7 @@ export function matchTripInstance(update: NormalizedTripUpdate, context: TripMat
 export async function applyVehiclePositions(vehicles: NormalizedVehicle[], context: TripMatchContext): Promise<NormalizedVehicle[]> {
   assertIdentity(context);
   if (!sameStaticVersion(await staticVersion(context.manifest), context.version)) throw new Error('Realtime static artifact version mismatch');
-  for (const shard of context.shards) {
-    const bytes = encodeScheduleShard(shard), hash = await sha256(bytes);
-    if (!context.manifest.shards.some(descriptor => descriptor.feedId === shard.feedId && descriptor.sha256 === hash && descriptor.byteLength === bytes.length)) throw new Error('Realtime schedule integrity failure');
-  }
+  for (const shard of context.shards) await assertShardInManifest(shard, context.manifest);
   return matchVehicles(vehicles, context);
 }
 
@@ -108,11 +153,13 @@ export function matchVehicles(vehicles: NormalizedVehicle[], context: TripMatchC
  * (`040200_7..S97R`). Some lines (7, L, SIR and parts of F and G) publish only the short form. */
 const NYCT_SHORT_TRIP = /^\d{6}_[^.]+\.\.[NS]/;
 const SHORT_PREFIX = 'short:';
+const TRAIN_PREFIX = 'train:';
 
 function tripIndex(context: TripMatchContext): Map<string, { shard: ScheduleShard; trip: ScheduleTrip }[]> {
   const index = new Map<string, { shard: ScheduleShard; trip: ScheduleTrip }[]>();
   const add = (key: string, entry: { shard: ScheduleShard; trip: ScheduleTrip }) => { const entries = index.get(key) ?? []; entries.push(entry); index.set(key, entries); };
   for (const shard of context.shards) for (const trip of shard.trips) {
+    if (context.tripMatching === 'train_number') { if (trip.shortName) add(`${TRAIN_PREFIX}${trip.shortName}`, { shard, trip }); continue; }
     const key = realtimeTripKey(trip.providerId, context.tripMatching);
     add(key, { shard, trip });
     const short = context.tripMatching === 'nyct_suffix' ? NYCT_SHORT_TRIP.exec(key)?.[0] : undefined;
@@ -122,8 +169,10 @@ function tripIndex(context: TripMatchContext): Map<string, { shard: ScheduleShar
 }
 
 function matchIndexedTrip(update: NormalizedTripUpdate, context: TripMatchContext, index: ReturnType<typeof tripIndex>): MatchedTripInstance | null {
+  if (update.tripId && !update.startDate && update.scheduleRelationship !== 'UNKNOWN' && context.undatedWindow && context.tripMatching === 'exact') return undatedMatch(update, context, index);
   if (!update.tripId || !update.startDate || update.scheduleRelationship === 'UNKNOWN') return null;
   try { parseServiceDate(update.startDate); } catch { return null; }
+  if (context.tripMatching === 'train_number') return trainNumberMatch(update, context, index);
   const exact = tripCandidates(update, update.tripId, update.startDate, context, index);
   if (exact.length || context.tripMatching !== 'nyct_suffix') return exact.length === 1 ? exact[0]! : null;
   // A short NYCT ID names the one scheduled trip it prefixes; several is ambiguous, not a match.
@@ -137,6 +186,35 @@ function matchIndexedTrip(update: NormalizedTripUpdate, context: TripMatchContex
   if (!previous) return null;
   const day = shiftServiceDate(update.startDate, -1), shifted = tripCandidates(update, previous, day, context, index);
   const candidates = shifted.length ? shifted : short(previous, day);
+  return candidates.length === 1 ? candidates[0]! : null;
+}
+
+/** An undated trip is the one instance of its trip ID, on today's or yesterday's service
+ * day (overnight service), whose scheduled span overlaps the poll's window. */
+function undatedMatch(update: NormalizedTripUpdate, context: TripMatchContext, index: ReturnType<typeof tripIndex>): MatchedTripInstance | null {
+  const window = context.undatedWindow!, timezones = new Set(context.shards.flatMap(shard => Object.values(shard.agencyTimezones)));
+  if (timezones.size !== 1) return null;
+  const today = serviceDateAtInstant(window.endSeconds * 1000, [...timezones][0]!);
+  const candidates = [shiftServiceDate(today, -1), today].flatMap(date => tripCandidates(update, update.tripId!, date, context, index)).filter(candidate => {
+    const last = candidate.trip.stopTimes.at(-1)!, end = last.arrivalSeconds ?? last.departureSeconds;
+    return end !== null && candidate.originSeconds + candidate.startSeconds <= window.endSeconds && candidate.originSeconds + end + candidate.shiftSeconds >= window.startSeconds;
+  });
+  return candidates.length === 1 ? candidates[0]! : null;
+}
+
+/** Metro-North names a train by its number (the entity ID) and dates it by the civil date
+ * and time it leaves: train 1299 at 00:05 on the 20th is service day 19 at 24:05, and the
+ * same number runs again the next night. The one scheduled trip of that number whose
+ * origin is that civil time, on the start date or the service day before, is the match. */
+function trainNumberMatch(update: NormalizedTripUpdate, context: TripMatchContext, index: ReturnType<typeof tripIndex>): MatchedTripInstance | null {
+  if (!update.startTime || !/^[A-Za-z0-9]{1,8}$/.test(update.entityId)) return null;
+  let start: number;
+  try { start = parseGtfsTime(update.startTime).totalSeconds; } catch { return null; }
+  const key = `${TRAIN_PREFIX}${update.entityId}`;
+  const candidates = [
+    ...tripCandidates(update, key, update.startDate!, context, index),
+    ...tripCandidates({ ...update, startTime: timeString(start + 86_400) }, key, shiftServiceDate(update.startDate!, -1), context, index),
+  ];
   return candidates.length === 1 ? candidates[0]! : null;
 }
 
@@ -169,6 +247,7 @@ function tripCandidates(update: NormalizedTripUpdate, tripKey: string, serviceDa
     // NYCT start_time reports the actual dispatch, not the scheduled origin time; its
     // trip_id already encodes the scheduled origin, so identity is (trip, date, route).
     else if (context.tripMatching === 'nyct_suffix') startSeconds = first;
+    else if (context.advisoryStartTimes) startSeconds = first;
     else if (startSeconds !== first) continue;
     const result: MatchedTripInstance = { shard, trip, timezone, serviceDate, startSeconds,
       shiftSeconds: startSeconds - first, originSeconds: serviceDayOrigin(serviceDate, timezone) / 1000,
@@ -178,7 +257,16 @@ function tripCandidates(update: NormalizedTripUpdate, tripKey: string, serviceDa
   return candidates;
 }
 
-function matchedUpdates(update: NormalizedTripUpdate, match: MatchedTripInstance): NormalizedStopUpdate[] | null {
+/** Stop provider IDs by reference, built once per decoded shard: matching reads a call's
+ * stop for every predicted stop, and decoding each reference costs more than the lookup. */
+const shardStopIds = new WeakMap<ScheduleShard, Map<string, string>>();
+function stopIdsOf(shard: ScheduleShard): Map<string, string> {
+  let ids = shardStopIds.get(shard);
+  if (!ids) { ids = new Map(shard.stops.map(stop => [stop.ref as string, stop.providerId])); shardStopIds.set(shard, ids); }
+  return ids;
+}
+
+function matchedUpdates(update: NormalizedTripUpdate, match: MatchedTripInstance, why?: string[], renumbered = false): NormalizedStopUpdate[] | null {
   const { trip, shard } = match;
   let { startSeconds, originSeconds, serviceDate, tripInstanceRef, shiftSeconds } = match;
   let tripId = trip.providerId;
@@ -195,24 +283,37 @@ function matchedUpdates(update: NormalizedTripUpdate, match: MatchedTripInstance
     } catch { return null; }
   }
   const stops = new Map<number, DecodedStopUpdate>(); let previousSequence = -1;
+  const stopIdOf = (call: { stopRef: string }) => stopIdsOf(shard).get(call.stopRef) ?? parseTransitRef(call.stopRef)?.id;
+  let predicted = update.scheduleRelationship === 'CANCELED' ? [] : update.stops;
+  // A provider that renumbers sequences may still list calls out of their declared order.
+  if (renumbered && predicted.every(stop => stop.stopSequence !== undefined)) predicted = [...predicted].sort((a, b) => a.stopSequence! - b.stopSequence!);
   // Cancellation applies to the whole matched instance; attached stop updates have no semantics.
-  for (const stop of update.scheduleRelationship === 'CANCELED' ? [] : update.stops) {
-    const candidates = trip.stopTimes.filter(call => stop.stopSequence !== undefined ? call.sequence === stop.stopSequence : parseTransitRef(call.stopRef)?.id === stop.stopId);
-    if (candidates.length !== 1 || stop.stopScheduleRelationship === 'UNKNOWN') return null;
+  for (const stop of predicted) {
+    const byStop = renumbered && stop.stopId ? trip.stopTimes.filter(call => stopIdOf(call) === stop.stopId) : undefined;
+    let candidates = byStop ?? trip.stopTimes.filter(call => stop.stopSequence !== undefined ? call.sequence === stop.stopSequence : stopIdOf(call) === stop.stopId);
+    if (byStop && byStop.length > 1) {
+      const chosen = byStop.find(call => call.sequence === stop.stopSequence) ?? byStop.find(call => call.sequence > previousSequence);
+      if (chosen) candidates = [chosen];
+    }
+    if (byStop && candidates.length === 1 && candidates[0]!.sequence === previousSequence) continue;
+    const reject = (reason: string) => { why?.push(`${reason} seq=${stop.stopSequence ?? '-'} stop=${stop.stopId ?? '-'} scheduled=${candidates.map(item => `${item.sequence}:${stopIdOf(item)}`).join(',').slice(0, 60)}`); return null; };
+    if (candidates.length !== 1 || stop.stopScheduleRelationship === 'UNKNOWN') return reject(candidates.length ? 'ambiguous_call' : 'no_call');
     const call = candidates[0]!;
-    if (stop.stopId && parseTransitRef(call.stopRef)?.id !== stop.stopId) return null;
-    if (call.sequence <= previousSequence) return null;
+    if (stop.stopId && stopIdOf(call) !== stop.stopId) return reject('stop_mismatch');
+    if (call.sequence <= previousSequence) return reject('out_of_order');
     previousSequence = call.sequence; stops.set(call.sequence, stop);
   }
   let delay = update.delaySeconds;
   const result: NormalizedStopUpdate[] = [];
+  const routeId = parseTransitRef(trip.routeRef)!.id;
   for (const call of trip.stopTimes) {
     const stop = stops.get(call.sequence), scheduledArrival = call.arrivalSeconds == null ? undefined : originSeconds + call.arrivalSeconds + shiftSeconds;
     const scheduledDeparture = call.departureSeconds == null ? undefined : originSeconds + call.departureSeconds + shiftSeconds;
-    const row: NormalizedStopUpdate = { entityId: update.entityId, tripId, routeId: parseTransitRef(trip.routeRef)!.id,
-      stopId: parseTransitRef(call.stopRef)!.id, stopSequence: call.sequence, tripInstanceRef, serviceDate,
+    const row: NormalizedStopUpdate = { entityId: update.entityId, tripId, routeId,
+      stopId: stopIdOf(call)!, stopSequence: call.sequence, tripInstanceRef, serviceDate,
       scheduleRelationship: update.scheduleRelationship, stopScheduleRelationship: stop?.stopScheduleRelationship ?? 'SCHEDULED',
-      scheduledArrivalTimeSeconds: scheduledArrival, scheduledDepartureTimeSeconds: scheduledDeparture, status: 'scheduled_only' };
+      scheduledArrivalTimeSeconds: scheduledArrival, scheduledDepartureTimeSeconds: scheduledDeparture, status: 'scheduled_only',
+      ...(stop?.track ? { track: stop.track } : {}) };
     if (update.scheduleRelationship === 'CANCELED') { row.status = 'canceled'; result.push(row); continue; }
     if (stop?.stopScheduleRelationship === 'SKIPPED') { row.status = 'skipped'; result.push(row); continue; }
     if (stop?.stopScheduleRelationship === 'NO_DATA') { delay = undefined; result.push(row); continue; }
@@ -344,30 +445,50 @@ function addedUpdates(update: NormalizedTripUpdate, context: TripMatchContext): 
 export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: TripMatchContext): Promise<AppliedTripUpdates> {
   assertIdentity(context);
   if (!sameStaticVersion(await staticVersion(context.manifest), context.version)) throw new Error('Realtime static artifact version mismatch');
-  for (const shard of context.shards) {
-    const bytes = encodeScheduleShard(shard), hash = await sha256(bytes);
-    if (!context.manifest.shards.some(descriptor => descriptor.feedId === shard.feedId && descriptor.sha256 === hash && descriptor.byteLength === bytes.length)) throw new Error('Realtime schedule integrity failure');
-  }
+  for (const shard of context.shards) await assertShardInManifest(shard, context.manifest);
   const staticIds = new Map<string, Set<string>>();
   for (const discovery of context.discoveries ?? []) {
-    const bytes = new TextEncoder().encode(canonicalJson(discovery));
-    decodeDiscoveryIndex(bytes);
     const descriptors = context.manifest.discoveries.filter(item => item.feedId === discovery.feedId);
     if (staticIds.has(discovery.feedId) || discovery.coverageId !== context.manifest.coverageId ||
-      discovery.sourceSha256 !== context.version.sourceVersions[discovery.feedId] || descriptors.length !== 1 ||
-      descriptors[0]!.byteLength !== bytes.length || descriptors[0]!.sha256 !== await sha256(bytes)) throw new Error('Realtime discovery integrity or identity failure');
-    staticIds.set(discovery.feedId, new Set(discovery.tripProviderIds));
+      discovery.sourceSha256 !== context.version.sourceVersions[discovery.feedId] || descriptors.length !== 1) throw new Error('Realtime discovery integrity or identity failure');
+    let proven = verified.get(discovery);
+    if (!proven) {
+      const bytes = new TextEncoder().encode(canonicalJson(discovery));
+      decodeDiscoveryIndex(bytes);
+      proven = { sha256: await sha256(bytes), byteLength: bytes.length }; verified.set(discovery, proven);
+    }
+    if (descriptors[0]!.byteLength !== proven.byteLength || descriptors[0]!.sha256 !== proven.sha256) throw new Error('Realtime discovery integrity or identity failure');
+    let ids = tripIdSets.get(discovery);
+    if (!ids) { ids = new Set(discovery.tripProviderIds); tripIdSets.set(discovery, ids); }
+    staticIds.set(discovery.feedId, ids as Set<string>);
   }
-  const stopUpdates: NormalizedStopUpdate[] = []; let eligible = 0, matched = 0, invalidExtras = 0, nonRevenue = 0, unrepresentableAdded = 0;
+  const unmatchedSample: string[] = [];
+  const stopUpdates: NormalizedStopUpdate[] = []; let eligible = 0, matched = 0, invalidExtras = 0, nonRevenue = 0, unrepresentableAdded = 0, beyondWindow = 0, expired = 0;
+  const timezone = Object.entries(context.manifest.agencyTimezones).find(([ref]) => !context.feedId || parseTransitRef(ref)?.feed === context.feedId)?.[1];
+  const startsAfterHorizon = (update: NormalizedTripUpdate) => {
+    if (context.horizonEndSeconds === undefined || !timezone || !update.startDate || !update.startTime) return false;
+    try { return serviceDayOrigin(update.startDate, timezone) / 1000 + parseGtfsTime(update.startTime).totalSeconds > context.horizonEndSeconds; } catch { return false; }
+  };
   const index = tripIndex(context);
   const shardsInFeed = context.shards.filter(shard => !context.feedId || shard.feedId === context.feedId);
   const routeIds = new Set(shardsInFeed.flatMap(shard => shard.routes.map(route => route.providerId)));
   const stopIds = new Set(shardsInFeed.flatMap(shard => shard.stops.map(stop => stop.providerId)));
   const nyct = context.tripMatching === 'nyct_suffix';
+  // Two live entities claiming one scheduled instance (NYCT has published two 7 trains under
+  // one short ID) contradict each other: neither is that trip, so both stay unmatched.
+  const matches = new Map<NormalizedTripUpdate, MatchedTripInstance | null>(), claims = new Map<string, number>();
+  for (const update of feed.trips) {
+    if (['ADDED', 'REPLACEMENT', 'DUPLICATED'].includes(update.scheduleRelationship)) continue;
+    const match = matchIndexedTrip(update, context, index);
+    matches.set(update, match);
+    if (match) claims.set(match.tripInstanceRef, (claims.get(match.tripInstanceRef) ?? 0) + 1);
+  }
+  let contested = 0;
   for (const update of feed.trips) {
     // A move on a route the schedule does not publish, skipping every stop it lists,
     // serves no rider (e.g. WMATA non-revenue "NR" moves); it is not a match failure.
     if (update.routeId && !routeIds.has(update.routeId) && update.stops.every(stop => stop.stopScheduleRelationship === 'SKIPPED')) { nonRevenue++; continue; }
+    if (startsAfterHorizon(update)) { beyondWindow++; continue; }
     if (update.scheduleRelationship === 'ADDED' || update.scheduleRelationship === 'REPLACEMENT') {
       if (update.scheduleRelationship === 'REPLACEMENT') {
         const original = matchIndexedTrip(update, context, index);
@@ -386,8 +507,15 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
       }
       continue;
     }
-    eligible++;
-    const match = matchIndexedTrip(update, context, index);
+    if (context.expiredBeforeSeconds !== undefined) {
+      const times = update.stops.flatMap(stop => [stop.arrivalTimeSeconds, stop.departureTimeSeconds]).filter((time): time is number => time !== undefined);
+      if (times.length && times.every(time => time < context.expiredBeforeSeconds!)) { expired++; continue; }
+      // Without a start time, a trip predicted only past the loaded timetable is out of scope.
+      if (context.horizonEndSeconds !== undefined && times.length && Math.min(...times) > context.horizonEndSeconds) { beyondWindow++; continue; }
+    }
+    let match = matches.has(update) ? matches.get(update)! : matchIndexedTrip(update, context, index);
+    // Contested identity says nothing about the timetable: out of the rate, like non-revenue moves.
+    if (match && (claims.get(match.tripInstanceRef) ?? 0) > 1) { match = null; contested++; } else eligible++;
     if (nyct) {
       const rows = match ? nyctMatchedUpdates(update, match, stopIds) : nyctObservedUpdates(update, context, stopIds, routeIds);
       if (match && rows) matched++;
@@ -399,8 +527,15 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
       // Absence must be proven feed-wide, not inferred from the resident timetable window.
       if (!ids || !duplicateId || ids.has(duplicateId)) continue;
     }
-    const updates = match ? matchedUpdates(update, match) : null;
+    const why: string[] = [];
+    const updates = match ? matchedUpdates(update, match, why, context.renumberedStopSequences) : null;
     if (updates) { matched++; stopUpdates.push(...updates); }
+    else if (unmatchedSample.length < 5) {
+      // For diagnosis: the reported route against the scheduled trip's own routes, or the call that failed.
+      const scheduled = (index.get(realtimeTripKey(update.tripId ?? '', context.tripMatching)) ?? []).map(entry => entry.shard.routes.find(route => route.ref === entry.trip.routeRef)?.providerId).filter(Boolean);
+      unmatchedSample.push(`${match ? 'calls_rejected' : 'no_instance'}:${update.tripId}@${update.startDate ?? '-'}/${update.startTime ?? '-'} route=${update.routeId ?? '-'}` +
+        (match ? ` ${why[0] ?? ''}` : ` scheduledRoutes=${[...new Set(scheduled)].join(',') || 'none-loaded'}`));
+    }
   }
   const rate = eligible ? matched / eligible : 1;
   // The rate detects a wrong or stale schedule, where matching collapses. Over a handful of
@@ -409,6 +544,6 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
   const threshold = context.minimumScheduleMatchRate ?? SFBAY_COVERAGE.thresholds.minimumScheduleMatchRate;
   const mismatched = eligible >= MIN_ELIGIBLE_FOR_MATCH_RATE ? rate < threshold : eligible > 0 && matched === 0;
   const degraded = invalidExtras > 0 || mismatched;
-  return { version: context.version, trips: feed.trips, stopUpdates, match: { eligible, matched, rate }, excluded: { nonRevenue, invalidExtras, unrepresentableAdded }, degraded,
+  return { version: context.version, trips: feed.trips, stopUpdates, unmatchedSample, match: { eligible, matched, rate }, excluded: { nonRevenue, invalidExtras, unrepresentableAdded, beyondWindow, ...(context.expiredBeforeSeconds !== undefined ? { expired } : {}), ...(contested ? { contested } : {}) }, degraded,
     warnings: [...feed.warnings, ...(degraded ? ['SCHEDULE_REALTIME_MISMATCH'] : [])] };
 }

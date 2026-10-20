@@ -37,7 +37,16 @@ async function put(key: string, file: string, contentType: string) {
   if (result.code !== 0) throw new Error(`Upload failed: ${key}`);
 }
 
-for (const object of objects) await put(object.key, join(directory, object.key), object.key.endsWith('.json') ? 'application/json' : 'application/octet-stream');
+// Immutable, content-addressed objects upload in parallel (bounded); the manifest and
+// then the pointer still go strictly last.
+const concurrency = Math.max(1, Math.min(16, Number(process.env.TRANSIT_PUBLISH_CONCURRENCY ?? 8)));
+let next = 0;
+await Promise.all(Array.from({ length: Math.min(concurrency, objects.length) }, async () => {
+  while (next < objects.length) {
+    const object = objects[next++]!;
+    await put(object.key, join(directory, object.key), object.key.endsWith('.json') ? 'application/json' : 'application/octet-stream');
+  }
+}));
 const manifestKey = `${prefix}manifests/${version.artifactVersion}.json`;
 await put(manifestKey, join(directory, 'manifest.json'), 'application/json');
 

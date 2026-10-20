@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { transit_realtime } from 'gtfs-realtime-bindings';
 import { NYC_TRIP_FEEDS } from '../../src/regions/nyc';
-import { formatTripInstanceRef, parseTransitRef } from '../../src/transit/core/refs';
-import { NOW, NYC_FILES, SERVICE_DATE, bandedArtifact, callTool, civil, feedBytes, liveEnv, nowSeconds, nyctTrip, nyctVehicle, upstream, wireHub } from '../helpers/dc-nyc-realtime';
+import { formatEntityRef, formatTripInstanceRef, parseTransitRef } from '../../src/transit/core/refs';
+import { RegionFeedHub } from '../../src/transit/gtfs/realtime/region-feed-hub';
+import { memoryStorage } from '../helpers/realtime-fixture';
+import { NOW, NYC_FILES, SERVICE_DATE, bandedArtifact, composeFeed, callTool, civil, feedBytes, liveEnv, nowSeconds, nyctEquipmentDocuments, nyctOutage, nyctTrip, nyctVehicle, upstream, wireHub, wmataIncident, wmataIncidentDocument } from '../helpers/dc-nyc-realtime';
 
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW)); });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
@@ -23,11 +25,11 @@ function nycDocuments(stamp = nowSeconds(), overrides: Partial<Record<string, Ui
     // Not in the published schedule at all.
     nyctTrip('055000_1..S03X001', '1', [['129S', civil('09:16:00')], ['130S', civil('09:18:00')]], '09:10:00'),
     // Where those trains are, as NYCT reports it: no coordinates.
-    nyctVehicle('054800_1..S03R', '1', '127S', 1, stamp - 20),
-    nyctVehicle('054900_2..S01R', '2', '128S', 2, stamp - 30),
+    nyctVehicle('054800_1..S03R', '1', '127S', 1, stamp - 20, SERVICE_DATE, '01 0908 242/SFT'),
+    nyctVehicle('054900_2..S01R', '2', '128S', 2, stamp - 30, SERVICE_DATE, '02 0909 241/FLA'),
     nyctVehicle('055000_1..S03X001', '1', '725S', 0, stamp - 10),
   ]);
-  const documents: Record<string, Uint8Array> = { 'camsys/subway-alerts': feedBytes(stamp, []) };
+  const documents: Record<string, Uint8Array> = { 'camsys/subway-alerts': feedBytes(stamp, []), ...nyctEquipmentDocuments() };
   for (const id of NYC_TRIP_FEEDS) documents[`nyct/${id}`] = id === 'gtfs' ? lines : feedBytes(stamp, []);
   return { ...documents, ...overrides } as Record<string, Uint8Array>;
 }
@@ -48,13 +50,13 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     const f = await nyc();
     const found = (await callTool(f.env, 'find_transit', { query: 'nyc' })).structuredContent;
     expect(found.coverages[0]).toMatchObject({ id: 'nyc', available: true,
-      capabilities: { schedules: true, planning: true, realtimeDepartures: true, alerts: true, vehicles: true, accessibility: false } });
+      capabilities: { schedules: true, planning: true, realtimeDepartures: true, alerts: true, vehicles: true, accessibility: true } });
     const vehicles = (await callTool(f.env, 'get_vehicle_status', { ref: f.ref('route', '1') })).structuredContent;
     expect(vehicles).toMatchObject({ status: 'realtime', reasons: [] });
     expect(vehicles.vehicles.map((vehicle: { stopName: string; stopStatus: string }) => `${vehicle.stopName}:${vehicle.stopStatus}`)).toEqual(['Times Sq-42 St:stopped_at', 'Times Sq-42 St:incoming_at']);
     // Polled all nine documents with no credential attached; vehicles ride in the trip documents.
     expect(f.network.requests.map(request => decodeURIComponent(new URL(request.url).pathname).split('/').at(-1)).sort())
-      .toEqual([...NYC_TRIP_FEEDS, 'subway-alerts'].sort());
+      .toEqual([...NYC_TRIP_FEEDS, 'subway-alerts', 'nyct_ene.json', 'nyct_ene_equipments.json'].sort());
   });
 
   it('shows which trains are at a station and where a dated train is, without inventing coordinates', async () => {
@@ -62,10 +64,10 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     // By name: both published Times Sq stations are one place.
     const atTimesSq = (await callTool(f.env, 'get_vehicle_status', { stop: 'Times Sq-42 St', coverage: 'nyc' })).structuredContent;
     expect(atTimesSq).toMatchObject({ status: 'realtime', vehicles: [
-      { routeName: '1', headsign: 'South Ferry', stopStatus: 'stopped_at', stopRef: f.ref('stop', '127S'), stopName: 'Times Sq-42 St',
+      { routeName: '1', trainId: '01 0908 242/SFT', headsign: 'South Ferry', stopStatus: 'stopped_at', stopRef: f.ref('stop', '127S'), stopName: 'Times Sq-42 St',
         previousStopRef: null, coordinates: { latitude: 40.75529, longitude: -73.987495 }, coordinatesSource: 'stop', ageSeconds: 20 },
       // Not in the schedule: no trip identity or headsign is invented, and it is not stopped, so no position.
-      { routeName: '1', headsign: null, tripInstanceRef: null, stopStatus: 'incoming_at', stopRef: f.ref('stop', '725S'), coordinates: null, coordinatesSource: null },
+      { routeName: '1', trainId: null, headsign: null, tripInstanceRef: null, stopStatus: 'incoming_at', stopRef: f.ref('stop', '725S'), coordinates: null, coordinatesSource: null },
     ] });
     // A dated trip from get_departures or plan_trip: the 2 has left Times Sq for 34 St.
     const express = formatTripInstanceRef({ coverage: 'nyc', feed: 'mta_subway', id: 'AFA25GEN-2092-Weekday-00_054900_2..S01R', serviceDate: SERVICE_DATE, startTime: '09:09:00' });
@@ -73,6 +75,9 @@ describe('NYC subway through the global tools with every MTA feed', () => {
       { tripInstanceRef: express, routeName: '2', headsign: 'Flatbush Av-Brooklyn College', stopStatus: 'in_transit_to', stopName: '34 St-Penn Station',
         previousStopRef: f.ref('stop', '127S'), previousStopName: 'Times Sq-42 St', coordinates: null, coordinatesSource: null },
     ] });
+    // A train ID resolves to the trip that train is running, whatever its case or spacing.
+    const found = (await callTool(f.env, 'find_transit', { query: 'train 02  0909 241/fla', coverage: 'nyc' })).structuredContent;
+    expect(found.candidates[0]).toMatchObject({ ref: express, kind: 'trip', name: 'Train 02 0909 241/FLA' });
     // A platform covers only itself.
     expect((await callTool(f.env, 'get_vehicle_status', { ref: f.ref('stop', '725S') })).structuredContent.vehicles.map((vehicle: { stopRef: string }) => vehicle.stopRef))
       .toEqual([f.ref('stop', '725S')]);
@@ -95,6 +100,146 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     const rows = (await callTool(ambiguous.env, 'get_departures', { stopRef: ambiguous.ref('stop', '129'), windowSeconds: 1800 })).structuredContent.departures;
     expect(rows.filter((departure: Row) => instant(departure.predictedTime) === new Date(civil('09:18:30') * 1000).toISOString())
       .map((departure: Row) => [departure.scheduleMatch, departure.scheduledTime])).toEqual([['unmatched_trip', null]]);
+  });
+
+  it('sends an unchanged realtime payload once per isolate, with fresh metadata every read', async () => {
+    const f = await nyc();
+    const reads: { have: string | null; notModified: boolean; rows: number }[] = [];
+    const original = f.hub.fetch.bind(f.hub);
+    vi.spyOn(f.hub, 'fetch').mockImplementation(async (request: Request) => {
+      const response = await original(request), url = new URL(request.url), body = await response.clone().json() as { notModified?: boolean; payload: unknown[] | null };
+      if (url.pathname === '/trip_updates' && !url.searchParams.has('stop')) reads.push({ have: url.searchParams.get('have'), notModified: !!body.notModified, rows: body.payload?.length ?? 0 });
+      return response;
+    });
+    const plan = () => callTool(f.env, 'plan_trip', { origin: { ref: f.ref('stop', '127') }, destination: { ref: f.ref('stop', '132') }, maxWalkMetres: 0 });
+    const first = (await plan()).structuredContent, second = (await plan()).structuredContent;
+    expect(reads[0]).toMatchObject({ notModified: false });
+    expect(reads[0]!.rows).toBeGreaterThan(0);
+    expect(reads.at(-1)).toMatchObject({ have: expect.stringMatching(/^[0-9a-f]{64}$/), notModified: true, rows: 0 });
+    expect(second.itineraries).toEqual(first.itineraries);
+    expect(second.status).toBe(first.status);
+  });
+
+  it('plans step-free journeys only between accessible platforms, avoiding blocking elevator outages', async () => {
+    type Leg = { kind: string; from: string; to: string };
+    const stepFree = (f: Awaited<ReturnType<typeof nyc>>, to: string) => callTool(f.env, 'plan_trip', { origin: { ref: f.ref('stop', '127') }, destination: { ref: f.ref('stop', to) }, accessibility: 'step_free' });
+    const clear = await nyc();
+    // MTA lists Times Sq (127) and 14 St (132) as accessible, 28 St (129) as not.
+    const plan = (await stepFree(clear, '132')).structuredContent;
+    expect(plan.itineraries.length).toBeGreaterThan(0);
+    const accessible = new Set<string>(['127S', '128S', '132S'].map(id => clear.ref('stop', id)));
+    expect(plan.itineraries.every((itinerary: { legs: Leg[] }) => itinerary.legs.every(leg => leg.kind !== 'transit' || accessible.has(leg.from) && accessible.has(leg.to)))).toBe(true);
+    expect(plan.sources.map((source: { kind: string }) => source.kind)).toContain('equipment_outages');
+    expect((await stepFree(clear, '129')).structuredContent).toMatchObject({ status: 'unavailable', reasons: ['ENDPOINT_NOT_STEP_FREE'], itineraries: [] });
+    // Without a step-free requirement 28 St is reachable as before.
+    expect((await callTool(clear.env, 'plan_trip', { origin: { ref: clear.ref('stop', '127') }, destination: { ref: clear.ref('stop', '129') } })).structuredContent.itineraries.length).toBeGreaterThan(0);
+
+    // 14 St's only ADA elevator is out: no step-free journey can end there, and status says why.
+    const down = await nyc(nycDocuments(nowSeconds(), nyctEquipmentDocuments([nyctOutage('EL132A'), nyctOutage('ES127C')])));
+    expect((await stepFree(down, '132')).structuredContent).toMatchObject({ status: 'unavailable', reasons: ['ENDPOINT_NOT_STEP_FREE'] });
+    const status = (await callTool(down.env, 'get_service_status', { ref: down.ref('stop', '132S') })).structuredContent;
+    expect(status.equipment).toMatchObject({ status: 'current', count: 1, blockingStepFreeCount: 1, outages: [{ equipmentId: 'EL132A', kind: 'elevator', accessiblePath: true, hasBackup: false,
+      blocksStepFree: true, upcoming: false, stationName: '14 St', alternativeRoute: 'Take a downtown 1 to Christopher St and an M8 bus back.', since: '2026-10-19T10:00:00.000Z' }] });
+    // A station covers its complex: Times Sq by its 7 station lists the escalator, which does not block step-free travel.
+    expect((await callTool(down.env, 'get_service_status', { ref: down.ref('stop', '725') })).structuredContent.equipment.outages)
+      .toMatchObject([{ equipmentId: 'ES127C', kind: 'escalator', accessiblePath: false, blocksStepFree: false }]);
+
+    // Times Sq's elevators back each other up: one out leaves a step-free path, both out do not.
+    const one = await nyc(nycDocuments(nowSeconds(), nyctEquipmentDocuments([nyctOutage('EL127A')])));
+    expect((await stepFree(one, '132')).structuredContent.itineraries.length).toBeGreaterThan(0);
+    const both = await nyc(nycDocuments(nowSeconds(), nyctEquipmentDocuments([nyctOutage('EL127A'), nyctOutage('EL127B')])));
+    expect((await stepFree(both, '132')).structuredContent).toMatchObject({ reasons: ['ENDPOINT_NOT_STEP_FREE'] });
+    // Announced but not started: listed as upcoming, never blocking.
+    const upcoming = await nyc(nycDocuments(nowSeconds(), nyctEquipmentDocuments([nyctOutage('EL132A', { upcoming: true, since: '10/19/2026 10:00:00 PM' })])));
+    expect((await stepFree(upcoming, '132')).structuredContent.itineraries.length).toBeGreaterThan(0);
+    expect((await callTool(upcoming.env, 'get_service_status', { coverage: 'nyc' })).structuredContent.equipment.outages).toMatchObject([{ equipmentId: 'EL132A', upcoming: true, blocksStepFree: false }]);
+  });
+
+  it('refuses a step-free plan without a current equipment report instead of guessing', async () => {
+    const documents = nycDocuments();
+    delete documents['nyct/nyct_ene_equipments.json'];
+    const f = await nyc(documents);
+    expect((await callTool(f.env, 'plan_trip', { origin: { ref: f.ref('stop', '127') }, destination: { ref: f.ref('stop', '132') }, accessibility: 'step_free' })).structuredContent)
+      .toMatchObject({ status: 'unavailable', itineraries: [], reasons: expect.arrayContaining(['ACCESSIBILITY_UNAVAILABLE']) });
+    expect((await callTool(f.env, 'get_service_status', { coverage: 'nyc' })).structuredContent.equipment).toMatchObject({ status: 'unavailable', outages: [] });
+  });
+
+  it('labels platforms and stations with their step-free access, by direction', async () => {
+    const f = await nyc();
+    const rows = (await callTool(f.env, 'get_departures', { stop: 'Times Sq-42 St', coverage: 'nyc', windowSeconds: 1800 })).structuredContent.departures;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row: { stepFree: string }) => row.stepFree === 'accessible')).toBe(true);
+    const at28 = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '129'), windowSeconds: 1800 })).structuredContent.departures;
+    expect(at28.every((row: { stepFree: string }) => row.stepFree === 'not_accessible')).toBe(true);
+    expect((await callTool(f.env, 'find_transit', { ref: f.ref('stop', '129') })).structuredContent.entities[0].stepFree).toBe('not_accessible');
+    expect((await callTool(f.env, 'find_transit', { ref: f.ref('stop', '132') })).structuredContent.entities[0].stepFree).toBe('accessible');
+  });
+
+  it('serves coordinator reads without rereading the artifact pointer from R2', async () => {
+    const f = await nyc();
+    const get = vi.spyOn(f.db.bucket, 'get');
+    const pointerReads = () => get.mock.calls.filter(([key]) => key === 'artifacts/nyc/v2/current.json').length;
+    await callTool(f.env, 'get_service_status', { coverage: 'nyc' });
+    // The Worker resolves the published version once; the coordinator answers from its last poll.
+    expect(pointerReads()).toBe(1);
+  });
+
+  it('plans along the lines a model names where an open search is withheld, and hints which lines could', async () => {
+    const f = await nyc();
+    (f.env as { TRANSIT_PLANNING_OFF?: string }).TRANSIT_PLANNING_OFF = '["nyc"]';
+    const ask = (extra: Record<string, unknown> = {}) => callTool(f.env, 'plan_trip', { origin: { ref: f.ref('stop', '127') }, destination: { ref: f.ref('stop', '132') }, maxWalkMetres: 0, ...extra });
+    const refused = (await ask()).structuredContent;
+    expect(refused).toMatchObject({ status: 'unavailable', reasons: ['PLANNING_UNAVAILABLE'], itineraries: [] });
+    // Both the 1 and the 2 serve Times Sq and 14 St: one-seat rides.
+    expect(refused.routeHints.direct.map((hint: { name: string }) => hint.name).sort()).toEqual(['1', '2']);
+    expect(refused.routeHints.origin[0]).toMatchObject({ stopName: 'Times Sq-42 St', walkMetres: 0 });
+    const guided = (await ask({ routes: [f.ref('route', '1')] })).structuredContent;
+    expect(guided.itineraries.length).toBeGreaterThan(0);
+    expect(guided.itineraries.flatMap((itinerary: { legs: { kind: string; routeRef?: string }[] }) => itinerary.legs.filter(leg => leg.kind === 'transit').map(leg => leg.routeRef)))
+      .toEqual(guided.itineraries.map(() => f.ref('route', '1')));
+    expect(guided.itineraries.every((itinerary: { legs: { validatorOutcome: string }[] }) => itinerary.legs.every(leg => leg.validatorOutcome === 'valid'))).toBe(true);
+    // Riders read steps: one ride, named.
+    expect(guided.itineraries[0].steps).toMatchObject([{ kind: 'ride', routeName: '1', fromName: 'Times Sq-42 St', toName: '14 St' }]);
+    // Starting where the named line does not stop (Times Sq's 7 platform), the journey walks to it.
+    const walked = (await callTool(f.env, 'plan_trip', { origin: { ref: f.ref('stop', '725S') }, destination: { ref: f.ref('stop', '132') }, routes: [f.ref('route', '1')] })).structuredContent;
+    expect(walked.itineraries.length).toBeGreaterThan(0);
+    expect(walked.itineraries[0].steps.map((step: { kind: string }) => step.kind)).toEqual(['walk', 'ride']);
+    expect(walked.itineraries[0].steps[0]).toMatchObject({ fromName: 'Times Sq-42 St', toName: 'Times Sq-42 St' });
+    // A route from another coverage is not a proposal for this one.
+    expect((await ask({ routes: ['tr:dc:wmata:route:UkVE'] })).structuredContent).toMatchObject({ code: 'INVALID_TRANSIT_REF' });
+  });
+
+  it('lists the next trips from A that reach B, each with its arrival there', async () => {
+    const f = await nyc();
+    type Row = { tripInstanceRef: string; routeName: string; scheduledTime: string; arrival: { stopName: string; scheduledTime: string | null; predictedTime: string | null } };
+    const to14 = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '127'), toStopRef: f.ref('stop', '132'), windowSeconds: 3600 })).structuredContent.departures as Row[];
+    expect(to14.length).toBeGreaterThan(0);
+    expect(to14.every(row => row.arrival.stopName === '14 St' && Date.parse(row.arrival.scheduledTime!) > Date.parse(row.scheduledTime))).toBe(true);
+    // The 1 skipping 23 and 18 St still reaches 14 St, predicted at 09:20.
+    const local = to14.find(row => tripId(row as never) === 'AFA25GEN-1092-Weekday-00_054800_1..S03R')!;
+    expect(local.arrival).toMatchObject({ scheduledTime: new Date(civil('09:18:00') * 1000).toISOString(), predictedTime: new Date(civil('09:20:00') * 1000).toISOString() });
+    // The 2 express is not scheduled to stop at 28 St: it is not a way there.
+    const to28 = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '127'), toStop: '28 St', coverage: 'nyc', windowSeconds: 3600 })).structuredContent.departures as Row[];
+    expect(to28.length).toBeGreaterThan(0);
+    expect(to28.every(row => row.routeName === '1')).toBe(true);
+    // Without a destination nothing changes, and arrival is null.
+    const board = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '127'), windowSeconds: 3600 })).structuredContent.departures as Row[];
+    expect(board.every(row => row.arrival === null)).toBe(true);
+  });
+
+  it('never lets two live trains claim one scheduled trip, and plans around the contradiction', async () => {
+    // NYCT published two 7 trains under one short ID; here two entities claim the scheduled 1 train.
+    const stamp = nowSeconds();
+    const claim = (id: string, time: number) => ({ ...nyctTrip('054800_1..S03R', '1', [['129S', time]], '09:09:41'), id });
+    const f = await nyc(nycDocuments(stamp, { 'nyct/gtfs': feedBytes(stamp, [claim('A', civil('09:14:00')), claim('B', civil('09:21:00')),
+      nyctTrip('055400_1..S03R', '1', [['129S', civil('09:19:00')]], '09:14:00')]) }));
+    const rows = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '129'), windowSeconds: 3600 })).structuredContent.departures as Row[];
+    const claimed = rows.filter(row => tripId(row).endsWith('054800_1..S03R'));
+    // Neither claim is presented as the scheduled trip.
+    expect(claimed.every(row => row.scheduleMatch !== 'matched' || row.status === 'scheduled_only')).toBe(true);
+    const plan = (await callTool(f.env, 'plan_trip', { origin: { ref: f.ref('stop', '127') }, destination: { ref: f.ref('stop', '132') }, maxWalkMetres: 0 })).structuredContent;
+    // The rest of the network still plans.
+    expect(plan.itineraries.length).toBeGreaterThan(0);
   });
 
   it('lists departures across every station of a complex', async () => {
@@ -206,13 +351,15 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     expect(onRoute.alerts[0].agencyText).toEqual({ title: '[F] delays', description: '', label: 'agency_supplied' });
     const coverage = (await callTool(f.env, 'get_service_status', { coverage: 'nyc' })).structuredContent;
     expect(coverage.alerts).toHaveLength(2);
-    expect(coverage.sources.map((source: { kind: string }) => source.kind)).toEqual(['gtfs_schedule', 'alerts']);
+    expect(coverage.sources.map((source: { kind: string }) => source.kind)).toEqual(['gtfs_schedule', 'alerts', 'equipment_outages']);
   });
 
   it('never silently chooses between two stations with the same name', async () => {
     const f = await nyc();
     const found = (await callTool(f.env, 'find_transit', { query: '14 St', coverage: 'nyc' })).structuredContent;
-    expect(new Set(found.candidates.filter((c: { kind: string }) => c.kind === 'stop').map((c: { providerId: string }) => c.providerId))).toEqual(new Set(['132', '132S', 'D19', 'D19S']));
+    // Each station once (its platforms are represented by it), described so a model can choose.
+    expect(new Set(found.candidates.filter((c: { kind: string }) => c.kind === 'stop').map((c: { providerId: string }) => c.providerId))).toEqual(new Set(['132', 'D19']));
+    expect(found.candidates.find((c: { providerId: string }) => c.providerId === '132')).toMatchObject({ stopType: 'station', modes: ['subway'], routeNames: ['1', '2', 'F'] });
     const plan = await callTool(f.env, 'plan_trip', { coverage: 'nyc', origin: { query: '14 St' }, destination: { query: 'Times Sq-42 St' } });
     expect(plan.isError).toBe(true);
     expect(plan.structuredContent).toMatchObject({ code: 'ENTITY_AMBIGUOUS' });
@@ -269,14 +416,14 @@ describe('NYC subway through the global tools with every MTA feed', () => {
 });
 
 describe('Washington Metrorail through the global tools', () => {
-  async function dc(entities: { trips?: transit_realtime.IFeedEntity[]; vehicles?: transit_realtime.IFeedEntity[]; alerts?: transit_realtime.IFeedEntity[] } = {}, key = 'test-wmata-key') {
+  async function dc(entities: { trips?: transit_realtime.IFeedEntity[]; vehicles?: transit_realtime.IFeedEntity[]; alerts?: transit_realtime.IFeedEntity[]; incidents?: object[] } = {}, key = 'test-wmata-key') {
     quiet();
     const artifact = await bandedArtifact('dc');
     const env = liveEnv(artifact.db, { WMATA_API_KEY: key });
     const hub = wireHub(env, artifact.db, 'dc:wmata');
     const stamp = nowSeconds();
     const network = upstream({ 'rail-gtfsrt-tripupdates.pb': feedBytes(stamp, entities.trips ?? []), 'rail-gtfsrt-vehiclepositions.pb': feedBytes(stamp, entities.vehicles ?? []),
-      'rail-gtfsrt-alerts.pb': feedBytes(stamp, entities.alerts ?? []) });
+      'rail-gtfsrt-alerts.pb': feedBytes(stamp, entities.alerts ?? []), ...wmataIncidentDocument(entities.incidents) });
     vi.spyOn(globalThis, 'fetch').mockImplementation(network.fetcher);
     await hub.alarm();
     return { ...artifact, env, hub, network };
@@ -289,14 +436,34 @@ describe('Washington Metrorail through the global tools', () => {
 
   it('authenticates with a header, never the URL, and reports live capabilities only with a key', async () => {
     const f = await dc();
-    expect(f.network.requests).toHaveLength(3);
+    expect(f.network.requests).toHaveLength(4);
     expect(f.network.requests.every(request => request.headers.get('api_key') === 'test-wmata-key' && !request.url.includes('test-wmata-key'))).toBe(true);
     expect((await callTool(f.env, 'find_transit', { query: 'WMATA' })).structuredContent.coverages[0].capabilities)
-      .toEqual({ schedules: true, planning: true, realtimeDepartures: true, alerts: true, vehicles: true, accessibility: false });
+      .toEqual({ schedules: true, planning: true, realtimeDepartures: true, alerts: true, vehicles: true, accessibility: true });
     const keyless = await dc({}, '');
     expect(keyless.network.requests).toHaveLength(0);
     expect((await callTool(keyless.env, 'find_transit', { query: 'dc' })).structuredContent.coverages[0].capabilities)
-      .toMatchObject({ realtimeDepartures: false, alerts: false, vehicles: false });
+      .toMatchObject({ realtimeDepartures: false, alerts: false, vehicles: false, accessibility: false });
+  });
+
+  it('plans step-free Metrorail journeys around station elevator outages, not garage ones', async () => {
+    const stepFree = async (incidents: object[]) => {
+      const f = await dc({ incidents });
+      return { f, plan: (await callTool(f.env, 'plan_trip', { origin: { ref: f.ref('stop', 'STN_A03') }, destination: { ref: f.ref('stop', 'STN_A01') }, accessibility: 'step_free' })).structuredContent };
+    };
+    const clear = await stepFree([]);
+    expect(clear.plan.itineraries.length).toBeGreaterThan(0);
+    // The only elevator to Metro Center's platform is out.
+    const down = await stepFree([wmataIncident('A01X01', 'A01', 'ELEVATOR', 'Elevator between street and mezzanine'), wmataIncident('A01X02', 'A01', 'ESCALATOR', 'Escalator between mezzanine and platform')]);
+    expect(down.plan).toMatchObject({ status: 'unavailable', reasons: ['ENDPOINT_NOT_STEP_FREE'], itineraries: [] });
+    const status = (await callTool(down.f.env, 'get_service_status', { ref: down.f.ref('stop', 'STN_A01') })).structuredContent.equipment;
+    // WMATA omits the station name sometimes; the outage still lands on the station by code.
+    expect(status).toMatchObject({ status: 'current', count: 2, blockingStepFreeCount: 1, outages: [
+      { equipmentId: 'A01X01', kind: 'elevator', accessiblePath: true, hasBackup: null, blocksStepFree: true, stationRefs: [down.f.ref('stop', 'STN_A01')], since: '2026-10-19T10:00:00.000Z' },
+      { equipmentId: 'A01X02', kind: 'escalator', accessiblePath: false, blocksStepFree: false }] });
+    // A garage elevator does not reach the platforms.
+    const garage = await stepFree([wmataIncident('A01X03', 'A01', 'ELEVATOR', 'Garage elevator')]);
+    expect(garage.plan.itineraries.length).toBeGreaterThan(0);
   });
 
   it('applies predictions, excludes non-revenue moves from matching, and never offers unusable trips', async () => {
@@ -328,7 +495,7 @@ describe('Washington Metrorail through the global tools', () => {
     const instance = formatTripInstanceRef({ coverage: 'dc', feed: 'wmata', id: '14362694_20741', serviceDate: SERVICE_DATE, startTime: '09:02:00' });
     const byTrip = (await callTool(f.env, 'get_vehicle_status', { ref: instance })).structuredContent;
     // WMATA publishes "R" as the Red Line's short name; riders say "Red".
-    expect(byTrip).toMatchObject({ status: 'realtime', vehicles: [{ id: '118', tripInstanceRef: instance, routeName: 'Red', coordinatesSource: 'vehicle' }] });
+    expect(byTrip).toMatchObject({ status: 'realtime', vehicles: [{ id: '118', trainId: '644', tripInstanceRef: instance, routeName: 'Red', coordinatesSource: 'vehicle' }] });
     // GTFS-Realtime positions are float32.
     expect(byTrip.vehicles[0].coordinates.latitude).toBeCloseTo(38.905, 5);
     expect(byTrip.vehicles[0].coordinates.longitude).toBeCloseTo(-77.041, 5);
@@ -363,5 +530,87 @@ describe('Washington Metrorail through the global tools', () => {
       headerText: { translation: [{ text: 'Weekend Scheduled Maintenance', language: 'en' }] } } }] });
     const byRoute = (await callTool(f.env, 'get_service_status', { ref: f.ref('route', 'RED') })).structuredContent;
     expect(byRoute).toMatchObject({ status: 'realtime', alerts: [{ id: '7c875cc3', routeIds: ['RED'], activePeriods: [{ end: null }] }] });
+  });
+});
+
+describe('NYC buses: one Bus Time relay, one coordinator per borough timetable', () => {
+  const busFiles = (agency: string, route: string, trip: string, stops: [string, string, number, number][]) => ({
+    'agency.txt': `agency_id,agency_name,agency_url,agency_timezone\n${agency},MTA New York City Transit,https://new.mta.info,America/New_York\n`,
+    'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\n' + stops.map(([id, name, lat, lon]) => `${id},${name},${lat},${lon}`).join('\n') + '\n',
+    'routes.txt': `agency_id,route_id,route_short_name,route_long_name,route_type\n${agency},${route},${route},${route} local,3\n`,
+    'trips.txt': `route_id,service_id,trip_id,trip_headsign\n${route},Weekday,${trip},Northbound\n`,
+    'stop_times.txt': `trip_id,arrival_time,departure_time,stop_id,stop_sequence\n${trip},09:05:00,09:05:00,${stops[0]![0]},1\n${trip},09:15:00,09:15:00,${stops[1]![0]},2\n`,
+    'calendar.txt': 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWeekday,1,1,1,1,1,0,0,20261001,20261031\n',
+  });
+  it('fetches Bus Time once and has each borough publish only its own buses, live', async () => {
+    quiet();
+    const artifact = await bandedArtifact('nyc');
+    await composeFeed(artifact.db, 'nyc', 'mta_bus_m', busFiles('MTA NYCT', 'M15', 'MV_M15_0905', [['401', '1 Av/E 14 St', 40.7317, -73.9818], ['402', '1 Av/E 23 St', 40.7366, -73.9784]]));
+    await composeFeed(artifact.db, 'nyc', 'mta_bus_bx', busFiles('MTA NYCT', 'BX12', 'BX_BX12_0905', [['101', 'Fordham Rd/Grand Concourse', 40.8623, -73.8977], ['102', 'Fordham Rd/Webster Av', 40.8612, -73.8909]]));
+    const env = liveEnv(artifact.db, { MTA_BUS_API_KEY: 'test-bus-key' } as never);
+    const hubs = new Map<string, RegionFeedHub>();
+    env.REGION_FEED_HUB = { idFromName: (name: string) => ({ toString: () => name }), get: (id: { toString(): string }) => ({
+      fetch: (request: string | Request) => hubs.get(id.toString())?.fetch(typeof request === 'string' ? new Request(request) : request) ?? Promise.resolve(new Response(null, { status: 409 })) }) } as unknown as DurableObjectNamespace;
+    for (const name of ['nyc:mta_bus', 'nyc:mta_bus_m', 'nyc:mta_bus_bx']) hubs.set(name, new RegionFeedHub({ id: { toString: () => name }, storage: memoryStorage().storage,
+      blockConcurrencyWhile: async (run: () => Promise<void>) => run() } as unknown as DurableObjectState, env));
+    const stamp = nowSeconds();
+    const trip = (tripId: string, routeId: string, stop: string, time: number) => ({ id: tripId, tripUpdate: { trip: { tripId, routeId, startDate: SERVICE_DATE }, stopTimeUpdate: [{ stopId: stop, stopSequence: 1, arrival: { time }, departure: { time } }] } });
+    const network = upstream({ tripUpdates: feedBytes(stamp, [trip('MV_M15_0905', 'M15', '401', civil('09:07:00')), trip('BX_BX12_0905', 'BX12', '101', civil('09:06:00'))]),
+      vehiclePositions: feedBytes(stamp, []), alerts: feedBytes(stamp, []) });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(network.fetcher);
+    // The relay polls the provider; the boroughs read what it stored.
+    await hubs.get('nyc:mta_bus')!.alarm();
+    await hubs.get('nyc:mta_bus_m')!.alarm(); await hubs.get('nyc:mta_bus_bx')!.alarm();
+    const paths = network.requests.map(request => new URL(request.url).pathname).sort();
+    expect(paths).toEqual(['/alerts', '/tripUpdates', '/vehiclePositions']);
+    expect(network.requests.every(request => new URL(request.url).searchParams.get('key') === 'test-bus-key')).toBe(true);
+    const busStop = (feed: string, id: string) => formatEntityRef({ coverage: 'nyc', feed, kind: 'stop', id });
+    const m15 = (await callTool(env, 'get_departures', { stopRef: busStop('mta_bus_m', '401'), windowSeconds: 3600 })).structuredContent;
+    expect(m15).toMatchObject({ status: 'realtime', departures: [{ routeName: 'M15', status: 'realtime', predictedTime: new Date(civil('09:07:00') * 1000).toISOString() }] });
+    const bx12 = (await callTool(env, 'get_departures', { stopRef: busStop('mta_bus_bx', '101'), windowSeconds: 3600 })).structuredContent;
+    expect(bx12).toMatchObject({ status: 'realtime', departures: [{ routeName: 'BX12', status: 'realtime', predictedTime: new Date(civil('09:06:00') * 1000).toISOString() }] });
+  });
+});
+
+describe('Metrobus beside Metrorail in one coverage', () => {
+  // The bus stop PF_A02_C shares its ID with Farragut North's platform but is in Georgetown.
+  const BUS_FILES = {
+    'agency.txt': 'agency_id,agency_name,agency_url,agency_timezone\n1,WMATA,https://www.wmata.com,America/New_York\n',
+    'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nB1,Connecticut Av NW+Dupont Cir,38.90990,-77.04410\nPF_A02_C,Wisconsin Av NW+M St NW,38.90510,-77.06240\n',
+    'routes.txt': 'route_id,agency_id,route_short_name,route_long_name,route_type\nD80,1,D80,Union Station,3\n',
+    'trips.txt': 'route_id,service_id,trip_id,trip_headsign,block_id\nD80,Weekday,9001,South to Union Station,A1\n',
+    'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\n9001,09:03:00,09:03:00,B1,1\n9001,09:15:00,09:15:00,PF_A02_C,2\n',
+    'calendar.txt': 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWeekday,1,1,1,1,1,0,0,20261001,20261031\n',
+  };
+  async function dcWithBus() {
+    quiet();
+    const artifact = await bandedArtifact('dc');
+    await composeFeed(artifact.db, 'dc', 'wmata_bus', BUS_FILES);
+    const env = liveEnv(artifact.db, { WMATA_API_KEY: 'test-wmata-key' });
+    const hub = wireHub(env, artifact.db, 'dc:wmata');
+    const stamp = nowSeconds();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(upstream({ 'rail-gtfsrt-tripupdates.pb': feedBytes(stamp, []), 'rail-gtfsrt-vehiclepositions.pb': feedBytes(stamp, []),
+      'rail-gtfsrt-alerts.pb': feedBytes(stamp, []) }).fetcher);
+    await hub.alarm();
+    return { ...artifact, env, bus: (id: string) => formatEntityRef({ coverage: 'dc', feed: 'wmata_bus', kind: 'stop', id }) };
+  }
+
+  it('keeps each feed’s stops apart even when their IDs collide', async () => {
+    const f = await dcWithBus();
+    const atBus = (await callTool(f.env, 'get_departures', { stopRef: f.bus('PF_A02_C'), windowSeconds: 3600 })).structuredContent;
+    expect(atBus.departures.map((row: { routeName: string; stopName: string }) => `${row.routeName}@${row.stopName}`)).toEqual(['D80@Wisconsin Av NW+M St NW']);
+    const atRail = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', 'STN_A02'), windowSeconds: 3600 })).structuredContent;
+    expect(new Set(atRail.departures.map((row: { routeName: string }) => row.routeName))).toEqual(new Set(['Red']));
+  });
+
+  it('plans from a bus stop by walking to rail, never riding a feed it cannot search', async () => {
+    const f = await dcWithBus();
+    const plan = (await callTool(f.env, 'plan_trip', { origin: { ref: f.bus('B1') }, destination: { ref: f.ref('stop', 'STN_A01') }, departAt: '2026-10-19T09:00:00-04:00' })).structuredContent;
+    expect(plan.itineraries.length).toBeGreaterThan(0);
+    for (const itinerary of plan.itineraries) {
+      expect(itinerary.origin).toEqual({ latitude: 38.9099, longitude: -77.0441 });
+      expect(itinerary.legs[0]).toMatchObject({ kind: 'walk' });
+      expect(itinerary.legs.filter((leg: { kind: string }) => leg.kind === 'transit').every((leg: { mode: string }) => leg.mode === 'subway')).toBe(true);
+    }
   });
 });

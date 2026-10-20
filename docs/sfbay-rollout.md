@@ -32,6 +32,22 @@ The compiler consumes already downloaded/validated files; it does not itself fet
 
 Only after these gates pass may a proposed activation change set SF to `on`. Review the exact configuration and copy diff; deployment approval remains separate. Verify the deployed `/info`, all 18 tools, actual journey results and public pages before stating SF is live. Update README, landing-page description/Open Graph/Twitter/JSON-LD, docs, `llms.txt`, registry/social metadata, and release notes together. Do not describe DC/NYC global planning as live based on SF acceptance.
 
+## Launch evidence (2026-10-19, production, SF dark)
+
+**Data path.** The cron fetches 511's regional archive (`operator_id=RG`) with the production token, claiming the coordinator's static quota share first, and streams it to R2 (64,181,516 bytes, SHA-256 `f4150c68…e289`). SF builds stay offline: the cron never starts an edge build for them.
+
+**Validation.** MobilityData GTFS Validator 8.0.1 on that archive: no system errors, 21 warning codes and 5 ERROR codes, all reviewed in `data/sfbay-validator-allowlist.json`. Each accepted ERROR concerns only inputs the build does not read (shapes and `shape_dist_traveled`, Fares v2 tables, and `trips.block_id`, which the SF build ignores and records in the source derivation); the gate checks this per build and per notice.
+
+**Artifact.** `b4fdc773…` (published; pointer had no previous version): 19–26 Oct, 74,407 trips, 20,627 stops, 1-hour bands split into 12 agency groups (rail/ferry backbone together, the busiest agencies alone), 2,177 shards, largest 2.0 MB, manifest 1.08 MB.
+
+**Realtime matching (>= 95% gate): passes.** Four consecutive production polls on version `14098d52`: 99.6% (1,835/1,842; 1,831/1,839; 1,809/1,817; 1,787/1,795). Muni, AC Transit, BART, VTA, SamTrans, Marin and the backbone match 100%; the misses are UC shuttles that 511's own calendar does not run today and two SFO AirTrain trips stuck at their 04:00 start. Excluded from the rate and logged per poll: ~160 trips predicted only beyond the 90-minute window and 15 stale entities whose every prediction predates the one-hour lookback. 511 deviates from GTFS-Realtime in ways handled only for this source (`providerQuirks` in `src/transit/gtfs/realtime/sources.ts`): no `start_date` on BART, Caltrain, Marin, SolTrans and others; `stop_sequence` one lower than the timetable for Muni and VTA; repeated and unordered calls; actual start times; and stale entities.
+
+**Coordinator cost.** Before: 73–83 s wall and ~16–20 s CPU per alarm, with one alarm killed at the 30 s limit. After: trip updates 10.5–11.6 s CPU, 37–42 s wall; vehicle positions 0.1 s (resolved from the last trip-update matches); alerts 0.09 s.
+
+**Freshness: not yet measured.** Trip updates poll every 120 s, the minimum 511's 60 requests an hour allow beside vehicles (300 s) and alerts; publishing completes ~38 s after a poll starts. Worst-case producer age is therefore near the 180 s threshold, and results there read `REALTIME_STALE`. A higher 511 allowance or a measured threshold decides this.
+
+**Planning: does not pass.** On the published artifact, 6 of 30 sweep plans succeed (SamTrans/BART/Caltrain from SFO at every time, Caltrain at 22:00), all with valid legs; 24 exceed the planner's working-set budget. Hub stations (Embarcadero, 4th & King, Salesforce Transit Center) bring Muni and other large agencies into every search; one 2-hour Bay Area window needs more decoded timetable than a request isolate holds. Regional SF planning needs a dedicated planner with a compact resident timetable.
+
 ## Rollback
 
 For an approved rollout, preserve the prior artifact pointer and Worker version. `suspended` halts polling; `off` disables service and ingestion. Confirm global tool results degrade/refuse appropriately and legacy DC/NYC tools still work. Keep all 18 tools registered. Do not delete Durable Object namespaces, the original rollback migration, or retained artifacts as part of rollback. Update public availability claims if SF is withdrawn.

@@ -2,16 +2,18 @@ import { ProtocolError, ProtocolErrorCode, type ServerContext } from '@modelcont
 import { z } from 'zod';
 import type { MetroMcpContext, TransitRequestState } from '../../context';
 import { complete } from '../../shared';
-import { getCoverage, getCoverages, type CoverageManifest } from '../../../transit/core/coverage';
+import { getCoverage, getCoverages, planningWithheld, type CoverageManifest } from '../../../transit/core/coverage';
 import { getCoverageMode } from '../../../regions/manifest';
 import { formatEntityRef, parseTransitRef, type TransitRef } from '../../../transit/core/refs';
+import { BACKBONE_MODES } from '../../../transit/gtfs/static/partition';
 import { VERIFICATION_REASONS, type SourceStatus, type VerificationReason } from '../../../transit/core/results';
 import { StaticArtifactStore, readBoundedObject, sameStaticVersion, type StaticVersion } from '../../../transit/gtfs/realtime/snapshot-store';
-import { credential, getRealtimeSource, publishedKinds } from '../../../transit/gtfs/realtime/sources';
+import { credential, getRealtimeSources, publishedKinds, sourceFeedIds, type RealtimeSource } from '../../../transit/gtfs/realtime/sources';
 import type { CoverageCapability } from '../../../transit/core/coverage';
 import { decodeDiscoveryIndex, decodeScheduleShard, sha256 } from '../../../transit/gtfs/static/shards';
 import type { ArtifactManifestV2, DiscoveryIndex, ScheduleStop } from '../../../transit/gtfs/static/schema';
-import type { FeedRead } from '../../../transit/gtfs/realtime/hub-core';
+import { stationAccess, stepFreeStops, type EquipmentOutage } from '../../../transit/accessibility/equipment';
+import { kindThresholds, type FeedRead } from '../../../transit/gtfs/realtime/hub-core';
 import type { NormalizedVehicle } from '../../../transit/gtfs/realtime/decode';
 import type { RealtimeFeedKind } from '../../../regions/types';
 import { classifyManifestFreshness, sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
@@ -23,13 +25,17 @@ export const coverageSchema = boundedText.describe('Runtime coverage name or ide
 export const instantSchema = z.iso.datetime({ offset: true });
 export const coordinatesSchema = z.strictObject({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) });
 export const endpointSchema = z.union([z.strictObject({ ref: boundedText }), z.strictObject({ query: boundedText }), coordinatesSchema]);
-export const sourceSchema = z.strictObject({ feedId: z.string(), kind: z.enum(['gtfs_schedule', 'trip_updates', 'vehicle_positions', 'alerts', 'native_api']),
+export const sourceSchema = z.strictObject({ feedId: z.string(), kind: z.enum(['gtfs_schedule', 'trip_updates', 'vehicle_positions', 'alerts', 'equipment_outages', 'native_api']),
   producerTimestamp: instantSchema.nullable(), ingestedAt: instantSchema, ageSeconds: z.number().nonnegative().nullable(), scheduleVersion: z.string() });
 export const attributionSchema = z.strictObject({ text: z.string(), url: z.url(), license: z.string().optional() });
 export const resultShape = { status: z.enum(['realtime', 'scheduled_only', 'unavailable']), reasons: z.array(z.enum(VERIFICATION_REASONS)),
   asOf: instantSchema, sources: z.array(sourceSchema), attribution: z.array(attributionSchema) };
 export const candidateSchema = z.strictObject({ ref: z.string(), kind: z.enum(['agency', 'route', 'stop', 'trip']),
-  name: z.string(), coverage: z.string(), feed: z.string(), providerId: z.string(), endpoint: z.enum(['origin', 'destination']).optional() });
+  name: z.string(), coverage: z.string(), feed: z.string(), providerId: z.string(), endpoint: z.enum(['origin', 'destination']).optional(),
+  // Stops only: enough to tell a station from a street corner without another call.
+  stopType: z.enum(['station', 'platform', 'stop', 'entrance', 'other']).optional().describe('station: groups platforms; platform: part of stationRef; stop: a standalone stop such as a street corner.'),
+  modes: z.array(z.string()).optional(), routeNames: z.array(z.string()).max(10).optional().describe('Lines serving it, up to ten.'),
+  routeCount: z.number().int().nonnegative().optional(), stationRef: z.string().optional(), coordinates: coordinatesSchema.nullable().optional() });
 export type Candidate = z.infer<typeof candidateSchema>;
 /** Per endpoint/query; two-endpoint elicitation is therefore at most 100 choices. */
 export const MAX_DISCOVERY_CANDIDATES = 50;
@@ -108,7 +114,9 @@ export async function loadData(context: MetroMcpContext, coverageId: string, sig
       index = decodeDiscoveryIndex(bytes);
       // Content-addressed and verified: safe to reuse across requests in this isolate.
       discoveryCache.set(descriptor.sha256, index);
-      while (discoveryCache.size > 4) discoveryCache.delete(discoveryCache.keys().next().value!);
+      // Keep every index this manifest uses (NYC has one per feed); drop only older versions.
+      const inUse = new Set(current.manifest.discoveries.map(item => item.sha256));
+      for (const sha of [...discoveryCache.keys()]) if (discoveryCache.size > inUse.size + 4 && !inUse.has(sha)) discoveryCache.delete(sha);
     }
     if (index.coverageId !== coverage.id || index.feedId !== descriptor.feedId || index.sourceSha256 !== current.version.sourceVersions[index.feedId]) throw new Error('Discovery identity');
     indexes.push(index);
@@ -138,7 +146,6 @@ function entityIndex(data: TransitData, index: DiscoveryIndex): EntityIndex {
   const list = [
     ...index.stops.map(stop => ({ ref: stop.ref, providerId: stop.providerId, name: sanitizeTransitText(stop.name), kind: 'stop' as const })),
     ...index.routes.map(route => ({ ref: route.ref, providerId: route.providerId, name: sanitizeTransitText(`${route.shortName} ${route.longName}`.trim()), kind: 'route' as const })),
-    ...index.tripProviderIds.map(id => ({ ref: formatEntityRef({ coverage: index.coverageId, feed: index.feedId, kind: 'trip', id }), providerId: id, name: sanitizeTransitText(id), kind: 'trip' as const })),
     ...agencies.map(ref => ({ ref, providerId: parseTransitRef(ref)!.id, name: sanitizeTransitText(parseTransitRef(ref)!.id), kind: 'agency' as const })),
   ].map(entity => Object.freeze({ ...entity, coverage: index.coverageId, feed: index.feedId }) as Candidate);
   const names = new Map(list.map(entity => {
@@ -150,22 +157,86 @@ function entityIndex(data: TransitData, index: DiscoveryIndex): EntityIndex {
   byAgencies.set(key, built);
   return built;
 }
+/** Trips are looked up by exact ID, never listed: a bus network publishes hundreds of
+ * thousands, and `tripProviderIds` is sorted, so a binary search finds one. */
+function tripCandidate(index: DiscoveryIndex, id: string): Candidate | undefined {
+  const ids = index.tripProviderIds;
+  let low = 0, high = ids.length - 1;
+  while (low <= high) {
+    const middle = (low + high) >>> 1, value = ids[middle]!;
+    if (value === id) return Object.freeze({ ref: formatEntityRef({ coverage: index.coverageId, feed: index.feedId, kind: 'trip', id }), providerId: id, name: sanitizeTransitText(id), kind: 'trip', coverage: index.coverageId, feed: index.feedId }) as Candidate;
+    if (value < id) low = middle + 1; else high = middle - 1;
+  }
+  return undefined;
+}
 export function entities(data: TransitData): readonly Candidate[] {
   return data.indexes.length === 1 ? entityIndex(data, data.indexes[0]!).list : data.indexes.flatMap(index => entityIndex(data, index).list);
 }
+const FIXED_GUIDEWAY = new Set(['subway', 'rail', 'tram', 'cable_tram', 'ferry', 'aerial', 'funicular', 'monorail']);
+type StopFacts = Required<Pick<Candidate, 'stopType' | 'modes' | 'routeNames' | 'routeCount'>> & Pick<Candidate, 'stationRef' | 'coordinates'>;
+const stopFactCache = new WeakMap<DiscoveryIndex, Map<string, StopFacts>>();
+/** What each stop is and what serves it (a station counts its platforms' lines), built
+ * once per immutable discovery index. */
+function stopFacts(index: DiscoveryIndex): Map<string, StopFacts> {
+  let facts = stopFactCache.get(index);
+  if (facts) return facts;
+  const routes = new Map(index.routes.map(route => [route.ref as string, route]));
+  const children = new Map<string, string[]>();
+  for (const stop of index.stops) if (stop.parentStationRef) children.set(stop.parentStationRef, [...children.get(stop.parentStationRef) ?? [], stop.ref]);
+  facts = new Map();
+  for (const stop of index.stops) {
+    const served = new Set<string>([stop.ref, ...children.get(stop.ref) ?? []].flatMap(ref => index.stopRoutes[ref as TransitRef] ?? []));
+    const lines = [...served].flatMap(ref => routes.get(ref) ?? []);
+    facts.set(stop.ref, {
+      stopType: stop.locationType === 1 ? 'station' : stop.locationType === 2 ? 'entrance' : stop.parentStationRef ? 'platform' : stop.locationType === 0 ? 'stop' : 'other',
+      modes: [...new Set(lines.map(route => route.mode))].sort(), routeNames: [...new Set(lines.map(routeName))].sort((a, b) => a.localeCompare(b, 'en', { numeric: true })).slice(0, 10),
+      routeCount: served.size, ...(stop.parentStationRef ? { stationRef: stop.parentStationRef } : {}),
+      coordinates: stop.latitude != null && stop.longitude != null ? { latitude: stop.latitude, longitude: stop.longitude } : null,
+    });
+  }
+  stopFactCache.set(index, facts);
+  return facts;
+}
+/** A stop candidate with what it is and what serves it; other kinds unchanged. */
+export function describeCandidate(data: TransitData, entity: Candidate): Candidate {
+  if (entity.kind !== 'stop') return entity;
+  const index = data.indexes.find(index => index.feedId === entity.feed), facts = index && stopFacts(index).get(entity.ref);
+  return facts ? { ...entity, ...facts } : entity;
+}
+/** Name matches, best first: exact or alias names, then names starting with the query, then
+ * any containing it; within each, stations before standalone stops before platforms, rail
+ * before bus, busier stops, shorter names. A platform whose station also matched is left to it. */
 export function candidates(data: TransitData, query: string, kind?: string): Candidate[] {
   const normalized = normalizeEntityName(query), aliasStops = aliasStopNames(data, normalized);
-  const found: { entity: Candidate; exact: boolean }[] = [];
+  const found: { entity: Candidate; rank: number[] }[] = [];
   for (const index of data.indexes) {
+    const trip = !kind || kind === 'trip' ? tripCandidate(index, query.trim()) : undefined;
+    if (trip) found.push({ entity: trip, rank: [0] });
     const { list, names } = entityIndex(data, index);
     for (const entity of list) {
       if (kind && kind !== entity.kind) continue;
       const own = names.get(entity.ref)!, alias = aliasMatch(entity, aliasStops);
-      if (alias || own.some(name => name.includes(normalized))) found.push({ entity, exact: alias || own.includes(normalized) });
+      if (!alias && !own.some(name => name.includes(normalized))) continue;
+      const match = alias || own.includes(normalized) ? 0 : own.some(name => name.startsWith(normalized) || name.includes(` ${normalized}`)) ? 1 : 2;
+      const described = describeCandidate(data, entity);
+      const type = described.stopType === undefined || described.stopType === 'station' ? 0 : described.stopType === 'stop' ? 1 : 2;
+      const mode = described.modes === undefined ? 0 : described.modes.some(item => FIXED_GUIDEWAY.has(item)) ? 0 : described.modes.length ? 1 : 2;
+      found.push({ entity: described, rank: [match, type, mode, -(described.routeCount ?? 0), described.name.length] });
     }
   }
-  return found.sort((a, b) => Number(b.exact) - Number(a.exact) || a.entity.providerId.localeCompare(b.entity.providerId) || a.entity.ref.localeCompare(b.entity.ref))
+  const refs = new Set(found.map(item => item.entity.ref));
+  const order = (a: number[], b: number[]) => { for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) - (b[i] ?? 0); return 0; };
+  return found.filter(item => !(item.entity.stationRef && item.entity.stopType !== 'station' && refs.has(item.entity.stationRef)))
+    .sort((a, b) => order(a.rank, b.rank) || a.entity.providerId.localeCompare(b.entity.providerId) || a.entity.ref.localeCompare(b.entity.ref))
     .map(item => item.entity);
+}
+/** Stops a typed name stands for: exact names and reviewed aliases (with any stop whose own
+ * name carries the alias) when any exist, else every match. A station complex counts once. */
+export function stopMatches(data: TransitData, query: string): Candidate[] {
+  // Entrances lead into a station; they are never where a journey boards.
+  const boardable = (list: Candidate[]) => { const kept = list.filter(candidate => candidate.stopType !== 'entrance' && candidate.stopType !== 'other'); return kept.length ? kept : list; };
+  const all = boardable(candidates(data, query, 'stop')), exact = all.filter(candidate => ambiguityCandidate(data, candidate, query));
+  return sameStation(data, exact.length ? exact : all);
 }
 const normalizeEntityName = (value: string) => value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 function entityNames(data: TransitData, entity: Candidate): readonly string[] {
@@ -187,7 +258,26 @@ export const exactCandidate = (data: TransitData, entity: Candidate, query: stri
 export function ambiguityCandidate(data: TransitData, entity: Candidate, query: string): boolean {
   const normalized = normalizeEntityName(query);
   return exactCandidate(data, entity, query) || entity.kind === 'stop' && normalizeEntityName(entity.name).includes(normalized) &&
-    (data.coverage.placeAliases ?? []).some(place => place.aliases.some(alias => normalizeEntityName(alias) === normalized));
+    (data.coverage.placeAliases ?? []).some(place => place.aliases.some(alias => normalizeEntityName(alias) === normalized)) && nearAliasTargets(data, entity, normalized);
+}
+/** A stop that only carries an alias in its name ("Decoto Rd & Union Square", 40 km from San
+ * Francisco's) is that place only if it lies near the alias's own stops. */
+const ALIAS_RADIUS_METRES = 3000;
+const aliasTargetCache = new WeakMap<TransitData['indexes'], Map<string, { latitude: number; longitude: number }[]>>();
+function nearAliasTargets(data: TransitData, entity: Candidate, normalized: string): boolean {
+  let byAlias = aliasTargetCache.get(data.indexes);
+  if (!byAlias) { byAlias = new Map(); aliasTargetCache.set(data.indexes, byAlias); }
+  let targets = byAlias.get(normalized);
+  if (!targets) {
+    const names = aliasStopNames(data, normalized);
+    targets = [...stopsByRef(data).values()].filter(stop => names.has(normalizeEntityName(stop.name)) && stop.latitude != null && stop.longitude != null)
+      .map(stop => ({ latitude: stop.latitude!, longitude: stop.longitude! }));
+    byAlias.set(normalized, targets);
+  }
+  const stop = stopsByRef(data).get(entity.ref);
+  if (!targets.length || stop?.latitude == null || stop.longitude == null) return true;
+  const radians = Math.PI / 180;
+  return targets.some(target => Math.hypot((stop.longitude! - target.longitude) * radians * Math.cos(target.latitude * radians), (stop.latitude! - target.latitude) * radians) * 6_371_000 <= ALIAS_RADIUS_METRES);
 }
 /** Matches that all belong to one station complex name one place, and resolve to its
  * station. A complex is a GTFS station with its platforms and entrances, together with
@@ -248,12 +338,91 @@ export function routeName(route: { shortName: string; longName: string }): strin
   const initial = route.shortName.length === 1 && route.longName.toUpperCase().startsWith(route.shortName.toUpperCase());
   return sanitizeTransitText(!route.shortName || initial ? route.longName || route.shortName : route.shortName, 120);
 }
-/** The other stations in a station's complex (Times Sq-42 St is published as four). */
+/** For agency-split schedules only (else undefined, meaning every agency): the agencies a
+ * journey can use. A station or stop endpoint brings the agencies serving it; a point
+ * brings those with a stop within the walking limit; the regional backbone (agencies
+ * running only rail, subway or ferry) joins them. A journey needing a third local agency
+ * between the two ends is not searched. */
+export function journeyAgencies(data: TransitData, endpoints: readonly (TransitRef | { latitude: number; longitude: number })[], walkMetres: number): TransitRef[] | undefined {
+  if (!data.manifest.shards.some(shard => shard.agencyRefs)) return undefined;
+  const routes = new Map(data.indexes.flatMap(index => index.routes).map(route => [route.ref as string, route]));
+  const agencies = new Set<TransitRef>(), modes = new Map<string, Set<string>>();
+  for (const route of routes.values()) { const set = modes.get(route.agencyRef) ?? new Set<string>(); set.add(route.mode); modes.set(route.agencyRef, set); }
+  for (const [agency, set] of modes) if ([...set].every(mode => BACKBONE_MODES.has(mode))) agencies.add(agency as TransitRef);
+  const serve = (stop: string) => { for (const index of data.indexes) for (const route of index.stopRoutes[stop as TransitRef] ?? []) { const agency = routes.get(route)?.agencyRef; if (agency) agencies.add(agency); } };
+  const metres = (a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }) => {
+    const radians = Math.PI / 180, x = (b.longitude - a.longitude) * radians * Math.cos((a.latitude + b.latitude) * radians / 2), y = (b.latitude - a.latitude) * radians;
+    return Math.hypot(x, y) * 6_371_000;
+  };
+  for (const endpoint of endpoints) {
+    if (typeof endpoint === 'string') {
+      serve(endpoint);
+      for (const index of data.indexes) for (const stop of index.stops) if (stop.parentStationRef === endpoint) serve(stop.ref);
+      continue;
+    }
+    for (const index of data.indexes) for (const stop of index.stops) {
+      if (stop.latitude !== null && stop.longitude !== null && metres(endpoint, { latitude: stop.latitude, longitude: stop.longitude }) <= walkMetres) serve(stop.ref);
+    }
+  }
+  return [...agencies].sort();
+}
+/** Agencies to decode for a station board: the caller's filter, narrowed for agency-split
+ * schedules to the agencies whose routes serve these stops. */
+export function stationAgencies(data: TransitData, stopRefs: ReadonlySet<string>, requested?: readonly string[]): TransitRef[] | undefined {
+  const filter = requested?.map(asTransitRef);
+  if (!data.manifest.shards.some(shard => shard.agencyRefs)) return filter;
+  const routes = new Map(data.indexes.flatMap(index => index.routes).map(route => [route.ref as string, route.agencyRef]));
+  const serving = new Set<TransitRef>();
+  for (const index of data.indexes) for (const stop of stopRefs) for (const route of index.stopRoutes[stop as TransitRef] ?? []) { const agency = routes.get(route); if (agency) serving.add(agency); }
+  return [...serving].filter(agency => !filter || filter.includes(agency)).sort();
+}
+/** A line a model can ride, with the stop that makes it reachable. */
+export const routeHintSchema = z.strictObject({ ref: z.string(), name: z.string(), mode: z.string(), agencyRef: z.string(),
+  stopRef: z.string().describe('The nearest stop the line serves.'), stopName: z.string(), walkMetres: z.number().nonnegative() });
+export const routeHintsSchema = z.strictObject({
+  direct: z.array(routeHintSchema).describe('Lines serving stops near both ends: a one-seat ride may exist.'),
+  origin: z.array(routeHintSchema), destination: z.array(routeHintSchema),
+}).describe('Lines near each end. Pass the ones you would ride (in plan_trip.routes) to have their trips searched and validated.');
+const ROUTE_HINT_LIMIT = 12;
+/** Lines within walking distance of each end of a journey, nearest stop first. Computed from
+ * the resident discovery index: no timetable is read, so it answers even where a search cannot. */
+export function routeHints(data: TransitData, origin: TransitRef | { latitude: number; longitude: number }, destination: TransitRef | { latitude: number; longitude: number }, walkMetres: number): z.infer<typeof routeHintsSchema> {
+  const stops = stopsByRef(data), routes = new Map(data.indexes.flatMap(index => index.routes).map(route => [route.ref as string, route]));
+  const at = (endpoint: TransitRef | { latitude: number; longitude: number }) => {
+    if (typeof endpoint !== 'string') return endpoint;
+    const stop = stops.get(endpoint), parent = stop?.parentStationRef ? stops.get(stop.parentStationRef) : undefined;
+    const latitude = stop?.latitude ?? parent?.latitude, longitude = stop?.longitude ?? parent?.longitude;
+    return latitude != null && longitude != null ? { latitude, longitude } : undefined;
+  };
+  const near = (endpoint: TransitRef | { latitude: number; longitude: number }) => {
+    const point = at(endpoint), best = new Map<string, z.infer<typeof routeHintSchema>>();
+    if (!point) return best;
+    const radians = Math.PI / 180, cos = Math.cos(point.latitude * radians);
+    for (const index of data.indexes) for (const [stopRef, routeRefs] of Object.entries(index.stopRoutes)) {
+      const stop = stops.get(stopRef);
+      if (stop?.latitude == null || stop.longitude == null) continue;
+      const metres = Math.hypot((stop.longitude - point.longitude) * radians * cos, (stop.latitude - point.latitude) * radians) * 6_371_000;
+      if (metres > walkMetres) continue;
+      const parent = stop.parentStationRef ? stops.get(stop.parentStationRef) : undefined;
+      for (const ref of routeRefs) {
+        const route = routes.get(ref), held = best.get(ref);
+        if (!route || held && held.walkMetres <= metres) continue;
+        best.set(ref, { ref, name: routeName(route), mode: route.mode, agencyRef: route.agencyRef, stopRef, stopName: sanitizeTransitText(parent?.name ?? stop.name, 200), walkMetres: Math.round(metres) });
+      }
+    }
+    return best;
+  };
+  const from = near(origin), to = near(destination);
+  const ranked = (hints: Iterable<z.infer<typeof routeHintSchema>>) => [...hints].sort((a, b) => a.walkMetres - b.walkMetres || a.name.localeCompare(b.name) || a.ref.localeCompare(b.ref)).slice(0, ROUTE_HINT_LIMIT);
+  return { direct: ranked([...from.values()].filter(hint => to.has(hint.ref))), origin: ranked(from.values()), destination: ranked(to.values()) };
+}
+/** The other stations in a station's complex (Times Sq-42 St is published as four), all in
+ * the station's own feed: a departure board reads one feed's predictions. */
 export function complexStations(data: TransitData, stationRef: string): string[] {
-  const station = stopsByRef(data).get(stationRef);
+  const station = stopsByRef(data).get(stationRef), feed = parseTransitRef(stationRef)?.feed;
   if (station?.locationType !== 1) return [];
   const name = normalizeEntityName(station.name);
-  const sameName = data.indexes.flatMap(index => index.stops).filter(stop => stop.locationType === 1 && normalizeEntityName(stop.name) === name).map(stop => stop.ref as string);
+  const sameName = (data.indexes.find(index => index.feedId === feed)?.stops ?? []).filter(stop => stop.locationType === 1 && normalizeEntityName(stop.name) === name).map(stop => stop.ref as string);
   const complex = stationComplexes(data, sameName), place = complex.get(stationRef);
   return sameName.filter(ref => ref !== stationRef && complex.get(ref) === place).sort();
 }
@@ -262,7 +431,7 @@ export function knownEntity(data: TransitData, ref: string): Candidate {
   const parsed = validRef(ref, ['agency', 'route', 'stop', 'trip']);
   const base = formatEntityRef(parsed);
   const index = data.indexes.find(index => index.feedId === parsed.feed);
-  const entity = index && entityIndex(data, index).byRef.get(base);
+  const entity = index && (parsed.kind === 'trip' ? tripCandidate(index, parsed.id) : entityIndex(data, index).byRef.get(base));
   if (!entity) throw new TransitToolError('ENTITY_NOT_FOUND');
   return { ...entity, ref };
 }
@@ -281,7 +450,9 @@ export async function detail(data: TransitData, ref: string) {
     const start = 'startTime' in parsed ? parseGtfsTime(parsed.startTime).totalSeconds : undefined;
     const descriptors = data.manifest.shards.filter(shard => shard.feedId === entity.feed && (!shard.timeRange || day === undefined || day >= shard.window.startDate && day <= shard.window.endDate) &&
       (!('serviceDate' in parsed) || parsed.serviceDate >= shard.window.startDate && parsed.serviceDate <= shard.window.endDate) &&
-      (start === undefined || !shard.timeRange || start >= shard.timeRange.bandStart && start < shard.timeRange.bandEnd));
+      (start === undefined || !shard.timeRange || start >= shard.timeRange.bandStart && start < shard.timeRange.bandEnd) &&
+      // A route's patterns live only in its own agency's split shards.
+      (!shard.agencyRefs || !route || shard.agencyRefs.includes(route.agencyRef)));
     let total = 0;
     for (const descriptor of descriptors) {
       total += descriptor.byteLength;
@@ -300,40 +471,53 @@ export async function detail(data: TransitData, ref: string) {
   }
   return { ...entity, scheduleVersion: data.version.artifactVersion, resourceUri: `transit://entity/${ref}?version=${data.version.artifactVersion}`,
     coordinates: stop?.latitude != null && stop.longitude != null ? { latitude: stop.latitude, longitude: stop.longitude } : null,
-    routeRefs: stop ? index.stopRoutes[stop.ref] ?? [] : [], agencyRef: route?.agencyRef ?? null, mode: route?.mode ?? null, patterns, calls };
+    routeRefs: stop ? index.stopRoutes[stop.ref] ?? [] : [], agencyRef: route?.agencyRef ?? null, mode: route?.mode ?? null, patterns, calls,
+    stepFree: stop ? stationAccess(index, stop, stopsByRef(data)) : null };
 }
 /** Source support narrowed to what this deployment can serve now: realtime kinds need
  * a bound coordinator, any required credential, and an ingested feed of that kind. */
 export function effectiveCapabilities(context: MetroMcpContext, coverage: CoverageManifest, requireCredential = true): CoverageCapability {
-  const source = getRealtimeSource(coverage.id);
-  const ingests = (kind: RealtimeFeedKind) => !!source && !!context.env.REGION_FEED_HUB && (!requireCredential || credential(source, context.env) !== null) &&
-    publishedKinds(source).has(kind);
+  const sources = getRealtimeSources(coverage.id);
+  const ingests = (kind: RealtimeFeedKind) => !!context.env.REGION_FEED_HUB && sources.some(source =>
+    (!requireCredential || credential(source, context.env) !== null) && publishedKinds(source).has(kind));
   return { ...coverage.capabilities,
+    planning: coverage.capabilities.planning && !planningWithheld(coverage.id, context.env),
     realtimeDepartures: coverage.capabilities.realtimeDepartures && ingests('trip_updates'),
     alerts: coverage.capabilities.alerts && ingests('service_alerts'),
-    vehicles: coverage.capabilities.vehicles && ingests('vehicle_positions') };
+    vehicles: coverage.capabilities.vehicles && ingests('vehicle_positions'),
+    accessibility: coverage.capabilities.accessibility && ingests('equipment_outages') };
 }
-/** Each coverage's coordinator owns exactly one static feed's realtime. */
-export type OwnedFeedRead<T> = FeedRead<T> & { feedId: string; reasons: VerificationReason[] };
-export async function readFeed<T>(context: MetroMcpContext, data: TransitData, kind: RealtimeFeedKind, now: number, signal: AbortSignal, stopIds: string[] = []): Promise<OwnedFeedRead<T[]>> {
-  const source = getRealtimeSource(data.coverage.id);
-  const feedId = source?.policy.feedId ?? data.manifest.sources[0]?.feedId ?? '';
-  const missing = (): OwnedFeedRead<T[]> => ({ feedId, freshness: 'unavailable', status: kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: null, warnings: [], reasons: ['REALTIME_UNAVAILABLE'] });
-  const capability = kind === 'trip_updates' ? 'realtimeDepartures' : kind === 'vehicle_positions' ? 'vehicles' : 'alerts';
-  if (!source || !context.env.REGION_FEED_HUB || !effectiveCapabilities(context, data.coverage, false)[capability]) return missing();
+/** One coordinator owns each static feed's realtime; a coverage reads all of them. */
+export type OwnedFeedRead<T> = FeedRead<T> & { feedId: string; reasons: VerificationReason[]; /** Every feed this source describes. */ feedIds?: readonly string[] };
+/** A coverage's realtime across its feeds. `payload` holds the usable feeds' rows (null when
+ * none is usable) and `reasons` every feed's reasons; `parts` keeps each feed's own read
+ * for sources and feed-scoped matching. */
+export type CoverageFeedRead<T> = OwnedFeedRead<T> & { parts: OwnedFeedRead<T>[] };
+/** Complete payloads this isolate already holds, by coordinator and kind. The coordinator
+ * confirms the tag on every read, so freshness metadata is never served from cache. */
+const heldPayloads = new Map<string, { etag: string; payload: unknown[] }>();
+async function readOwnedFeed<T>(context: MetroMcpContext, data: TransitData, source: RealtimeSource, kind: RealtimeFeedKind, now: number, signal: AbortSignal, stopIds: string[]): Promise<OwnedFeedRead<T[]>> {
+  const feedId = source.policy.feedId, feedIds = sourceFeedIds(source.policy);
+  const missing = (): OwnedFeedRead<T[]> => ({ feedId, feedIds, freshness: 'unavailable', status: kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: null, warnings: [], reasons: ['REALTIME_UNAVAILABLE'] });
+  // A source whose key is not configured never polls (NYC buses until MTA_BUS_API_KEY is set),
+  // so it has no snapshot and reads as unavailable; an older snapshot ages by its own clock.
+  if (!context.env.REGION_FEED_HUB) return missing();
   // Without a credential the coordinator publishes nothing, so reads degrade by freshness.
   const url = new URL(`https://region-feed-hub.internal/${kind}`);
   url.searchParams.set('now', String(now)); url.searchParams.set('artifact', data.version.artifactVersion);
   for (const stop of kind === 'trip_updates' ? stopIds.slice(0, 200) : []) url.searchParams.append('stop', stop);
+  const heldKey = `${source.policy.namespace}\n${kind}`, held = kind === 'trip_updates' && stopIds.length ? undefined : heldPayloads.get(heldKey);
+  if (held) url.searchParams.set('have', held.etag);
   signal.throwIfAborted();
   try {
     const response = await context.env.REGION_FEED_HUB.get(context.env.REGION_FEED_HUB.idFromName(source.policy.namespace)).fetch(url.href, { signal });
     signal.throwIfAborted();
     if (!response.ok) return missing();
-    const feed = await response.json<FeedRead<T[]>>();
+    const { notModified, ...feed } = await response.json<FeedRead<T[]> & { notModified?: boolean }>();
+    if (notModified && held && feed.etag === held.etag) feed.payload = held.payload as T[];
+    else if (feed.etag && Array.isArray(feed.payload) && !(kind === 'trip_updates' && stopIds.length)) heldPayloads.set(heldKey, { etag: feed.etag, payload: feed.payload });
     const policy = data.coverage.thresholds;
-    const threshold = kind === 'trip_updates' ? policy.tripUpdates.realtimeSeconds : kind === 'vehicle_positions' ? policy.vehiclePositions.realtimeSeconds : policy.alerts.currentSeconds;
-    const expiry = kind === 'trip_updates' ? policy.tripUpdates.staleSeconds : kind === 'vehicle_positions' ? policy.vehiclePositions.unavailableSeconds : Infinity;
+    const { fresh: threshold, expired: expiry } = kindThresholds(policy, kind);
     const validStamp = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= now;
     const producerTimestampSeconds = validStamp(feed.producerTimestampSeconds) ? feed.producerTimestampSeconds : undefined;
     const receivedAtSeconds = validStamp(feed.receivedAtSeconds) ? feed.receivedAtSeconds : undefined;
@@ -342,26 +526,62 @@ export async function readFeed<T>(context: MetroMcpContext, data: TransitData, k
     const reasons: VerificationReason[] = mismatch || feed.warnings?.includes('SCHEDULE_REALTIME_MISMATCH') ? ['SCHEDULE_REALTIME_MISMATCH'] :
       feed.degraded || !feed.version || freshness === 'expired' || freshness === 'unavailable' || receivedAtSeconds === undefined || receivedAtSeconds < (producerTimestampSeconds ?? Infinity) || !Array.isArray(feed.payload) ? ['REALTIME_UNAVAILABLE'] :
       freshness === 'stale' ? ['REALTIME_STALE'] : [];
-    const usable = reasons.length === 0 || kind === 'service_alerts' && reasons[0] === 'REALTIME_STALE';
-    return { ...feed, feedId, reasons, warnings: [], producerTimestampSeconds, receivedAtSeconds, freshness,
+    const usable = reasons.length === 0 || (kind === 'service_alerts' || kind === 'equipment_outages') && reasons[0] === 'REALTIME_STALE';
+    return { ...feed, feedId, feedIds, reasons, warnings: [], producerTimestampSeconds, receivedAtSeconds, freshness,
       status: usable ? 'realtime' : kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: usable ? feed.payload : null };
   } catch (error) { signal.throwIfAborted(); if (error instanceof Error && error.name === 'AbortError') throw error; return missing(); }
+}
+const FRESHNESS_ORDER = ['fresh', 'stale', 'expired', 'unavailable'];
+/** Reads the coverage's feeds (or only `feedIds`) in parallel and combines them; a coverage
+ * with one feed reads exactly as before. */
+export async function readFeed<T>(context: MetroMcpContext, data: TransitData, kind: RealtimeFeedKind, now: number, signal: AbortSignal, stopIds: string[] = [], feedIds?: readonly string[]): Promise<CoverageFeedRead<T[]>> {
+  const capability = kind === 'trip_updates' ? 'realtimeDepartures' : kind === 'vehicle_positions' ? 'vehicles' : kind === 'equipment_outages' ? 'accessibility' : 'alerts';
+  // A feed's realtime counts only once its schedule is part of the published artifact.
+  const sources = effectiveCapabilities(context, data.coverage, false)[capability]
+    ? getRealtimeSources(data.coverage.id).filter(source => (!feedIds || sourceFeedIds(source.policy).some(feed => feedIds.includes(feed))) && publishedKinds(source).has(kind) &&
+      sourceFeedIds(source.policy).some(feed => data.version.sourceVersions[feed] !== undefined)) : [];
+  const parts = await Promise.all(sources.map(source => readOwnedFeed<T>(context, data, source, kind, now, signal, stopIds)));
+  const feedId = feedIds?.length === 1 ? feedIds[0]! : sources[0]?.policy.feedId ?? getRealtimeSources(data.coverage.id)[0]?.policy.feedId ?? data.manifest.sources[0]?.feedId ?? '';
+  if (!parts.length) return { feedId, freshness: 'unavailable', status: kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: null, warnings: [], reasons: ['REALTIME_UNAVAILABLE'], parts: [] };
+  if (parts.length === 1) return { ...parts[0]!, parts };
+  const usable = parts.filter(part => part.payload !== null);
+  const oldest = (key: 'producerTimestampSeconds' | 'receivedAtSeconds') => usable.length && usable.every(part => part[key] !== undefined) ? Math.min(...usable.map(part => part[key]!)) : undefined;
+  return { feedId, parts, version: (usable[0] ?? parts[0]!).version, degraded: usable.some(part => part.degraded),
+    // The combined snapshot is as old as its oldest usable feed.
+    producerTimestampSeconds: oldest('producerTimestampSeconds'), receivedAtSeconds: oldest('receivedAtSeconds'),
+    freshness: usable.length ? usable.map(part => part.freshness).sort((a, b) => FRESHNESS_ORDER.indexOf(a) - FRESHNESS_ORDER.indexOf(b)).at(-1)! : 'unavailable',
+    status: usable.length ? 'realtime' : parts[0]!.status, payload: usable.length ? usable.flatMap(part => part.payload!) : null, warnings: [],
+    reasons: [...new Set(parts.flatMap(part => part.reasons))] };
+}
+/** Platforms a step-free journey may use now, or why none can be claimed: the coverage
+ * must publish station accessibility and a current (not stale) equipment report. */
+export async function stepFreeAccess(context: MetroMcpContext, data: TransitData, now: number, signal: AbortSignal):
+  Promise<{ usable: Set<string> | null; outages: EquipmentOutage[]; reasons: VerificationReason[]; sources: SourceStatus[] }> {
+  if (!effectiveCapabilities(context, data.coverage, false).accessibility) return { usable: null, outages: [], reasons: ['ACCESSIBILITY_UNAVAILABLE'], sources: [] };
+  const feed = await readFeed<EquipmentOutage>(context, data, 'equipment_outages', now, signal);
+  const sources = realtimeSource(data, feed, 'equipment_outages', now);
+  if (feed.status !== 'realtime' || feed.freshness !== 'fresh' || !feed.payload) return { usable: null, outages: feed.payload ?? [], reasons: ['ACCESSIBILITY_UNAVAILABLE', ...feed.reasons], sources };
+  const usable = new Set<string>();
+  for (const index of data.indexes) for (const ref of stepFreeStops(index, feed.payload, now)) usable.add(ref);
+  return { usable, outages: feed.payload, reasons: [], sources };
 }
 /** Train numbers are observations, not schedule entities. Resolve one only from a fresh
  * vehicle feed, to the dated trip instance that train is running; never guess. */
 export async function trainCandidates(context: MetroMcpContext, data: TransitData, query: string, signal: AbortSignal): Promise<{ candidates: Candidate[]; sources: SourceStatus[] }> {
-  const number = query.trim().replace(/^train\s+/i, '');
-  if (!/^[A-Za-z0-9-]{1,16}$/.test(number) || !effectiveCapabilities(context, data.coverage, false).vehicles) return { candidates: [], sources: [] };
+  // A DC train number (`644`) or an NYCT train ID (`1A 1023 207/FAR`), compared case- and spacing-insensitively.
+  const normalize = (value: string) => value.trim().replace(/\s+/g, ' ').toUpperCase();
+  const number = normalize(query.replace(/^\s*train\s+/i, ''));
+  if (!/^[A-Z0-9 +/.-]{1,32}$/.test(number) || !effectiveCapabilities(context, data.coverage, false).vehicles) return { candidates: [], sources: [] };
   const now = Math.floor(Date.now() / 1000);
   const feed = await readFeed<NormalizedVehicle>(context, data, 'vehicle_positions', now, signal);
   const maxAge = data.coverage.thresholds.vehiclePositions.realtimeSeconds;
   const candidates = new Map<string, Candidate>();
   for (const vehicle of feed.status === 'realtime' ? feed.payload ?? [] : []) {
     const age = vehicle.timestampSeconds === undefined ? Infinity : now - vehicle.timestampSeconds;
-    if (!vehicle.tripInstanceRef || age < 0 || age > maxAge || vehicle.vehicleId !== number && vehicle.label !== number) continue;
+    if (!vehicle.tripInstanceRef || age < 0 || age > maxAge || ![vehicle.vehicleId, vehicle.label, vehicle.trainId].some(id => id !== undefined && normalize(id) === number)) continue;
     const instance = parseTransitRef(vehicle.tripInstanceRef);
     if (!instance || instance.kind !== 'trip') continue;
-    candidates.set(vehicle.tripInstanceRef, { ref: vehicle.tripInstanceRef, kind: 'trip', name: sanitizeTransitText(`Train ${vehicle.vehicleId ?? vehicle.label}`),
+    candidates.set(vehicle.tripInstanceRef, { ref: vehicle.tripInstanceRef, kind: 'trip', name: sanitizeTransitText(`Train ${vehicle.trainId ?? vehicle.vehicleId ?? vehicle.label}`),
       coverage: instance.coverage, feed: instance.feed, providerId: instance.id });
   }
   return { candidates: [...candidates.values()].sort((a, b) => a.ref.localeCompare(b.ref)), sources: candidates.size ? realtimeSource(data, feed, 'vehicle_positions', now) : [] };
@@ -370,7 +590,8 @@ export async function trainCandidates(context: MetroMcpContext, data: TransitDat
 export function scheduledRealtimeRows<T extends { scheduleMatch?: string }>(rows: T[] | null): T[] | null {
   return rows && rows.filter(row => row.scheduleMatch === undefined || row.scheduleMatch === 'matched');
 }
-export function realtimeSource(_data: TransitData, feed: OwnedFeedRead<unknown>, kind: SourceStatus['kind'], now: number): SourceStatus[] {
+export function realtimeSource(data: TransitData, feed: OwnedFeedRead<unknown> & { parts?: OwnedFeedRead<unknown>[] }, kind: SourceStatus['kind'], now: number): SourceStatus[] {
+  if (feed.parts && feed.parts.length > 1) return feed.parts.flatMap(part => realtimeSource(data, part, kind, now));
   const scheduleVersion = feed.version?.sourceVersions[feed.feedId];
   if (!scheduleVersion || feed.receivedAtSeconds === undefined) return [];
   return [{ feedId: feed.feedId, kind, producerTimestamp: feed.producerTimestampSeconds == null ? null : new Date(feed.producerTimestampSeconds * 1000).toISOString(),

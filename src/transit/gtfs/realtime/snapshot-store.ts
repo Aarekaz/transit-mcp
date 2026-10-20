@@ -6,6 +6,8 @@ export interface StaticVersion { artifactVersion: string; sourceVersions: Record
 export interface NormalizedRealtimeSnapshot<T = unknown> {
   version: StaticVersion; producerTimestampSeconds?: number; receivedAtSeconds: number;
   payload: T[] | null; warnings?: string[]; degraded?: boolean;
+  /** Content tag of the complete payload (from its shard hashes); absent for filtered reads. */
+  etag?: string;
 }
 interface ShardDescriptor { key: string; sha256: string; byteLength: number; partition: number }
 interface SnapshotMetadata extends Omit<NormalizedRealtimeSnapshot, 'payload'> { shards: ShardDescriptor[] }
@@ -126,6 +128,19 @@ async function bounded<T, R>(items: readonly T[], operation: (item: T) => Promis
   return results;
 }
 
+/** A shard is a record array, or `{ columns, rows }` with null for an absent field. */
+function expandShard(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  const { columns, rows } = value as { columns?: unknown; rows?: unknown };
+  if (!Array.isArray(columns) || !Array.isArray(rows) || !columns.every(column => typeof column === 'string')) throw new Error('Realtime shard integrity failure');
+  return rows.map(row => {
+    if (!Array.isArray(row) || row.length !== columns.length) throw new Error('Realtime shard integrity failure');
+    const record: Record<string, unknown> = {};
+    columns.forEach((column, index) => { if (row[index] !== null) record[column] = row[index]; });
+    return record;
+  });
+}
+
 function partition(key: string): number {
   let hash = 2166136261;
   for (let i = 0; i < key.length; i++) hash = Math.imul(hash ^ key.charCodeAt(i), 16777619);
@@ -136,31 +151,53 @@ function indexKey(value: unknown): string {
   return record.stopId ?? record.entityId ?? record.id ?? '';
 }
 
+/** The payload's content identity: its content-addressed shards, in order. */
+const payloadIdentity = (shards: readonly ShardDescriptor[]) => shards.map(shard => shard.sha256).join('.');
+
 export class RealtimeSnapshotStore {
-  constructor(private readonly storage: DurableObjectStorage, private readonly bucket: R2Bucket, private readonly coverageId = 'sfbay') {
-    if (!/^[a-z0-9_]+$/.test(coverageId)) throw new Error('Invalid coverage namespace');
+  /** The last complete payload per kind, kept by the coordinator that published or read it.
+   * A read whose metadata names the same shards serves it without R2, hashing or parsing. */
+  readonly #latest = new Map<RealtimeFeedKind, { identity: string; etag: string; payload: unknown[] }>();
+  private readonly prefix: string;
+  /** `feedId` scopes a coverage's non-primary feeds: every coordinator collects only the
+   * objects it wrote. The primary feed keeps the coverage-level prefix. */
+  constructor(private readonly storage: DurableObjectStorage, private readonly bucket: R2Bucket, coverageId = 'sfbay', feedId?: string) {
+    if (!/^[a-z0-9_]+$/.test(coverageId) || feedId !== undefined && !/^[a-z0-9_]+$/.test(feedId)) throw new Error('Invalid coverage namespace');
+    this.prefix = feedId === undefined ? `realtime/${coverageId}` : `realtime/${coverageId}/feeds/${feedId}`;
   }
 
   async publish<T>(kind: RealtimeFeedKind, snapshot: NormalizedRealtimeSnapshot<T>): Promise<void> {
     const { payload, ...base } = snapshot;
     if (encode(base).length > METADATA_BYTES) throw new Error('Realtime metadata budget exceeded');
-    const groups = new Map<number, string[]>(); let total = 0;
+    const partitions = new Map<number, Record<string, unknown>[]>();
     for (const record of payload ?? []) {
-      const serialized = canonicalJson(record), bytes = new TextEncoder().encode(serialized).length + 1;
-      total += bytes;
-      if (bytes > SHARD_BYTES - 2 || total > PAYLOAD_BYTES) throw new Error('Realtime payload byte budget exceeded');
-      const key = partition(indexKey(record)), records = groups.get(key) ?? [];
-      records.push(serialized); groups.set(key, records);
+      const key = partition(indexKey(record)), records = partitions.get(key) ?? [];
+      records.push(record as Record<string, unknown>); partitions.set(key, records);
+    }
+    // Each shard is either a plain array of records or, when no record holds a top-level null,
+    // columns named once and rows of values (absent = null): field names are about half of a
+    // trip-update row, and a city's buses publish some 80,000 rows.
+    const groups = new Map<number, { header: string; rows: string[] }>(); let total = 0;
+    for (const [part, records] of partitions) {
+      const columns = [...new Set(records.flatMap(record => Object.keys(record).filter(key => record[key] !== undefined)))].sort();
+      const columnar = columns.length <= 64 && !records.some(record => Object.values(record).some(value => value === null));
+      const rows = records.map(record => columnar ? canonicalJson(columns.map(column => record[column] ?? null)) : canonicalJson(record));
+      for (const row of rows) {
+        const bytes = new TextEncoder().encode(row).length + 1;
+        total += bytes;
+        if (bytes > SHARD_BYTES - 1024 || total > PAYLOAD_BYTES) throw new Error('Realtime payload byte budget exceeded');
+      }
+      groups.set(part, { header: columnar ? `{"columns":${canonicalJson(columns)},"rows":[` : '[', rows });
     }
     const objects: { descriptor: ShardDescriptor; bytes: Uint8Array }[] = [];
-    for (const [part, records] of groups) {
-      let batch: string[] = [], size = 2;
+    for (const [part, { header, rows: records }] of groups) {
+      let batch: string[] = [], size = header.length + 2;
       const flush = async () => {
         if (!batch.length) return;
-        const bytes = new TextEncoder().encode(`[${batch.join(',')}]`), hash = await sha256(bytes);
+        const bytes = new TextEncoder().encode(`${header}${batch.join(',')}${header === '[' ? ']' : ']}'}`), hash = await sha256(bytes);
         objects.push({ bytes, descriptor: { partition: part, byteLength: bytes.length, sha256: hash,
-          key: `realtime/${this.coverageId}/${snapshot.version.artifactVersion}/${kind}/${hash}.json` } });
-        batch = []; size = 2;
+          key: `${this.prefix}/${snapshot.version.artifactVersion}/${kind}/${hash}.json` } });
+        batch = []; size = header.length + 2;
       };
       for (const record of records) {
         const length = new TextEncoder().encode(record).length + 1;
@@ -192,6 +229,8 @@ export class RealtimeSnapshotStore {
     });
     if (expired.length) await this.bucket.delete(expired);
     await this.storage.delete(garbageKey);
+    const identity = payloadIdentity(metadata.shards);
+    this.#latest.set(kind, { identity, etag: await sha256(new TextEncoder().encode(identity)), payload: payload ?? [] });
   }
 
   async read<T>(kind: RealtimeFeedKind, version: StaticVersion, stopIds?: string[]): Promise<NormalizedRealtimeSnapshot<T> | null> {
@@ -200,6 +239,11 @@ export class RealtimeSnapshotStore {
     if (encode(metadata).length > METADATA_BYTES) throw new Error('Realtime metadata budget exceeded');
     const { shards, ...base } = metadata;
     if (!sameStaticVersion(metadata.version, version)) return { ...base, payload: null, degraded: true, warnings: ['SCHEDULE_REALTIME_MISMATCH'] };
+    const identity = payloadIdentity(shards), resident = this.#latest.get(kind);
+    if (resident?.identity === identity) {
+      const wanted = stopIds && new Set(stopIds);
+      return { ...base, payload: (wanted ? resident.payload.filter(record => wanted.has(indexKey(record))) : resident.payload) as T[], ...(wanted ? {} : { etag: resident.etag }) };
+    }
     const selected = stopIds ? new Set(stopIds.map(partition)) : null;
     const chosen = shards.filter(descriptor => !selected || selected.has(descriptor.partition));
     let total = 0;
@@ -211,10 +255,13 @@ export class RealtimeSnapshotStore {
     const parts = await bounded(chosen, async descriptor => {
       const bytes = await readBoundedObject(this.bucket, descriptor.key, SHARD_BYTES);
       if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Realtime shard integrity failure');
-      const records = JSON.parse(new TextDecoder().decode(bytes)) as T[];
+      const records = expandShard(JSON.parse(new TextDecoder().decode(bytes))) as T[];
       return stopIds ? records.filter(record => stopIds.includes(indexKey(record))) : records;
     });
-    return { ...base, payload: parts.flat() };
+    if (stopIds) return { ...base, payload: parts.flat() };
+    const payload = parts.flat(), etag = await sha256(new TextEncoder().encode(identity));
+    this.#latest.set(kind, { identity, etag, payload });
+    return { ...base, payload, etag };
   }
 
   async warn(kind: RealtimeFeedKind, warning: string): Promise<void> {

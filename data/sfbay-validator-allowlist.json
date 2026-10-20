@@ -1,4 +1,33 @@
 {
   "coverageId": "sfbay",
-  "warnings": []
+  "warnings": [
+    { "code": "equal_shape_distance_same_coordinates", "reason": "Repeated shape points. Shapes are not read by the compiler or used for routing.", "expires": "2026-11-15" },
+    { "code": "expired_calendar", "reason": "116 service_ids ended before the published window. Expired calendars are inactive on every published date.", "expires": "2026-11-15" },
+    { "code": "fast_travel_between_consecutive_stops", "reason": "68 operator-published hops faster than the validator's mode threshold (express and freeway segments). Times are served exactly as published.", "expires": "2026-11-15" },
+    { "code": "fast_travel_between_far_stops", "reason": "One Sonoma County Transit trip (SO:30, trip SO:Aug09_26_Wk-Weekday-1029-C-OB-1600-23d0ae1) implies 612 km/h over 10 km, a likely publisher time typo. Its departures and legs show the publisher's times unchanged; reported to 511 as a data error.", "expires": "2026-11-15" },
+    { "code": "missing_bike_allowance", "reason": "bikes_allowed is not used for routing or display.", "expires": "2026-11-15" },
+    { "code": "missing_feed_contact_email_and_url", "reason": "Publisher contact metadata only; no effect on service facts.", "expires": "2026-11-15" },
+    { "code": "missing_recommended_field", "reason": "feed_info.txt has no feed_start_date/feed_end_date. Service dates come from calendars, and the published window is bounded by the build (eight days).", "expires": "2026-11-15" },
+    { "code": "mixed_case_recommended_field", "reason": "Display casing of names (e.g. 'Sf State'). Names are shown as published.", "expires": "2026-11-15" },
+    { "code": "route_color_contrast", "reason": "Three route colour pairs have low contrast. Colours are not used for routing or tool output.", "expires": "2026-11-15" },
+    { "code": "route_long_name_contains_short_name", "reason": "Naming style only; route names are shown as published.", "expires": "2026-11-15" },
+    { "code": "route_short_name_too_long", "reason": "Naming style only; route names are shown as published.", "expires": "2026-11-15" },
+    { "code": "same_name_and_description_for_route", "reason": "Descriptions are not used.", "expires": "2026-11-15" },
+    { "code": "same_name_and_description_for_stop", "reason": "Descriptions are not used.", "expires": "2026-11-15" },
+    { "code": "same_stop_and_route_url", "reason": "URLs are not used.", "expires": "2026-11-15" },
+    { "code": "service_has_no_active_day_of_the_week", "reason": "41 services run only on calendar_dates additions (e.g. Muni SF:78968). Active dates come from those additions exactly.", "expires": "2026-11-15" },
+    { "code": "stop_too_far_from_shape", "reason": "Shapes are not read by the compiler or used for routing.", "expires": "2026-11-15" },
+    { "code": "stop_too_far_from_shape_using_user_distance", "reason": "Shapes and shape_dist_traveled are not read by the compiler or used for routing.", "expires": "2026-11-15" },
+    { "code": "stop_without_stop_time", "reason": "76 stops have no scheduled service; they cannot appear in departures or journeys.", "expires": "2026-11-15" },
+    { "code": "stops_match_shape_out_of_order", "reason": "Shapes are not read by the compiler or used for routing.", "expires": "2026-11-15" },
+    { "code": "trip_distance_exceeds_shape_distance_below_threshold", "reason": "Shapes and shape_dist_traveled are not read by the compiler or used for routing.", "expires": "2026-11-15" },
+    { "code": "unused_shape", "reason": "Shapes are not read by the compiler or used for routing.", "expires": "2026-11-15" }
+  ],
+  "errors": [
+    { "code": "block_trips_with_overlapping_stop_times", "reason": "16 WestCAT (WC) block pairs overlap in time. The SF build ignores trips.txt:block_id (recorded in the source derivation), so no in-seat continuation is ever offered; riders transfer at the same stop.", "expires": "2026-11-15", "unusedInputs": ["trips.txt:block_id"] },
+    { "code": "duplicate_key", "reason": "56 duplicate fare_transfer_rules.txt keys. Fares v2 tables are not read by the compiler; no fare is quoted.", "expires": "2026-11-15", "unusedInputs": ["fare_transfer_rules.txt"] },
+    { "code": "equal_shape_distance_diff_coordinates", "reason": "One shape (VN:A_2529075_7275722) repeats a distance at different points. Shapes are not read by the compiler or used for routing.", "expires": "2026-11-15", "unusedInputs": ["shapes.txt"] },
+    { "code": "number_out_of_range", "reason": "87 negative fare_products.txt amounts (discount products). Fares v2 tables are not read by the compiler; no fare is quoted.", "expires": "2026-11-15", "unusedInputs": ["fare_products.txt"] },
+    { "code": "trip_distance_exceeds_shape_distance", "reason": "31 trips' shape_dist_traveled exceeds their shape's length. Neither shapes.txt nor stop_times.txt:shape_dist_traveled is read by the compiler.", "expires": "2026-11-15", "unusedInputs": ["shapes.txt", "stop_times.txt:shape_dist_traveled"] }
+  ]
 }

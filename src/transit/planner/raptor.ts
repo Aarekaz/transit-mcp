@@ -88,14 +88,21 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
       if (previous === undefined) { pathwayDefinitions.set(key, definition); pathways.push(pathway); }
     }
   }
-  for (const endpoint of [query.origin, query.destination]) if (typeof endpoint === 'string' && !stops.has(endpoint)) throw new Error('ENTITY_NOT_FOUND: unknown journey stop');
+  // Time bands carry only the stops they serve. The tool resolves endpoints against the
+  // feed's discovery index first, so an endpoint absent here has no service in this window.
+  if ([query.origin, query.destination].some(endpoint => typeof endpoint === 'string' && !stops.has(endpoint))) {
+    return { candidates: [], reasons: [], rounds: 0, estimatedWorkingSetBytes: baseBytes + realtimeBytes };
+  }
   if (baseBytes + realtimeBytes + stops.size * 512 >= ROUTER_BUDGET_BYTES) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
   const reasons = new Set<VerificationReason>();
   const updates = new Map<string, Map<number, NormalizedStopUpdate>>();
   const observedStarts = new Map<string, Set<number>>();
+  // Two predictions for one call contradict each other: that trip is left out of the search
+  // rather than ridden on a guess, and the rest of the network still plans.
+  const contradicted = new Set<string>();
   for (const row of realtime) if (row.tripInstanceRef && row.stopSequence !== undefined) {
     const calls = updates.get(row.tripInstanceRef) ?? new Map<number, NormalizedStopUpdate>();
-    if (calls.has(row.stopSequence)) throw new Error('Ambiguous realtime stop update');
+    if (calls.has(row.stopSequence)) { contradicted.add(row.tripInstanceRef); continue; }
     calls.set(row.stopSequence, row); updates.set(row.tripInstanceRef, calls);
     const parsed = parseTransitRef(row.tripInstanceRef);
     if (parsed?.kind === 'trip' && 'serviceDate' in parsed) {
@@ -110,7 +117,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     const routes = new Map(shard.routes.map(route => [route.ref, route]));
     for (const trip of shard.trips) {
       const route = routes.get(trip.routeRef)!, first = trip.stopTimes[0]?.departureSeconds;
-      if (first == null) continue;
+      if (first == null || query.routeRefs && !query.routeRefs.has(trip.routeRef)) continue;
       const intervals = shard.frequencies.filter(f => f.tripRef === trip.ref);
       for (const day of serviceDays) {
         if (route.agencyRef !== day.agencyRef || !isServiceActive(shard.calendars[trip.serviceId]!, day.serviceDate)) continue;
@@ -131,7 +138,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
             }
             if (!overlaps) return;
           }
-          if (seen.has(ref)) return;
+          if (seen.has(ref) || contradicted.has(ref)) return;
           const charge = 1024 + ref.length * 8;
           if (baseBytes + realtimeBytes + stops.size * 512 + instanceBytes + charge >= 48 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
           instanceBytes += charge; seen.add(ref);
@@ -371,7 +378,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     const predicted = row?.status === 'realtime' ? (event === 'arrival' ? row.arrivalTimeSeconds : row.departureTimeSeconds) : undefined;
     return predicted !== undefined ? predicted * 1000 : instance.origin + (seconds + instance.shift) * 1000;
   };
-  const transferIndex = indexTransfers(transfers);
+  const transferIndex = indexTransfers(transfers), stepFree = query.stepFree;
   const inSeatTo = new Map<TransitRef, ScheduleTransfer[]>(), inSeatFrom = new Map<TransitRef, ScheduleTransfer[]>();
   for (const rule of transfers) {
     if (rule.transferType === 4 && rule.toTripRef) inSeatTo.set(rule.toTripRef, [...inSeatTo.get(rule.toTripRef) ?? [], rule]);
@@ -391,6 +398,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     for (const instance of instances) {
       assertNotAborted(signal);
       if ([...instance.updates.values()].some(row => row.status === 'canceled' || row.scheduleRelationship === 'CANCELED')) { reasons.add('TRIP_CANCELED'); continue; }
+      if (stepFree && instance.trip.wheelchairAccessible === 2) continue;
       const calls = instance.trip.stopTimes;
       for (let board = 0; board < calls.length - 1; board++) {
         const call = calls[board]!, departure = timeAt(instance, board, 'departure');
@@ -407,6 +415,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
             !(inSeatFrom.get(previousInstance.trip.ref) ?? []).some(rule => rule.toTripRef !== instance.trip.ref);
           const continuation = !!(terminal && label.legs.at(-1)?.kind === 'transit' && !rules.some(rule => rule.transferType === 5) && (linked || block));
           if ((call.pickupType !== 0 || previousInstance?.trip.stopTimes.find(c => c.sequence === previous?.alightSequence)?.dropOffType !== 0 && previous) && !continuation) continue;
+          if (stepFree && !continuation && !stepFree.usableStopRefs.has(call.stopRef)) continue;
           const boardings = label.boardings + (continuation ? 0 : 1);
           if (boardings !== round) continue;
           const minimum = Math.max(0, ...rules.map(rule => rule.minTransferSeconds ?? 0));
@@ -415,6 +424,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
             const dest = calls[alight]!, arrival = timeAt(instance, alight, 'arrival');
             if (arrival === null || arrival < departure || arrival > end || instance.updates.get(dest.sequence)?.status === 'skipped') continue;
             if (dest.dropOffType !== 0 && alight !== calls.length - 1) continue;
+            if (stepFree && !stepFree.usableStopRefs.has(dest.stopRef)) continue;
             // Prune on numbers before formatting any leg text.
             if (dominated({ stop: dest.stopRef, time: arrival, walking: label.walking, boardings, legs: [] })) continue;
             const predicted = instance.updates.get(call.sequence)?.status === 'realtime' && instance.updates.get(call.sequence)?.departureTimeSeconds !== undefined ||

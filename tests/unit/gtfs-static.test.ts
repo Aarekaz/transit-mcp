@@ -249,10 +249,17 @@ describe('coverage-neutral schedule compilation', () => {
     await expect(compiler.compileSchedule({ ...scheduleInput(), source: { url: 'https://511.org/?api_key=secret', retrievedAt: '2026-10-17T00:00:00Z' } })).rejects.toThrow(/source URL/);
   });
 
-  it('rejects credential-bearing feed_info links instead of storing them in artifacts', async () => {
+  it('never stores a feed_info link that could carry a credential, leaving it out', async () => {
     const input = scheduleInput();
     input.files['feed_info.txt'] = input.files['feed_info.txt'].replace('https://511.org,en', 'https://511.org?api_key=do-not-publish,en');
-    await expect(compiler.compileSchedule(input)).rejects.toThrow(/feed_info URL/);
+    const compiled = await compiler.compileSchedule(input);
+    expect(compiled.manifest.sources[0]!.feedInfo[0]).not.toHaveProperty('feed_publisher_url');
+    expect(new TextDecoder().decode(compiled.shardBytes)).not.toContain('do-not-publish');
+    // A fragment is left out too (MTA bus feeds link a forum with #!); a clean link is kept.
+    const fragment = scheduleInput();
+    fragment.files['feed_info.txt'] = fragment.files['feed_info.txt'].replace('https://511.org,en', 'https://groups.example.org/forum/#!forum/developers,en');
+    expect((await compiler.compileSchedule(fragment)).manifest.sources[0]!.feedInfo[0]).not.toHaveProperty('feed_publisher_url');
+    expect((await compiler.compileSchedule(scheduleInput())).manifest.sources[0]!.feedInfo[0]).toHaveProperty('feed_publisher_url', 'https://511.org');
   });
 
   it('rejects transfers without their required endpoints or minimum time', async () => {
@@ -295,6 +302,29 @@ describe('MobilityData publication gate', () => {
       name: 'MobilityData GTFS Validator', version: '8.0.1', validatedAt: summary.validatedAt, reportSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
     expect(await artifacts.validateMobilityDataReport(JSON.stringify({ summary, notices: [] }), { coverageId: 'sfbay', warnings: [] }, 'sfbay', '2026-10-17')).toMatchObject({ version: '8.0.1' });
+  });
+
+  it('accepts a reviewed ERROR only about inputs the build provably does not read', async () => {
+    const errorList = (unusedInputs: string[], expires = '2026-11-15') => ({ coverageId: 'sfbay', warnings: [],
+      errors: [{ code: 'number_out_of_range', reason: 'Negative fare amounts; fares are not read.', expires, unusedInputs }] });
+    const fareError = (files: string[], total = files.length) => JSON.stringify({ summary, notices: [{ code: 'number_out_of_range', severity: 'ERROR', totalNotices: total,
+      sampleNotices: files.map(filename => ({ filename, fieldName: 'amount' })) }] });
+    const unused = compiler.unusedInputs(['agency.txt', 'stops.txt', 'fare_products.txt', 'shapes.txt'], ['trips.txt:block_id']);
+    expect([...unused].sort()).toEqual(['fare_products.txt', 'shapes.txt', 'stop_times.txt:shape_dist_traveled', 'trips.txt:block_id', 'trips.txt:shape_id']);
+    expect(await artifacts.validateMobilityDataReport(fareError(['fare_products.txt', 'fare_products.txt']), errorList(['fare_products.txt']), 'sfbay', '2026-10-17', unused))
+      .toMatchObject({ acceptedErrors: ['number_out_of_range'] });
+    for (const [raw, list, inputs] of [
+      // The build reads the table the error names.
+      [fareError(['stop_times.txt']), errorList(['fare_products.txt']), unused],
+      // The same code elsewhere, or hidden beyond the samples, is never assumed safe.
+      [fareError(['fare_products.txt', 'stop_times.txt']), errorList(['fare_products.txt']), unused],
+      [fareError(['fare_products.txt'], 2), errorList(['fare_products.txt']), unused],
+      // The entry claims an input this build does read.
+      [fareError(['fare_products.txt']), errorList(['stops.txt']), unused],
+      // No declared unused inputs at all (DC/NYC builds).
+      [fareError(['fare_products.txt']), errorList(['fare_products.txt']), new Set<string>()],
+    ] as const) await expect(artifacts.validateMobilityDataReport(raw, list, 'sfbay', '2026-10-17', inputs)).rejects.toThrow(/validator error/);
+    await expect(artifacts.validateMobilityDataReport(fareError(['fare_products.txt']), errorList(['fare_products.txt'], '2026-10-01'), 'sfbay', '2026-10-17', unused)).rejects.toThrow(/Expired/);
   });
 
   it('blocks errors, unlisted warnings, expired or unjustified exceptions and malformed reports', async () => {

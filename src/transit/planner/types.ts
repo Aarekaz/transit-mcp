@@ -1,3 +1,4 @@
+import type { DecodedShardCache } from './schedule-index';
 import type { TransitRef, TripInstanceRef } from '../core/refs';
 import type { VerificationReason, VerificationStatus } from '../core/results';
 import type { NormalizedStopUpdate } from '../gtfs/realtime/decode';
@@ -37,9 +38,14 @@ export interface ValidationSource {
   /** Rechecks allow an older observation only if current predictions still agree. */
   recheck?: boolean;
   realtimeReasons?: VerificationReason[];
+  /** Step-free journeys board and alight only at these stops (accessible now, no
+   * unrecovered elevator outage) and never ride a trip marked not wheelchair accessible. */
+  stepFree?: { usableStopRefs: ReadonlySet<TransitRef> };
 }
 export interface JourneyQuery extends Omit<ValidationSource, 'shards'> {
   readShard: (key: string) => Promise<Uint8Array>;
+  /** Receives each decoded shard, so a caller can read trips without decoding again. */
+  decoded?: DecodedShardCache;
   origin: JourneyEndpoint; destination: JourneyEndpoint; departAt: string;
   /** Exact journeys must arrive inside this horizon (default two hours, max seven days). */
   windowSeconds?: number;
@@ -47,6 +53,13 @@ export interface JourneyQuery extends Omit<ValidationSource, 'shards'> {
   maxWalkMetres?: number;
   /** Vehicle changes, default three, maximum four. In-seat continuation does not consume one. */
   maxTransfers?: number;
+  /** For agency-split schedules: the agencies whose service this search may use. */
+  agencyRefs?: TransitRef[];
+  /** Feeds the search may use; all of the manifest's when omitted. */
+  feedIds?: readonly string[];
+  /** Only trips on these routes, e.g. the lines a model proposes. The search still finds
+   * the trips, boarding stops, transfers and walks; every result is validated as usual. */
+  routeRefs?: ReadonlySet<TransitRef>;
 }
 export interface ValidationResult {
   valid: boolean;
