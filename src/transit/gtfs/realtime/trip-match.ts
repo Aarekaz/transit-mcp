@@ -246,7 +246,7 @@ function tripCandidates(update: NormalizedTripUpdate, tripKey: string, serviceDa
   return candidates;
 }
 
-function matchedUpdates(update: NormalizedTripUpdate, match: MatchedTripInstance): NormalizedStopUpdate[] | null {
+function matchedUpdates(update: NormalizedTripUpdate, match: MatchedTripInstance, why?: string[]): NormalizedStopUpdate[] | null {
   const { trip, shard } = match;
   let { startSeconds, originSeconds, serviceDate, tripInstanceRef, shiftSeconds } = match;
   let tripId = trip.providerId;
@@ -266,10 +266,11 @@ function matchedUpdates(update: NormalizedTripUpdate, match: MatchedTripInstance
   // Cancellation applies to the whole matched instance; attached stop updates have no semantics.
   for (const stop of update.scheduleRelationship === 'CANCELED' ? [] : update.stops) {
     const candidates = trip.stopTimes.filter(call => stop.stopSequence !== undefined ? call.sequence === stop.stopSequence : parseTransitRef(call.stopRef)?.id === stop.stopId);
-    if (candidates.length !== 1 || stop.stopScheduleRelationship === 'UNKNOWN') return null;
+    const reject = (reason: string) => { why?.push(`${reason} seq=${stop.stopSequence ?? '-'} stop=${stop.stopId ?? '-'} scheduled=${candidates.map(item => `${item.sequence}:${parseTransitRef(item.stopRef)?.id}`).join(',').slice(0, 60)}`); return null; };
+    if (candidates.length !== 1 || stop.stopScheduleRelationship === 'UNKNOWN') return reject(candidates.length ? 'ambiguous_call' : 'no_call');
     const call = candidates[0]!;
-    if (stop.stopId && parseTransitRef(call.stopRef)?.id !== stop.stopId) return null;
-    if (call.sequence <= previousSequence) return null;
+    if (stop.stopId && parseTransitRef(call.stopRef)?.id !== stop.stopId) return reject('stop_mismatch');
+    if (call.sequence <= previousSequence) return reject('out_of_order');
     previousSequence = call.sequence; stops.set(call.sequence, stop);
   }
   let delay = update.delaySeconds;
@@ -478,9 +479,15 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
       // Absence must be proven feed-wide, not inferred from the resident timetable window.
       if (!ids || !duplicateId || ids.has(duplicateId)) continue;
     }
-    const updates = match ? matchedUpdates(update, match) : null;
+    const why: string[] = [];
+    const updates = match ? matchedUpdates(update, match, why) : null;
     if (updates) { matched++; stopUpdates.push(...updates); }
-    else if (unmatchedSample.length < 5) unmatchedSample.push(`${match ? 'calls_rejected' : 'no_instance'}:${update.tripId}@${update.startDate ?? '-'}/${update.startTime ?? '-'}`);
+    else if (unmatchedSample.length < 5) {
+      // For diagnosis: the reported route against the scheduled trip's own routes, or the call that failed.
+      const scheduled = (index.get(realtimeTripKey(update.tripId ?? '', context.tripMatching)) ?? []).map(entry => entry.shard.routes.find(route => route.ref === entry.trip.routeRef)?.providerId).filter(Boolean);
+      unmatchedSample.push(`${match ? 'calls_rejected' : 'no_instance'}:${update.tripId}@${update.startDate ?? '-'}/${update.startTime ?? '-'} route=${update.routeId ?? '-'}` +
+        (match ? ` ${why[0] ?? ''}` : ` scheduledRoutes=${[...new Set(scheduled)].join(',') || 'none-loaded'}`));
+    }
   }
   const rate = eligible ? matched / eligible : 1;
   // The rate detects a wrong or stale schedule, where matching collapses. Over a handful of
