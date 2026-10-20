@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { traced } from '../../../transit/trace';
 import type { MetroMcpContext } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
 import { getScheduledDeparturePages, type ScheduledDeparture, type ScheduledDepartures } from '../../../transit/planner/departures';
@@ -37,7 +38,7 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
       toStop: boundedText.optional().describe('Destination stop or station name, with coverage. Give this or toStopRef, or neither.'),
       routeRefs: z.array(boundedText).max(20).optional(), agencyRefs: z.array(boundedText).max(20).optional(), selection: z.enum(['first', 'last']).default('first'), limit: z.number().int().min(1).max(100).default(20) }),
     outputSchema: z.strictObject({ ...resultShape, departures: z.array(departureSchema), frequencyWindows: z.array(frequencySchema) }),
-  }, async (args, handler) => guarded(handler, async () => {
+  }, async (args, handler) => guarded(handler, () => traced('get_departures', async () => {
     checkState(handler, 'get_departures');
     if (args.windowSeconds < 1 || args.windowSeconds > 604800) throw new TransitToolError('TIME_OUTSIDE_WINDOW');
     if (!args.stopRef === !args.stop || args.toStopRef && args.toStop) throw new TransitToolError('INVALID_TRANSIT_REF');
@@ -178,5 +179,5 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     return complete({ ...meta, sources,
       status: departures.some(row => row.status === 'realtime') ? 'realtime' as const : schedule.status, reasons: [...new Set([...schedule.reasons, ...feed.reasons])],
       departures: departures.map(withArrival), frequencyWindows: windows.map(named) });
-  }, () => complete({ ...unavailable(args.stopRef ? parseTransitRef(args.stopRef)?.coverage : getCoverage(args.coverage ?? '')?.id), departures: [], frequencyWindows: [] })));
+  }), () => complete({ ...unavailable(args.stopRef ? parseTransitRef(args.stopRef)?.coverage : getCoverage(args.coverage ?? '')?.id), departures: [], frequencyWindows: [] })));
 }

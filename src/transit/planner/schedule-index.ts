@@ -1,4 +1,5 @@
 import { parseTransitRef, type TransitRef } from '../core/refs';
+import { count, phase } from '../trace';
 import type { VerificationReason } from '../core/results';
 import type { ArtifactManifestV2, ScheduleShard, SourceMetadata } from '../gtfs/static/schema';
 import { canonicalJson, decodeScheduleShard, sha256 } from '../gtfs/static/shards';
@@ -69,6 +70,9 @@ export class DecodedShardCache {
 }
 
 export async function loadScheduleWindow(query: ScheduleWindowQuery): Promise<ScheduleWindow> {
+  return phase('schedule', () => loadScheduleWindowUntraced(query));
+}
+async function loadScheduleWindowUntraced(query: ScheduleWindowQuery): Promise<ScheduleWindow> {
   const start = parseInstant(query.instant), end = start + query.windowSeconds * 1000;
   if (!Number.isInteger(query.windowSeconds) || query.windowSeconds <= 0 || query.windowSeconds > 7 * 86400) throw new Error('TIME_OUTSIDE_WINDOW: search window must be between 1 second and 7 days');
   const { manifest } = query;
@@ -153,6 +157,7 @@ export async function loadScheduleWindow(query: ScheduleWindowQuery): Promise<Sc
       pending.delete(position);
       if (bytes.byteLength !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Schedule shard integrity failure');
       shard = decodeScheduleShard(bytes);
+      count('shardsDecoded'); count('shardBytes', bytes.byteLength);
       query.decoded?.set(descriptor, shard);
     }
     const agencyTimezones = Object.fromEntries(Object.entries(manifest.agencyTimezones).filter(([ref]) => parseTransitRef(ref)?.feed === descriptor.feedId));

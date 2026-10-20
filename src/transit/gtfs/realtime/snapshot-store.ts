@@ -1,4 +1,5 @@
 import type { RealtimeFeedKind } from '../../../regions/types';
+import { count, phase } from '../../trace';
 import type { ArtifactManifestV2 } from '../static/schema';
 import { canonicalJson, sha256 } from '../static/shards';
 
@@ -33,6 +34,13 @@ export function sameStaticVersion(left: StaticVersion, right: StaticVersion): bo
 }
 
 export async function readBoundedObject(bucket: R2Bucket, key: string, maximum: number): Promise<Uint8Array> {
+  return phase('r2', async () => {
+    const bytes = await readBounded(bucket, key, maximum);
+    count('r2Reads'); count('r2Bytes', bytes.byteLength);
+    return bytes;
+  });
+}
+async function readBounded(bucket: R2Bucket, key: string, maximum: number): Promise<Uint8Array> {
   const object = await bucket.get(key);
   if (!object) throw new Error('Artifact object is unavailable');
   if (object.size > maximum) throw new Error('Artifact object byte budget exceeded');
@@ -158,6 +166,9 @@ export class RealtimeSnapshotStore {
   /** The last complete payload per kind, kept by the coordinator that published or read it.
    * A read whose metadata names the same shards serves it without R2, hashing or parsing. */
   readonly #latest = new Map<RealtimeFeedKind, { identity: string; etag: string; payload: unknown[] }>();
+  /** Latest metadata per kind. This coordinator is its storage's only writer, so reads need
+   * not wait on storage (they queued behind a poll's writes for seconds). */
+  readonly #metadata = new Map<RealtimeFeedKind, SnapshotMetadata>();
   private readonly prefix: string;
   /** `feedId` scopes a coverage's non-primary feeds: every coordinator collects only the
    * objects it wrote. The primary feed keeps the coverage-level prefix. */
@@ -225,6 +236,7 @@ export class RealtimeSnapshotStore {
       const retained = new Set([...metadata.shards, ...(current?.shards ?? [])].map(shard => shard.key));
       const expired = (previous?.shards ?? []).filter(shard => !retained.has(shard.key)).map(shard => shard.key);
       await txn.put({ [`realtime:${kind}`]: metadata, ...(current ? { [`realtime:${kind}:previous`]: current } : {}), [garbageKey]: expired });
+      this.#metadata.set(kind, metadata);
       return expired;
     });
     if (expired.length) await this.bucket.delete(expired);
@@ -234,8 +246,12 @@ export class RealtimeSnapshotStore {
   }
 
   async read<T>(kind: RealtimeFeedKind, version: StaticVersion, stopIds?: string[]): Promise<NormalizedRealtimeSnapshot<T> | null> {
-    const metadata = await this.storage.get<SnapshotMetadata>(`realtime:${kind}`);
-    if (!metadata) return null;
+    let metadata = this.#metadata.get(kind);
+    if (!metadata) {
+      metadata = await this.storage.get<SnapshotMetadata>(`realtime:${kind}`);
+      if (!metadata) return null;
+      this.#metadata.set(kind, metadata);
+    }
     if (encode(metadata).length > METADATA_BYTES) throw new Error('Realtime metadata budget exceeded');
     const { shards, ...base } = metadata;
     if (!sameStaticVersion(metadata.version, version)) return { ...base, payload: null, degraded: true, warnings: ['SCHEDULE_REALTIME_MISMATCH'] };
@@ -270,6 +286,7 @@ export class RealtimeSnapshotStore {
     metadata.warnings = [...new Set([...(metadata.warnings ?? []), warning])].slice(0, 32);
     if (encode(metadata).length > METADATA_BYTES) throw new Error('Realtime metadata budget exceeded');
     await this.storage.put(`realtime:${kind}`, metadata);
+    this.#metadata.set(kind, metadata);
   }
 }
 

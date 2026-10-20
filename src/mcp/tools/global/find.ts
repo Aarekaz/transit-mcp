@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { traced } from '../../../transit/trace';
 import type { MetroMcpContext } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
 import { getCoverage } from '../../../transit/core/coverage';
@@ -29,7 +30,7 @@ export function registerFindTool(server: McpServer, context: MetroMcpContext): v
     outputSchema: findOutput,
   }, async (args, handler) => {
     let resolvedCoverage = args.coverage;
-    return guarded(handler, async () => {
+    return guarded(handler, () => traced('find_transit', async () => {
       checkState(handler, 'find_transit');
       if (args.ref) return complete(await findEntityResult(context, args.ref, handler.mcpReq.signal));
       const match = args.query ? getCoverage(args.query) : undefined;
@@ -59,6 +60,6 @@ export function registerFindTool(server: McpServer, context: MetroMcpContext): v
       if (ambiguous.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...base, status: 'unavailable' as const, reasons: ['SCOPE_LIMIT_EXCEEDED' as const], candidates: [] });
       // Preserve material alternatives in their existing rank, including named place stops.
       return complete({ ...base, candidates: ambiguous.length > 1 ? ambiguous : found.slice(0, args.limit) });
-    }, () => complete({ ...unavailable(resolvedCoverage), coverages: [], candidates: [], entities: [], clientCoordinates: null }));
+    }), () => complete({ ...unavailable(resolvedCoverage), coverages: [], candidates: [], entities: [], clientCoordinates: null }));
   });
 }
