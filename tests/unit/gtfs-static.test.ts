@@ -297,6 +297,29 @@ describe('MobilityData publication gate', () => {
     expect(await artifacts.validateMobilityDataReport(JSON.stringify({ summary, notices: [] }), { coverageId: 'sfbay', warnings: [] }, 'sfbay', '2026-10-17')).toMatchObject({ version: '8.0.1' });
   });
 
+  it('accepts a reviewed ERROR only about inputs the build provably does not read', async () => {
+    const errorList = (unusedInputs: string[], expires = '2026-11-15') => ({ coverageId: 'sfbay', warnings: [],
+      errors: [{ code: 'number_out_of_range', reason: 'Negative fare amounts; fares are not read.', expires, unusedInputs }] });
+    const fareError = (files: string[], total = files.length) => JSON.stringify({ summary, notices: [{ code: 'number_out_of_range', severity: 'ERROR', totalNotices: total,
+      sampleNotices: files.map(filename => ({ filename, fieldName: 'amount' })) }] });
+    const unused = compiler.unusedInputs(['agency.txt', 'stops.txt', 'fare_products.txt', 'shapes.txt'], ['trips.txt:block_id']);
+    expect([...unused].sort()).toEqual(['fare_products.txt', 'shapes.txt', 'stop_times.txt:shape_dist_traveled', 'trips.txt:block_id', 'trips.txt:shape_id']);
+    expect(await artifacts.validateMobilityDataReport(fareError(['fare_products.txt', 'fare_products.txt']), errorList(['fare_products.txt']), 'sfbay', '2026-10-17', unused))
+      .toMatchObject({ acceptedErrors: ['number_out_of_range'] });
+    for (const [raw, list, inputs] of [
+      // The build reads the table the error names.
+      [fareError(['stop_times.txt']), errorList(['fare_products.txt']), unused],
+      // The same code elsewhere, or hidden beyond the samples, is never assumed safe.
+      [fareError(['fare_products.txt', 'stop_times.txt']), errorList(['fare_products.txt']), unused],
+      [fareError(['fare_products.txt'], 2), errorList(['fare_products.txt']), unused],
+      // The entry claims an input this build does read.
+      [fareError(['fare_products.txt']), errorList(['stops.txt']), unused],
+      // No declared unused inputs at all (DC/NYC builds).
+      [fareError(['fare_products.txt']), errorList(['fare_products.txt']), new Set<string>()],
+    ] as const) await expect(artifacts.validateMobilityDataReport(raw, list, 'sfbay', '2026-10-17', inputs)).rejects.toThrow(/validator error/);
+    await expect(artifacts.validateMobilityDataReport(fareError(['fare_products.txt']), errorList(['fare_products.txt'], '2026-10-01'), 'sfbay', '2026-10-17', unused)).rejects.toThrow(/Expired/);
+  });
+
   it('blocks errors, unlisted warnings, expired or unjustified exceptions and malformed reports', async () => {
     for (const [raw, list, date, error] of [
       [JSON.stringify(report('ERROR')), allowlist, '2026-10-17', /validator error/],

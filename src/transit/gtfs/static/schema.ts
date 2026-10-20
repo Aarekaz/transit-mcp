@@ -97,6 +97,8 @@ export interface ArtifactObject { key: string; sha256: string; byteLength: numbe
 export interface ValidatorEvidence {
   name: 'MobilityData GTFS Validator'; version: string; reportSha256: string; validatedAt: string;
   systemErrorsSha256: string; systemErrorsFormat: 'MobilityData notices';
+  /** ERROR codes accepted because they concern only inputs this build does not read. */
+  acceptedErrors?: string[];
 }
 export interface ArtifactManifestV2 {
   schemaVersion: 2; coverageId: string; sources: SourceMetadata[];

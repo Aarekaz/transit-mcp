@@ -72,6 +72,19 @@ describe('agency-split schedules', () => {
     expect(agencyGroups(split.manifest)!.map(group => [...group])).toHaveLength(3);
   });
 
+  it('never reads the fields it declares unused, so errors about them cannot change a journey', async () => {
+    const column = (csv: string, name: string, value: string) => csv.split('\n').map((line, index) => !line ? line : `${line},${index === 0 ? name : value}`).join('\n');
+    const withShapes = (shape: string, distance: string): GtfsScheduleFiles => ({ ...FILES,
+      'trips.txt': column(FILES['trips.txt'], 'shape_id', shape), 'stop_times.txt': column(FILES['stop_times.txt'], 'shape_dist_traveled', distance) });
+    // Everything but the source's table hash (which covers every column) must be identical.
+    const build = async (files: GtfsScheduleFiles) => {
+      const { source, ...shard } = decodeScheduleShard((await compileSchedule({ coverage: getCoverage('sfbay')!, feedId: 'sf511', files, window: { startDate: '20261020', endDate: '20261020' },
+        source: { url: 'https://api.511.org/transit/datafeeds', retrievedAt: '2026-10-20T01:30:33Z' }, ignoredFields: ['trips.txt:block_id'] })).shardBytes);
+      return { ...shard, source: { ...source, sha256: '' } };
+    };
+    expect(await build(withShapes('S1', '1.5'))).toEqual(await build(withShapes('S2', '999')));
+  });
+
   it('judges schedule identity over all groups, never one small group', () => {
     const part = (eligible: number, matched: number): AppliedTripUpdates => ({ version: {} as AppliedTripUpdates['version'], trips: [], stopUpdates: [],
       match: { eligible, matched, rate: eligible ? matched / eligible : 1 }, excluded: { nonRevenue: 0, invalidExtras: 0, unrepresentableAdded: 0 },

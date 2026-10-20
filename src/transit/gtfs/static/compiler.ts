@@ -5,7 +5,7 @@ import { parseGtfsTime, parseServiceDate } from './time';
 import type { ServiceCalendar } from './artifact';
 import { formatEntityRef, type TransitEntityKind, type TransitRef } from '../../core/refs';
 import { canonicalJson, encodeScheduleShard, sha256 } from './shards';
-import type { CompileScheduleInput, CompiledSchedule, SchedulePattern, ScheduleShard, ScheduleStop, ScheduleTransfer, ScheduleTrip, ServiceWindow } from './schema';
+import type { CompileScheduleInput, CompiledSchedule, GtfsScheduleFiles, IgnorableField, SchedulePattern, ScheduleShard, ScheduleStop, ScheduleTransfer, ScheduleTrip, ServiceWindow } from './schema';
 
 export type GtfsStaticFiles = Record<'stops.txt' | 'routes.txt' | 'trips.txt' | 'stop_times.txt', string> & Partial<Record<'calendar.txt' | 'calendar_dates.txt', string>>;
 
@@ -44,6 +44,17 @@ function activeInWindow(calendar: ServiceCalendar, window: ServiceWindow): boole
 }
 
 /** Offline, coverage-neutral compiler. It never accesses upstream or runtime bindings. */
+/** Every GTFS table the compiler can read; anything else in an archive is never used. */
+export const COMPILED_TABLES = ['agency.txt', 'stops.txt', 'routes.txt', 'trips.txt', 'stop_times.txt', 'calendar.txt', 'calendar_dates.txt',
+  'feed_info.txt', 'frequencies.txt', 'transfers.txt', 'pathways.txt'] as const satisfies readonly (keyof GtfsScheduleFiles)[];
+/** Fields of compiled tables the compiler never reads: shapes are not used for routing. */
+export const UNREAD_FIELDS = ['trips.txt:shape_id', 'stop_times.txt:shape_dist_traveled'] as const;
+/** Inputs (`file` or `file:field`) a build of these archive files provably does not use. */
+export function unusedInputs(archiveFiles: readonly string[], ignoredFields: readonly IgnorableField[] = []): Set<string> {
+  const compiled = new Set<string>(COMPILED_TABLES);
+  return new Set([...archiveFiles.filter(file => !compiled.has(file)), ...UNREAD_FIELDS, ...ignoredFields]);
+}
+
 export async function compileSchedule(input: CompileScheduleInput): Promise<CompiledSchedule> {
   const { coverage, feedId, files, window } = input, ignoreBlocks = input.ignoredFields?.includes('trips.txt:block_id') ?? false;
   if (!coverage.feeds.some(feed => feed.id === feedId)) throw new Error('Unknown coverage feed');
