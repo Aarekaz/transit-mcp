@@ -19,7 +19,9 @@ export interface SourceMetadata {
   /** Hash of the exact archive bytes the validator report describes. */
   archiveSha256?: string;
   /** Present when the validated archive was derived from the publisher's archive. */
-  derivedFrom?: { archiveSha256: string; excludedFiles: string[]; reason: string };
+  derivedFrom?: { archiveSha256: string; excludedFiles: string[]; reason: string;
+    /** Publisher fields the build did not use (`file:field`), with the same reason. */
+    ignoredFields?: string[] };
   feedInfo: Record<string, string>[];
   /** Deterministic normalization only when the single source agency omits its ID. */
   anonymousAgencyRef?: TransitRef;
@@ -109,7 +111,11 @@ export interface CompileScheduleInput {
   /** Set when one archive is compiled in parts (per service date): every part carries the
    * whole feed's identity and feed-wide timetable bound instead of its own. */
   identity?: { sha256: string; maxStopTimeSeconds: number } & Pick<SourceMetadata, 'archiveSha256' | 'derivedFrom'>;
+  /** Publisher fields left unused. `trips.txt:block_id` drops in-seat block continuations:
+   * riders transfer at the same stop instead. Recorded in the source's derivation. */
+  ignoredFields?: readonly IgnorableField[];
 }
+export type IgnorableField = 'trips.txt:block_id';
 export interface CompiledSchedule {
   manifest: ArtifactManifestV2; discovery: DiscoveryIndex; shard: ScheduleShard;
   discoveryBytes: Uint8Array; shardBytes: Uint8Array;

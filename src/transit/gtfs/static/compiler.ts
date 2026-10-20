@@ -45,7 +45,7 @@ function activeInWindow(calendar: ServiceCalendar, window: ServiceWindow): boole
 
 /** Offline, coverage-neutral compiler. It never accesses upstream or runtime bindings. */
 export async function compileSchedule(input: CompileScheduleInput): Promise<CompiledSchedule> {
-  const { coverage, feedId, files, window } = input;
+  const { coverage, feedId, files, window } = input, ignoreBlocks = input.ignoredFields?.includes('trips.txt:block_id') ?? false;
   if (!coverage.feeds.some(feed => feed.id === feedId)) throw new Error('Unknown coverage feed');
   const start = parseServiceDate(window.startDate), end = parseServiceDate(window.endDate);
   if (start > end || end.getTime() - start.getTime() > 366 * 86_400_000) throw new Error('Invalid service date window (maximum 367 days)');
@@ -111,7 +111,7 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     if (!calendars[serviceId]) throw new Error('unknown service reference');
     return { ref: ref('trip', id), providerId: id, routeRef: reference('route', required(row, 'route_id')), serviceId,
       patternId: '', headsign: row.trip_headsign ?? '', directionId: row.direction_id ? integer(row, 'direction_id', undefined, 1) : null,
-      blockId: row.block_id ?? '', wheelchairAccessible: integer(row, 'wheelchair_accessible', 0, 2), bikesAllowed: integer(row, 'bikes_allowed', 0, 2), stopTimes: [] };
+      blockId: ignoreBlocks ? '' : row.block_id ?? '', wheelchairAccessible: integer(row, 'wheelchair_accessible', 0, 2), bikesAllowed: integer(row, 'bikes_allowed', 0, 2), stopTimes: [] };
   }).sort((a, b) => a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0);
   const tripsByRef = new Map(trips.map(trip => [trip.ref, trip]));
   const stopRoutes: Record<TransitRef, TransitRef[]> = {};

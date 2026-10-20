@@ -26,7 +26,7 @@ const metadataSchema = z.object({
   timeRange: z.object({ bandStart: uint, bandEnd: uint, start: uint, end: uint })
     .refine(value => value.bandStart < value.bandEnd && value.start <= value.end).optional(),
   source: z.object({ feedId: id, url: z.url(), retrievedAt: id.refine(value => Number.isFinite(Date.parse(value))), sha256: hash, archiveSha256: hash.optional(),
-    derivedFrom: z.object({ archiveSha256: hash, excludedFiles: z.array(id).min(1), reason: z.string().min(1).max(500) }).optional(),
+    derivedFrom: z.object({ archiveSha256: hash, excludedFiles: z.array(id).min(1), reason: z.string().min(1).max(500), ignoredFields: z.array(id).min(1).optional() }).optional(),
     feedInfo: z.array(z.record(z.string(), z.string())), anonymousAgencyRef: agencyRef.optional() }),
   agencyTimezones: z.record(agencyRef, timezone),
   stops: z.array(z.object({ ref: stopRef, providerId: id, name: z.string(), latitude: z.number().nullable(), longitude: z.number().nullable(),
