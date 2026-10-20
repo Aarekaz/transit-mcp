@@ -47,7 +47,7 @@ describe('createMetroMcpServer', () => {
     };
 
     expect(dark._serverInfo.description).toBe(
-      'Real-time DC Metro and NYC Subway arrivals, service alerts, stations, and DC buses.',
+      'Trips, departures, alerts and vehicles for NYC, DC and the SF Bay Area.',
     );
     expect(dark._instructions).not.toMatch(/San Francisco|SF Bay|sfbay|511/);
     expect(enabled._serverInfo.description).toBe(dark._serverInfo.description);

@@ -30,7 +30,7 @@ export const SERVER_IDENTITY = Object.freeze({
   title: 'Transit MCP',
   version: SERVER_VERSION,
   description:
-    'Real-time DC Metro and NYC Subway arrivals, service alerts, stations, and DC buses.',
+    'Trips, departures, alerts and vehicles for NYC, DC and the SF Bay Area.',
   websiteUrl: 'https://transitmcp.com',
   icons: Object.freeze([
     Object.freeze({

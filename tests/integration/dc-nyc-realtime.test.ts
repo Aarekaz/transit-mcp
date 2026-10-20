@@ -242,6 +242,17 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     expect(plan.itineraries.length).toBeGreaterThan(0);
   });
 
+  it('checks a station by name, and names the station a departure reaches', async () => {
+    const down = await nyc(nycDocuments(nowSeconds(), nyctEquipmentDocuments([nyctOutage('EL132A')])));
+    const byName = (await callTool(down.env, 'get_service_status', { stop: '14 St', coverage: 'nyc' })).structuredContent;
+    // Two stations are named 14 St: the agent is asked which, with candidates.
+    expect(byName).toMatchObject({ code: 'ENTITY_AMBIGUOUS' });
+    const timesSq = (await callTool(down.env, 'get_service_status', { stop: 'Times Sq-42 St', coverage: 'nyc' })).structuredContent;
+    expect(timesSq).toMatchObject({ status: expect.any(String), equipment: expect.any(Object) });
+    const rows = (await callTool(down.env, 'get_departures', { stopRef: down.ref('stop', '127S'), toStopRef: down.ref('stop', '132'), windowSeconds: 3600 })).structuredContent.departures;
+    expect(rows.every((row: { arrival: { stopName: string } }) => row.arrival.stopName === '14 St')).toBe(true);
+  });
+
   it('lists departures across every station of a complex', async () => {
     const f = await nyc();
     // 725 has no scheduled service of its own; the 1 and 2 leave from 127 in the same complex.

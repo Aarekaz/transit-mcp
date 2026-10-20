@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Transit MCP docs · Live DC and NYC data</title>
-  <meta name="description" content="Connect any MCP client to free DC Metro and NYC Subway tools. Trip planning, live departures, and service alerts; SF Bay support is in development.">
+  <title>Transit MCP docs · NYC, DC and SF Bay transit</title>
+  <meta name="description" content="Connect any MCP client to free transit tools for New York, Washington DC and the SF Bay Area: trip planning, departures, alerts and vehicles.">
   <link rel="canonical" href="https://transitmcp.com/docs/">
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
 
@@ -13,14 +13,14 @@
   <meta property="og:site_name" content="Transit MCP">
   <meta property="og:url" content="https://transitmcp.com/docs/">
   <meta property="og:title" content="Transit MCP docs · Live DC and NYC data">
-  <meta property="og:description" content="Connect any MCP client to free DC Metro and NYC Subway tools. Trip planning, live departures, and service alerts; SF Bay support is in development.">
+  <meta property="og:description" content="Connect any MCP client to free transit tools for New York, Washington DC and the SF Bay Area: trip planning, departures, alerts and vehicles.">
   <meta property="og:image" content="https://transitmcp.com/og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="Transit MCP: live DC and NYC transit data">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Transit MCP docs · Live DC and NYC data">
-  <meta name="twitter:description" content="Connect any MCP client to free DC Metro and NYC Subway tools. Trip planning, live departures, and service alerts; SF Bay support is in development.">
+  <meta name="twitter:description" content="Connect any MCP client to free transit tools for New York, Washington DC and the SF Bay Area: trip planning, departures, alerts and vehicles.">
   <meta name="twitter:image" content="https://transitmcp.com/og-image.png">
   <script type="application/ld+json">
   {
@@ -608,7 +608,7 @@
     <header class="hero">
       <div>
         <h1>Docs for the <span class="accent">live transit MCP</span>.</h1>
-        <p class="lede">Transit MCP exposes DC Metro, NYC Subway and SF Bay Area data through MCP tools, resources, and prompts. This page covers setup, endpoints, tool capabilities, and official data sources.</p>
+        <p class="lede">Transit MCP gives your AI the transit data for New York, Washington DC and the SF Bay Area through MCP tools, resources, and prompts. This page covers setup, endpoints, what each tool does (and doesn&rsquo;t), and where the data comes from.</p>
         <aside class="rename-notice" aria-label="Project rename">
           <p><strong>Metro MCP is now Transit MCP.</strong> The new home is <a href="https://transitmcp.com/">transitmcp.com</a> and the docs now live at <a href="https://transitmcp.com/docs/">transitmcp.com/docs</a>. It is the same server with the same docs. The old endpoint <code>https://metro-mcp.anuragd.me/mcp</code> and the old site will continue to be supported and keep working.</p>
         </aside>
@@ -621,7 +621,7 @@
         <div class="status-row"><span><span class="live-dot"></span>Production</span><strong>transitmcp.com</strong></div>
         <div class="status-row"><span>Also available at</span><strong>metro-mcp.anuragd.me</strong></div>
         <div class="status-row"><span>Transport</span><strong>Streamable HTTP</strong></div>
-        <div class="status-row"><span>Coverage</span><strong>2 US regions</strong></div>
+        <div class="status-row"><span>Coverage</span><strong>3 US regions</strong></div>
         <div class="status-row"><span>Tools</span><strong>18 Model Context Protocol tools</strong></div>
       </aside>
     </header>
@@ -705,16 +705,19 @@
             </div>
             <div class="tool-card">
               <h3>Trip planning and departures</h3>
-              <p>DC Metro and the NYC Subway serve the five global tools: <code>find_transit</code>, <code>plan_trip</code>, <code>get_departures</code>, <code>get_service_status</code>, and <code>get_vehicle_status</code>. Trips are planned from the published WMATA and MTA timetables with live predictions applied, and every itinerary is checked by an independent validator before it is returned.</p>
+              <p>All three regions serve the five global tools: <code>find_transit</code>, <code>plan_trip</code>, <code>get_departures</code>, <code>get_service_status</code>, and <code>get_vehicle_status</code>. Trips are planned from each agency's published timetable with live predictions applied, and every itinerary is checked by an independent validator before it is returned.</p>
               <p><code>get_departures</code> takes a station name or a reference. A station complex such as Times Sq-42 St counts as one place; different stations that share a name, like the several 86 St stations, come back as choices. NYC departures include rerouted trains and trains missing from the timetable, marked as observed.</p>
               <p>Step-free travel: <code>plan_trip</code> with <code>accessibility: "step_free"</code> only boards, alights and changes at platforms reachable without stairs and avoids stations cut off by a current elevator outage. <code>get_service_status</code> lists elevator and escalator outages for a station, line or city, marking which are on the step-free path and which block it. Station access comes from WMATA's GTFS and MTA's station list, including stations accessible in one direction only.</p>
               <p>New York also covers the Long Island Rail Road, Metro-North and NYC buses, and Washington covers Metrobus. Journeys use every mode, buses included, and change between lines on foot at stations such as Penn Station, Grand Central and Atlantic Terminal; LIRR and Metro-North departures show the track.</p>
+              <p>Guided planning: if <code>plan_trip</code> can&rsquo;t find a journey on its own, it returns <code>routeHints</code>, the lines near each end and the <code>direct</code> lines that serve both. Pick the lines you&rsquo;d ride and call it again with up to four of them in <code>routes</code>. The server finds the actual trips, stops, transfers and walks on those lines and validates them like any other itinerary. Each itinerary comes with plain <code>steps</code> (walk here, ride this, get off there) for reading out to a rider.</p>
+              <p>Next train from A to B: <code>get_departures</code> with <code>toStop</code> lists only the trips that go on to that stop, each with its arrival time there.</p>
+              <p>Station search: <code>find_transit</code> ranks stations ahead of street stops and rail ahead of bus, says what each candidate is (station, platform or street stop, modes, lines), and knows a few reviewed place names such as SFO, Union Square, Penn Station, Grand Central and Dulles.</p>
               <p><code>get_vehicle_status</code> shows where trains are on a line, on a dated trip, or at a station. Each train reports its train ID, the station it is stopped at or heading to, the station it last served, and its destination; <code>find_transit</code> resolves a train ID to that train's trip. DC trains carry GPS coordinates; MTA reports stations rather than coordinates, so an NYC train between stations has none rather than a guessed position.</p>
               <p>Results say whether they are <code>realtime</code>, <code>scheduled_only</code>, or <code>unavailable</code>, with source timestamps and reasons. Never piece a journey together from departure boards; use <code>plan_trip</code>. The Transit Board enhancement covers only the 13 legacy tools.</p>
             </div>
             <div class="tool-card">
               <h3>San Francisco Bay Area</h3>
-              <p>The global tools serve departures, service alerts and vehicle locations for every operator in 511 SF Bay's regional feed (Muni, BART, Caltrain, AC Transit, VTA, SamTrans and more). <code>plan_trip</code> plans journeys across them. Data attribution remains with 511 SF Bay and participating operators.</p>
+              <p>The global tools serve departures, service alerts and vehicle locations for every operator in 511 SF Bay's regional feed (Muni, BART, Caltrain, AC Transit, VTA, SamTrans, the ferries and more), and <code>plan_trip</code> plans journeys across all of them. Data attribution remains with 511 SF Bay and participating operators.</p>
             </div>
             <div class="tool-card">
               <h3>Progress and safety hints</h3>
@@ -725,7 +728,7 @@
 
         <section id="data">
           <h2>Data sources and cache windows</h2>
-          <p class="section-copy">Transit MCP normalizes official agency data into MCP-friendly JSON. The legacy tools call WMATA APIs and MTA feeds directly. The global tools use each agency's published GTFS timetable, rebuilt automatically when a new one appears, plus GTFS-realtime feeds polled every 30 seconds to a few minutes. The dark SF Bay development pipeline validates 511 SF Bay regional GTFS static and realtime data without exposing it on the production MCP surface.</p>
+          <p class="section-copy">Transit MCP normalizes official agency data into MCP-friendly JSON. The legacy tools call WMATA APIs and MTA feeds directly. The global tools use each agency's published GTFS timetable, rebuilt automatically when a new one appears, plus GTFS-realtime feeds polled every 30 seconds to a few minutes. SF Bay data comes from 511 SF Bay&rsquo;s regional feed, which shares one hourly request budget across every operator, so it refreshes more slowly than New York or DC. Anywhere, the first call after a quiet spell can take several seconds longer while the timetable loads.</p>
           <div class="source-grid">
             <article class="source-card">
               <header>
@@ -747,6 +750,7 @@
                     <tr><td>Bus positions</td><td><code>/Bus.svc/json/jBusPositions</code></td><td>10 sec</td></tr>
                     <tr><td>Timetable (global tools)</td><td><code>/gtfs/rail-gtfs-static.zip</code></td><td>Checked every 6 hours, rebuilt on change</td></tr>
                     <tr><td>Live trips, trains, alerts (global tools)</td><td><code>/gtfs/rail-gtfsrt-*.pb</code></td><td>30 sec to 2 min polling</td></tr>
+                    <tr><td>Metrobus trips, buses, alerts (global tools)</td><td><code>/gtfs/bus-gtfsrt-*.pb</code></td><td>1 to 2 min polling</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -754,19 +758,19 @@
             <article class="source-card">
               <header>
                 <h3>511 SF Bay: regional transit</h3>
-                <p class="note">Regional schedule and realtime feeds for the global tools (departures, alerts, vehicles). Transit data provided by 511 SF Bay and participating Bay Area operators.</p>
+                <p class="note">Regional schedule and realtime feeds for the global tools: departures, alerts and vehicles, plus guided trip planning. Transit data provided by 511 SF Bay and participating Bay Area operators.</p>
               </header>
               <div class="table-wrap"><table><thead><tr><th>Capability</th><th>Source</th><th>Freshness</th></tr></thead><tbody>
                 <tr><td>Stops and routes</td><td>Regional GTFS static artifact</td><td>Versioned artifact</td></tr>
-                <tr><td>Arrivals</td><td>GTFS-realtime trip updates</td><td>Dark-mode validation</td></tr>
-                <tr><td>Alerts</td><td>GTFS-realtime service alerts</td><td>Dark-mode validation</td></tr>
-                <tr><td>Vehicles</td><td>GTFS-realtime vehicle positions</td><td>Dark-mode validation</td></tr>
+                <tr><td>Arrivals</td><td>GTFS-realtime trip updates</td><td>About every 2 min</td></tr>
+                <tr><td>Alerts</td><td>GTFS-realtime service alerts</td><td>About every 15 min</td></tr>
+                <tr><td>Vehicles</td><td>GTFS-realtime vehicle positions</td><td>About every 5 min</td></tr>
               </tbody></table></div>
             </article>
 
             <article class="source-card">
               <header>
-                <h3>MTA: NYC Subway</h3>
+                <h3>MTA: NYC Subway, LIRR, Metro-North and buses</h3>
                 <p class="note">Public feeds are read without a server-side API key.</p>
               </header>
               <div class="table-wrap">
@@ -780,6 +784,9 @@
                     <tr><td>Transfers</td><td>Bundled station transfer records</td><td>Static asset in code</td></tr>
                     <tr><td>Timetable (global tools)</td><td>MTA supplemented subway GTFS, which includes planned service changes</td><td>Checked every 5 min, rebuilt on change</td></tr>
                     <tr><td>Live trips (global tools)</td><td>All eight <code>nyct/gtfs*</code> feeds, read together; if one is missing, departures fall back to the timetable</td><td>30 sec polling</td></tr>
+                    <tr><td>LIRR and Metro-North (global tools)</td><td>MTA GTFS timetables plus <code>lirr/gtfs-lirr</code>, <code>mnr/gtfs-mnr</code> and their alert feeds</td><td>30 sec to 1 min polling</td></tr>
+                    <tr><td>Buses (global tools)</td><td>MTA borough and MTA Bus Company timetables, with predictions, locations and alerts from MTA Bus Time</td><td>1 to 2 min polling</td></tr>
+                    <tr><td>Elevators and escalators (global tools)</td><td><code>nyct_ene.json</code> outages and equipment lists</td><td>5 min polling</td></tr>
                   </tbody>
                 </table>
               </div>

@@ -47,11 +47,11 @@ describe('release operator documentation', () => {
     expect(llmsText).toContain('minutesAway');
   });
   it('documents SF Bay departures, alerts, vehicles and planning', () => {
-    // The landing page and social image keep their in-development copy until they are redesigned.
-    expect(landingPage).toMatch(/SF Bay support is in development/i);
+    expect(landingPage).toMatch(/SF Bay Area/);
+    expect(landingPage).not.toMatch(/in development/i);
     for (const [name, document] of [['README', readme], ['public docs', publicDocs], ['LLM index', llmsText]] as const) {
       expect(document, name).toMatch(/departures, (?:service )?alerts and vehicle(?: location)?s/i);
-      expect(document, name).toMatch(/plan_trip/);
+      expect(document, name).toMatch(/plan_trip|planning/);
       expect(document, name).not.toMatch(/plan(?:ning|_trip)[^.]{0,80}not offered/i);
     }
     expect(llmsText).toContain('PLANNING_UNAVAILABLE');
@@ -70,8 +70,9 @@ describe('release operator documentation', () => {
     expect(privacy).toContain('511 SF Bay');
     expect(terms).toContain('511 SF Bay');
     expect(transitBoardSource).toContain('<title>Transit MCP Transit Board</title>');
-    expect(ogImageSvg).toContain('SF Bay: in development');
-    expect(ogImageSvg).toContain('2 live regions');
+    expect(ogImageSvg).toContain('NYC, DC and SF Bay');
+    expect(ogImageSvg).toContain('3 regions');
+    expect(ogImageSvg).toContain('18 tools');
     // Production serves SF Bay; preview stays dark.
     expect([...wrangler.matchAll(/"SFBAY_MODE": "([^"]+)"/g)].map(match => match[1]))
       .toEqual(['on', 'dark']);

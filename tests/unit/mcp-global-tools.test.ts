@@ -596,7 +596,9 @@ describe('global transit MCP boundary', () => {
     expect(result.structuredContent.candidates.map((candidate: any) => candidate.ref)).toEqual(['tr:sfbay:other:route:OTE', 'tr:sfbay:sf511:route:OTE']);
   });
   it('returns only authoritative dated-trip and route observations, preserving missing trip identity', async () => {
-    const { env, version } = await fixture(); const now = Math.floor(Date.now() / 1000);
+    // A frozen clock: ages are exact even when a call crosses a second boundary.
+    const { env, version } = await fixture(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('09:02:00')));
+    const now = Math.floor(Date.now() / 1000);
     env.REGION_FEED_HUB = { idFromName: () => 'hub', get: () => ({ fetch: async () => Response.json({ freshness: 'fresh', status: 'realtime', version,
       producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload: [
         { entityId: 'dated', routeId: 'R', tripId: 'T', tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDA6MDA', latitude: 37, longitude: -122, timestampSeconds: now - 3 },

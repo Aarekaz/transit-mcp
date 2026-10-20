@@ -36,10 +36,10 @@
       <tspan x="0" y="154">into</tspan><tspan dx="14" fill="#ff6b1a">transit.</tspan>
     </text>
     <text x="2" y="216" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="500" fill="#34465b">
-      Live DC + NYC transit through MCP
+      NYC, DC and SF Bay transit through MCP
     </text>
     <text x="2" y="250" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="650" fill="#596a7d">
-      SF Bay: in development
+      Trips, departures, alerts and vehicles
     </text>
   </g>
 
@@ -47,14 +47,14 @@
     <g>
       <rect width="122" height="48" rx="24" fill="#ffffff" stroke="#dfe5ec"/>
       <circle cx="30" cy="24" r="8" fill="#35c77b"/>
-      <text x="50" y="31">13 tools</text>
+      <text x="50" y="31">18 tools</text>
     </g>
     <g transform="translate(142 0)">
-      <rect width="188" height="48" rx="24" fill="#ffffff" stroke="#dfe5ec"/>
+      <rect width="164" height="48" rx="24" fill="#ffffff" stroke="#dfe5ec"/>
       <circle cx="30" cy="24" r="8" fill="#1d5fd7"/>
-      <text x="50" y="31">2 live regions</text>
+      <text x="50" y="31">3 regions</text>
     </g>
-    <g transform="translate(350 0)">
+    <g transform="translate(326 0)">
       <rect width="174" height="48" rx="24" fill="#ffffff" stroke="#dfe5ec"/>
       <circle cx="30" cy="24" r="8" fill="#ff6b1a"/>
       <text x="50" y="31">Cloudflare</text>

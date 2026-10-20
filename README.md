@@ -1,6 +1,12 @@
 # Transit MCP
 
-Transit MCP is an anonymous, read-only Model Context Protocol server for live DC Metro and NYC Subway transit information. In the SF Bay Area the global tools serve departures, service alerts and vehicle locations for every 511 SF Bay operator, and `plan_trip` plans journeys across them.
+Transit MCP is a free, anonymous, read-only Model Context Protocol server that lets your AI answer transit questions: how do I get there, when's the next train, is anything broken, where's my bus. It's a side project, and general-purpose agents (ChatGPT, Claude, Muse, Instinct and friends) plug straight into it.
+
+It covers:
+
+- **New York:** the subway, the Long Island Rail Road, Metro-North and NYC buses.
+- **Washington DC:** Metrorail and Metrobus.
+- **SF Bay Area:** every operator in 511 SF Bay's regional feed, including BART, Muni, Caltrain, AC Transit, VTA, SamTrans and the ferries. Departures, alerts, vehicles and trip planning all work there.
 
 **Metro MCP is now Transit MCP.**
 
@@ -55,17 +61,26 @@ codex mcp add transit-mcp https://transitmcp.com/mcp
 
 This checkout registers 18 MCP tools: the 13 compatible DC/NYC tools plus five global capabilities, `find_transit`, `plan_trip`, `get_departures`, `get_service_status`, and `get_vehicle_status`. The compatible tools call WMATA and MTA directly for arrivals, service incidents, stations, routes, buses, trains, transfers, and vehicle positions.
 
-DC Metro and the NYC Subway serve all five global tools:
+All three regions serve the five global tools. Here's what they do:
 
-- `plan_trip` plans trips between stations, or from map coordinates with short walks, using the published WMATA and MTA timetables and live predictions. Every itinerary is checked by an independent validator before it is returned.
+- `plan_trip` plans trips between stations, or from map coordinates with short walks, using the published timetables and live predictions. In New York and DC it searches the rail network on its own. Anywhere, including the SF Bay Area and buses, you can name the lines to ride in `routes` (up to four) and it finds the real trips, stops, transfers and walks on them. When it can't search on its own it says why and returns `routeHints`: the lines near each end and the ones that serve both. Every itinerary is checked by an independent validator and comes with plain `steps` a rider can follow.
+- `get_departures` with `toStop` answers "next train from A to B": only trips that go on to that stop, each with its arrival time there.
 - `get_departures` merges the timetable with live trip updates. In NYC that includes rerouted trains and trains missing from the timetable, which are marked as observed rather than dropped. You can pass a station name directly; a station complex such as Times Sq-42 St or 14 St-Union Sq counts as one place and lists departures from every line in it, and genuinely different stations with the same name come back as choices.
 - `get_service_status` returns the agencies' own alerts for a city, line, station, or trip, plus elevator and escalator outages there: whether each is on the step-free path, whether a backup elevator exists, and MTA's suggested way around.
 - `plan_trip` with `accessibility: "step_free"` plans journeys that only board, alight and change where the platform is reachable without stairs, and avoids stations cut off by a current elevator outage. Station access comes from WMATA's GTFS and MTA's station list (including stations accessible in one direction only); if the live elevator report is missing or stale, it says so instead of guessing.
-- `get_vehicle_status` shows where trains are: on a line, on a dated trip from a departure board or planned journey, or at a station (every station of a complex). Each train reports its train ID (MTA's, such as `1A 1023 207/FAR`, or WMATA's number), the station it is stopped at or heading to, the station it last served, and its destination. DC trains carry GPS coordinates. MTA publishes stations rather than coordinates, so an NYC train stopped at a station is placed there and one between stations has no coordinates rather than a guessed one.
+- `find_transit` resolves stations, stops, routes and train IDs. Stations rank ahead of street stops and rail ahead of bus, each candidate says what it is (station, platform or street stop, modes, lines), and a few reviewed place names work, such as SFO, Union Square, Penn Station, Grand Central and Dulles.
+- `get_vehicle_status` shows where trains and buses are: on a line, on a dated trip from a departure board or planned journey, or at a station (every station of a complex). Each train reports its train ID (MTA's, such as `1A 1023 207/FAR`, or WMATA's number), the station it is stopped at or heading to, the station it last served, and its destination. DC trains carry GPS coordinates. MTA publishes stations rather than coordinates, so an NYC train stopped at a station is placed there and one between stations has no coordinates rather than a guessed one.
 
-The NYC coverage also carries the Long Island Rail Road, Metro-North and NYC buses, and DC carries Metrobus. Journeys use every mode, buses included, and change between them on foot at stations such as Penn Station, Grand Central and Atlantic Terminal; LIRR and Metro-North departures show the track. The network planner searches compact timetables a cron builds in R2, then plans and validates the proposed lines exactly (see `src/transit/planner/network-plan.ts`). NYC bus predictions and locations come from MTA Bus Time and stay off until its key (`MTA_BUS_API_KEY`) is configured.
+The NYC coverage also carries the Long Island Rail Road, Metro-North and NYC buses, and DC carries Metrobus. Journeys use every mode, buses included, and change between them on foot at stations such as Penn Station, Grand Central and Atlantic Terminal; LIRR and Metro-North departures show the track. The network planner searches compact timetables a cron builds in R2, then plans and validates the proposed lines exactly (see `src/transit/planner/network-plan.ts`). NYC bus predictions, locations and alerts come from MTA Bus Time; a self-hosted Worker without its key (`MTA_BUS_API_KEY`) serves NYC buses from the timetable only.
 
-Timetables refresh automatically at the edge whenever WMATA or MTA publish a new one. An update that would remove most of a day's service is rejected, and one that makes live matching worse is rolled back. See [DC and NYC global transit](docs/dc-nyc-global-transit.md) for how that works and what has been verified. SF Bay support is in development; its global coverage stays dark, with attribution to 511 SF Bay and participating operators.
+Timetables refresh automatically at the edge whenever WMATA, MTA or 511 SF Bay publish a new one. An update that would remove most of a day's service is rejected, and one that makes live matching worse is rolled back. See [DC and NYC global transit](docs/dc-nyc-global-transit.md) for how that works and what has been verified. SF Bay data comes from 511 SF Bay and participating operators, with their attribution on every result.
+
+### Honest limits
+
+- Late at night, when nothing runs within walking distance, `plan_trip` finds nothing and hands back `routeHints` instead.
+- NYC trains between stations have no coordinates; MTA reports stations, not GPS.
+- The first call after a quiet spell can take several seconds while the timetable loads.
+- The 13 original tools are still here and unchanged for older clients.
 
 It also provides four `transit://` URI templates (stations, routes, incidents, and versioned entities) and three canned prompts (`service-briefing`, `commute-planner`, and `accessibility-check`). Use `plan_trip` for journeys; do not assemble routes from departure boards. Global results distinguish `realtime`, `scheduled_only`, and `unavailable`, with source timestamps, versions, reasons, attribution, and a JSON text fallback.
 

@@ -17,7 +17,7 @@ import type { ScheduleShard } from '../../../transit/gtfs/static/schema';
 import { AlertScopeLimitError, expandAlertScopes, matchesAlertSelector, resolveAlertSelector, type AlertScope } from '../../../transit/gtfs/realtime/alert-match';
 import { itinerarySchema } from './plan';
 import { blockedStations, currentOutage, outageStations, stationOf, type EquipmentOutage } from '../../../transit/accessibility/equipment';
-import { TransitToolError, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, TransitToolError, stopMatches, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
 
 /** Per-alert detail bound: a city-wide status call stays readable for a model. */
 export const ALERT_DETAIL_LIMIT = 20;
@@ -60,13 +60,14 @@ async function equipmentReport(context: MetroMcpContext, data: TransitData, stat
 }
 
 export function registerServiceStatusTool(server: McpServer, context: MetroMcpContext): void {
-  const absent = { coverage: z.never().optional(), ref: z.never().optional(), itinerary: z.never().optional() };
+  const absent = { coverage: z.never().optional(), ref: z.never().optional(), itinerary: z.never().optional(), stop: z.never().optional() };
   const selectorSchema = z.strictObject({ agencyId: z.string().optional(), routeId: z.string().optional(), routeType: z.number().int().optional(), stopId: z.string().optional(), directionId: z.number().int().optional(),
     trip: z.strictObject({ tripId: z.string().optional(), startDate: z.string().optional(), startTime: z.string().optional(), routeId: z.string().optional(), directionId: z.number().int().optional() }).optional() });
   server.registerTool('get_service_status', {
-    title: 'Transit service status', description: 'Check disruptions, delays, closures, elevator and escalator outages, or revalidate a chosen itinerary without replacing it. Scope by coverage or an agency, route, stop or dated trip reference; a station covers its complex. Aggregate scopes include canonical service in the next 24 hours. equipment lists elevator/escalator outages: accessiblePath marks the step-free route, blocksStepFree marks stations step-free plan_trip avoids, and alternativeRoute is the agency\'s way around. Use get_vehicle_status for an observed vehicle location.',
+    title: 'Transit service status', description: 'Check disruptions, delays, closures, elevator and escalator outages, or revalidate a chosen itinerary without replacing it. Scope by coverage, a station name with its coverage (stop), or an agency, route, stop or dated trip reference; a station covers its complex. Aggregate scopes include canonical service in the next 24 hours. equipment lists elevator/escalator outages: accessiblePath marks the step-free route, blocksStepFree marks stations step-free plan_trip avoids, and alternativeRoute is the agency\'s way around. Use get_vehicle_status for an observed vehicle location.',
     annotations: readOnlyLive('Transit service status'),
-    inputSchema: z.union([z.strictObject({ ...absent, coverage: coverageSchema }), z.strictObject({ ...absent, ref: boundedText }), z.strictObject({ ...absent, itinerary: z.record(z.string(), z.unknown())
+    inputSchema: z.union([z.strictObject({ ...absent, coverage: coverageSchema }), z.strictObject({ ...absent, ref: boundedText }),
+      z.strictObject({ ...absent, stop: boundedText.describe('Station name, e.g. "Fulton St"; a station covers its complex.'), coverage: coverageSchema }), z.strictObject({ ...absent, itinerary: z.record(z.string(), z.unknown())
       .describe('An itinerary exactly as plan_trip returned it; validated strictly against that contract.') })]),
     outputSchema: z.strictObject({ ...resultShape, alerts: z.array(z.strictObject({ id: z.string(), agencyText: z.strictObject({ title: z.string(), description: z.string(), label: z.literal('agency_supplied') }),
       routeIds: z.array(z.string()), stopIds: z.array(z.string()).describe(`At most ${ALERT_DETAIL_LIMIT}; stopCount is the full number.`),
@@ -78,6 +79,17 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       equipment: equipmentSchema.optional().describe('Elevator and escalator outages in scope, where the coverage publishes them.') }),
   }, async (args, handler) => guarded(handler, () => traced('get_service_status', async () => {
     checkState(handler, 'get_service_status');
+    // A station by name, resolved as get_departures does, then checked as that station.
+    if ('stop' in args && args.stop) {
+      const coverageId = getCoverage(args.coverage ?? '')?.id;
+      if (!coverageId) throw new TransitToolError('ENTITY_NOT_FOUND');
+      const named = await loadData(context, coverageId, handler.mcpReq.signal);
+      if (!named) return complete({ ...unavailable(coverageId), alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] });
+      const matches = stopMatches(named, args.stop);
+      if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND');
+      if (matches.length > 1) throw new TransitToolError('ENTITY_AMBIGUOUS', matches.slice(0, MAX_DISCOVERY_CANDIDATES));
+      args = { ref: matches[0]!.ref } as unknown as typeof args;
+    }
     const parsed = args.ref ? validRef(args.ref, ['agency', 'route', 'stop', 'trip'], true) : undefined;
     // The advertised input stays small; the itinerary contract is enforced here.
     const checked = args.itinerary === undefined ? undefined : itinerarySchema.safeParse(args.itinerary);

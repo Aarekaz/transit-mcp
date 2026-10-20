@@ -22,7 +22,7 @@ export const EXPECTED_SERVER_INFO = {
   title: 'Transit MCP',
   version: '6.1.0',
   description:
-    'Real-time DC Metro and NYC Subway arrivals, service alerts, stations, and DC buses.',
+    'Trips, departures, alerts and vehicles for NYC, DC and the SF Bay Area.',
   websiteUrl: 'https://transitmcp.com',
   icons: [{
     src: 'https://transitmcp.com/metro-mcp.png',
