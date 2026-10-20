@@ -47,6 +47,8 @@ export interface JourneyQuery extends Omit<ValidationSource, 'shards'> {
   maxWalkMetres?: number;
   /** Vehicle changes, default three, maximum four. In-seat continuation does not consume one. */
   maxTransfers?: number;
+  /** Feeds the search may use; all of the manifest's when omitted. */
+  feedIds?: readonly string[];
 }
 export interface ValidationResult {
   valid: boolean;

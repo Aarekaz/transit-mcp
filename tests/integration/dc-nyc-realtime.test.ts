@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { transit_realtime } from 'gtfs-realtime-bindings';
 import { NYC_TRIP_FEEDS } from '../../src/regions/nyc';
-import { formatTripInstanceRef, parseTransitRef } from '../../src/transit/core/refs';
-import { NOW, NYC_FILES, SERVICE_DATE, bandedArtifact, callTool, civil, feedBytes, liveEnv, nowSeconds, nyctTrip, nyctVehicle, upstream, wireHub } from '../helpers/dc-nyc-realtime';
+import { formatEntityRef, formatTripInstanceRef, parseTransitRef } from '../../src/transit/core/refs';
+import { NOW, NYC_FILES, SERVICE_DATE, bandedArtifact, composeFeed, callTool, civil, feedBytes, liveEnv, nowSeconds, nyctTrip, nyctVehicle, upstream, wireHub } from '../helpers/dc-nyc-realtime';
 
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW)); });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
@@ -366,5 +366,48 @@ describe('Washington Metrorail through the global tools', () => {
       headerText: { translation: [{ text: 'Weekend Scheduled Maintenance', language: 'en' }] } } }] });
     const byRoute = (await callTool(f.env, 'get_service_status', { ref: f.ref('route', 'RED') })).structuredContent;
     expect(byRoute).toMatchObject({ status: 'realtime', alerts: [{ id: '7c875cc3', routeIds: ['RED'], activePeriods: [{ end: null }] }] });
+  });
+});
+
+describe('Metrobus beside Metrorail in one coverage', () => {
+  // The bus stop PF_A02_C shares its ID with Farragut North's platform but is in Georgetown.
+  const BUS_FILES = {
+    'agency.txt': 'agency_id,agency_name,agency_url,agency_timezone\n1,WMATA,https://www.wmata.com,America/New_York\n',
+    'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nB1,Connecticut Av NW+Dupont Cir,38.90990,-77.04410\nPF_A02_C,Wisconsin Av NW+M St NW,38.90510,-77.06240\n',
+    'routes.txt': 'route_id,agency_id,route_short_name,route_long_name,route_type\nD80,1,D80,Union Station,3\n',
+    'trips.txt': 'route_id,service_id,trip_id,trip_headsign,block_id\nD80,Weekday,9001,South to Union Station,A1\n',
+    'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\n9001,09:03:00,09:03:00,B1,1\n9001,09:15:00,09:15:00,PF_A02_C,2\n',
+    'calendar.txt': 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWeekday,1,1,1,1,1,0,0,20261001,20261031\n',
+  };
+  async function dcWithBus() {
+    quiet();
+    const artifact = await bandedArtifact('dc');
+    await composeFeed(artifact.db, 'dc', 'wmata_bus', BUS_FILES);
+    const env = liveEnv(artifact.db, { WMATA_API_KEY: 'test-wmata-key' });
+    const hub = wireHub(env, artifact.db, 'dc:wmata');
+    const stamp = nowSeconds();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(upstream({ 'rail-gtfsrt-tripupdates.pb': feedBytes(stamp, []), 'rail-gtfsrt-vehiclepositions.pb': feedBytes(stamp, []),
+      'rail-gtfsrt-alerts.pb': feedBytes(stamp, []) }).fetcher);
+    await hub.alarm();
+    return { ...artifact, env, bus: (id: string) => formatEntityRef({ coverage: 'dc', feed: 'wmata_bus', kind: 'stop', id }) };
+  }
+
+  it('keeps each feed’s stops apart even when their IDs collide', async () => {
+    const f = await dcWithBus();
+    const atBus = (await callTool(f.env, 'get_departures', { stopRef: f.bus('PF_A02_C'), windowSeconds: 3600 })).structuredContent;
+    expect(atBus.departures.map((row: { routeName: string; stopName: string }) => `${row.routeName}@${row.stopName}`)).toEqual(['D80@Wisconsin Av NW+M St NW']);
+    const atRail = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', 'STN_A02'), windowSeconds: 3600 })).structuredContent;
+    expect(new Set(atRail.departures.map((row: { routeName: string }) => row.routeName))).toEqual(new Set(['Red']));
+  });
+
+  it('plans from a bus stop by walking to rail, never riding a feed it cannot search', async () => {
+    const f = await dcWithBus();
+    const plan = (await callTool(f.env, 'plan_trip', { origin: { ref: f.bus('B1') }, destination: { ref: f.ref('stop', 'STN_A01') }, departAt: '2026-10-19T09:00:00-04:00' })).structuredContent;
+    expect(plan.itineraries.length).toBeGreaterThan(0);
+    for (const itinerary of plan.itineraries) {
+      expect(itinerary.origin).toEqual({ latitude: 38.9099, longitude: -77.0441 });
+      expect(itinerary.legs[0]).toMatchObject({ kind: 'walk' });
+      expect(itinerary.legs.filter((leg: { kind: string }) => leg.kind === 'transit').every((leg: { mode: string }) => leg.mode === 'subway')).toBe(true);
+    }
   });
 });

@@ -53,8 +53,8 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
     const stopIndex = data.indexes.flatMap(index => index.stops), byRef = new Map(stopIndex.map(stop => [stop.ref as string, stop]));
     const within = parsed.kind === 'stop' ? new Set([ref!, ...complexStations(data, ref!)]) : undefined;
     const atStop = within && new Set(stopIndex.filter(stop => within.has(stop.ref) || stop.parentStationRef !== undefined && within.has(stop.parentStationRef)).map(stop => stop.providerId));
-    const now = Math.floor(Date.now() / 1000), feed = await readFeed<NormalizedVehicle>(context, data, 'vehicle_positions', now, handler.mcpReq.signal);
-    const fresh = feed?.feedId === parsed.feed && feed?.status === 'realtime' && feed.producerTimestampSeconds !== undefined && now >= feed.producerTimestampSeconds && now - feed.producerTimestampSeconds <= data.coverage.thresholds.vehiclePositions.realtimeSeconds;
+    const now = Math.floor(Date.now() / 1000), feed = await readFeed<NormalizedVehicle>(context, data, 'vehicle_positions', now, handler.mcpReq.signal, [], [parsed.feed]);
+    const fresh = (feed.feedIds ?? [feed.feedId]).includes(parsed.feed) && feed?.status === 'realtime' && feed.producerTimestampSeconds !== undefined && now >= feed.producerTimestampSeconds && now - feed.producerTimestampSeconds <= data.coverage.thresholds.vehiclePositions.realtimeSeconds;
     const routes = data.indexes.find(index => index.feedId === parsed.feed)?.routes ?? [];
     const stopRef = (providerId: string | undefined) => {
       const candidate = providerId === undefined ? undefined : formatEntityRef({ coverage: parsed.coverage, feed: parsed.feed, kind: 'stop', id: providerId });

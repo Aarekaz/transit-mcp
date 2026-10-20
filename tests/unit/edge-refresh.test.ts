@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getCoverage } from '../../src/transit/core/coverage';
 import { compileSchedule } from '../../src/transit/gtfs/static/compiler';
 import { csvRecords, parseCsvRecord } from '../../src/transit/gtfs/static/csv';
-import { buildServiceDate, scanArchive, type EdgeSource } from '../../src/transit/gtfs/static/edge-build';
+import { buildServiceDate, rangedStopTimes, scanArchive, type EdgeSource } from '../../src/transit/gtfs/static/edge-build';
 import { partitionSchedule } from '../../src/transit/gtfs/static/partition';
 import { sha256 } from '../../src/transit/gtfs/static/shards';
 import { readZipDirectory, zipEntryText } from '../../src/transit/gtfs/static/zip';
@@ -67,6 +67,16 @@ describe('edge schedule build', () => {
     const offline = await partitionSchedule(compiled, BAND_SECONDS);
     expect(new Map(offline.objects.map(object => [object.key, [...object.bytes].join()]))).toEqual(new Map([...edge].map(([key, bytes]) => [key, [...bytes].join()])));
     expect(descriptors).toEqual(offline.manifest.shards);
+    // Band by band from the stored stop_times copy (how a Workflow step builds): identical too.
+    const copy = new TextEncoder().encode(NYC_FILES['stop_times.txt']);
+    const read = async (offset: number, length: number) => copy.subarray(offset, offset + length);
+    const streamed = new Map<string, Uint8Array>([[scan.discovery.key, scan.discoveryBytes]]);
+    for (const date of scan.dates) {
+      const built = await buildServiceDate(archive, source, scan.identity, date, BAND_SECONDS,
+        { header: scan.stopTimes.header, rows: trips => rangedStopTimes(read, scan.stopTimes.header, scan.stopTimes.tripRanges, trips), starts: scan.stopTimes.tripStarts });
+      for (const object of built.objects) streamed.set(object.key, object.bytes);
+    }
+    expect(new Map([...streamed].map(([key, bytes]) => [key, [...bytes].join()]))).toEqual(new Map([...edge].map(([key, bytes]) => [key, [...bytes].join()])));
     expect(scan.sources).toEqual(compiled.manifest.sources);
     expect(scan.identity).toMatchObject({ sha256: await sha256(archive), archiveSha256: await sha256(archive) });
   });
@@ -136,6 +146,76 @@ describe('edge refresh workflow', () => {
     const writes = f.db.objects.size;
     expect(await runRefresh(f.env, f.params, steps())).toEqual({ outcome: 'unchanged', reasons: [] });
     expect(f.db.objects.size).toBe(writes);
+  });
+
+  it('refreshes each feed of a coverage on its own, composing one manifest', async () => {
+    const f = await setup(), subway = await runRefresh(f.env, f.params, steps());
+    const lirrFiles = {
+      'agency.txt': 'agency_id,agency_name,agency_url,agency_timezone\nLI,Long Island Rail Road,https://new.mta.info/agency/long-island-rail-road,America/New_York\n',
+      'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\n237,Penn Station,40.750588,-73.993584\n102,Jamaica,40.699608,-73.808530\n',
+      'routes.txt': 'route_id,route_long_name,route_type\n1,Babylon Branch,2\n',
+      'trips.txt': 'route_id,service_id,trip_id,trip_headsign,trip_short_name\n1,W,GO1,Jamaica,2\n',
+      'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\nGO1,09:00:00,09:00:00,237,1\nGO1,09:20:00,09:20:00,102,2\n',
+      'calendar_dates.txt': 'service_id,date,exception_type\nW,20261019,1\nW,20261020,1\nW,20261021,1\n',
+      // Timed trip-to-trip transfers are not compiled; the stop's own rule stays.
+      'transfers.txt': 'from_stop_id,to_stop_id,from_trip_id,to_trip_id,transfer_type,min_transfer_time\n102,102,GO1,GO1,1,\n102,102,,,2,300\n',
+    };
+    const archive = await zip(lirrFiles), hash = await sha256(archive), keys = sourceKeys('nyc', 'lirr');
+    await f.db.bucket.put(keys.archive(hash), archive);
+    await f.db.bucket.put(keys.state, JSON.stringify({ sha256: hash, checkedAt: Date.now(), retrievedAt: '2026-10-19T00:00:00Z' }));
+    const lirr = await runRefresh(f.env, { coverageId: 'nyc', feedId: 'lirr', archiveSha256: hash, retrievedAt: '2026-10-19T00:00:00Z' }, steps());
+    expect(lirr.outcome).toBe('published');
+    const store = new StaticArtifactStore(f.db.bucket, 'nyc');
+    const before = (await store.read(subway.artifactVersion!)).manifest, after = (await store.read(lirr.artifactVersion!)).manifest;
+    expect(after.sources.map(source => source.feedId)).toEqual(['lirr', 'mta_subway']);
+    // The subway's part of the manifest is exactly as it was published.
+    expect(after.shards.filter(shard => shard.feedId === 'mta_subway')).toEqual(before.shards);
+    const stats = await (await f.db.bucket.get(f.keys.stats(lirr.artifactVersion!)))!.json<{ feeds: Record<string, { trips: number }> }>();
+    expect(Object.keys(stats.feeds).sort()).toEqual(['lirr', 'mta_subway']);
+    // A later subway refresh keeps the LIRR's part and its archive.
+    const changed = await zip({ ...NYC_FILES, 'trips.txt': NYC_FILES['trips.txt'].replace('South Ferry,1\n', 'South Ferry Loop,1\n') } as Record<string, string>), changedHash = await sha256(changed);
+    await f.db.bucket.put(f.keys.archive(changedHash), changed);
+    await f.db.bucket.put(f.keys.state, JSON.stringify({ sha256: changedHash, checkedAt: Date.now(), retrievedAt: 'later' }));
+    vi.setSystemTime(Date.now() + 3 * 3600_000);
+    const again = await runRefresh(f.env, { ...f.params, archiveSha256: changedHash }, steps());
+    expect(again.outcome).toBe('published');
+    const latest = (await store.read(again.artifactVersion!)).manifest;
+    expect(latest.shards.filter(shard => shard.feedId === 'lirr')).toEqual(after.shards.filter(shard => shard.feedId === 'lirr'));
+    expect(await f.db.bucket.head(keys.archive(hash))).not.toBeNull();
+    expect(await f.db.bucket.head(keys.state)).not.toBeNull();
+  });
+
+  it('splits a dense feed by band in its own steps and still publishes the offline bytes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW));
+    const busFiles = {
+      'agency.txt': 'agency_id,agency_name,agency_url,agency_timezone\n1,WMATA,https://www.wmata.com,America/New_York\n',
+      'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\nB1,Connecticut Av NW+Dupont Cir,38.90990,-77.04410\nB2,Wisconsin Av NW+M St NW,38.90510,-77.06240\n',
+      'routes.txt': 'route_id,agency_id,route_short_name,route_long_name,route_type\nD80,1,D80,Union Station,3\n',
+      // Trip IDs out of time order, as Metrobus publishes them: each band's rows are scattered.
+      'trips.txt': 'route_id,service_id,trip_id,trip_headsign,block_id\nD80,Weekday,9003,South,A1\nD80,Weekday,9001,South,A1\nD80,Weekday,9002,North,A2\n',
+      'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\n9003,11:10:00,11:10:00,B1,1\n9003,11:25:00,11:25:00,B2,2\n' +
+        '9001,09:03:00,09:03:00,B1,1\n9001,09:15:00,09:15:00,B2,2\n9002,09:40:00,09:40:00,B2,1\n9002,09:55:00,09:55:00,B1,2\n',
+      'calendar.txt': 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWeekday,1,1,1,1,1,0,0,20261001,20261031\n',
+    };
+    const db = memoryStorage(), archive = await zip(busFiles), hash = await sha256(archive), keys = sourceKeys('dc', 'wmata_bus');
+    await db.bucket.put(keys.archive(hash), archive);
+    await db.bucket.put(keys.state, JSON.stringify({ sha256: hash, checkedAt: Date.now(), retrievedAt: '2026-10-19T00:00:00Z' }));
+    const env = { TRANSIT_ARTIFACTS: db.bucket, TRANSIT_COVERAGE_MODES: '{"dc":"off"}' } as unknown as Env, runner = steps();
+    const result = await runRefresh(env, { coverageId: 'dc', feedId: 'wmata_bus', archiveSha256: hash, retrievedAt: '2026-10-19T00:00:00Z' }, runner);
+    expect(result.outcome).toBe('published');
+    expect(runner.names.slice(0, 7)).toEqual(['scan', 'band:9', 'yield:band:9', 'band:11', 'yield:band:11', 'date:20261018', 'yield:date:20261018']);
+    const manifest = (await new StaticArtifactStore(db.bucket, 'dc').read(result.artifactVersion!)).manifest;
+    const dates = [...new Set(manifest.shards.map(shard => shard.window.startDate))].sort();
+    const source = { coverage: getCoverage('dc')!, feedId: 'wmata_bus', url: 'https://api.wmata.com/gtfs/bus-gtfs-static.zip', retrievedAt: '2026-10-19T00:00:00Z' };
+    const identity = (await scanArchive(archive, source, 7, Date.parse(NOW))).identity;
+    const offline = await partitionSchedule(await compileSchedule({ coverage: source.coverage, feedId: 'wmata_bus', files: busFiles, identity,
+      window: { startDate: dates[0]!, endDate: dates.at(-1)! }, source: { url: source.url, retrievedAt: source.retrievedAt } }), 3600);
+    expect(manifest.shards).toEqual(offline.manifest.shards);
+    for (const shard of manifest.shards) {
+      const published = new Uint8Array(await (await db.bucket.get(shard.key))!.arrayBuffer());
+      expect([...published].join()).toBe([...offline.objects.find(object => object.key === shard.key)!.bytes].join());
+    }
+    expect([...db.objects.keys()].some(key => key.startsWith('work/'))).toBe(false);
   });
 
   it('never publishes an archive superseded while it was building', async () => {
@@ -210,7 +290,9 @@ describe('edge refresh workflow', () => {
     const env = { TRANSIT_ARTIFACTS: db.bucket, TRANSIT_COVERAGE_MODES: '{"nyc":"on"}', TRANSIT_REFRESH: {
       create: async () => { throw new Error('instance already exists'); },
       get: async () => ({ status: async () => ({ status: 'errored' }), restart: async () => { restarts++; } }) } } as unknown as Env;
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(archive, { headers: { etag: '"v1"' } }));
+    // Only the subway archive answers; NYC's other feeds fail their own checks independently.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => String(input instanceof Request ? input.url : input).includes('gtfs_supplemented')
+      ? new Response(archive, { headers: { etag: '"v1"' } }) : new Response(null, { status: 503 }));
     const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
     for (let check = 0; check < 5; check++) await checkStaticSources(env, Date.now() + check * 10 * 60_000);
     expect(restarts).toBe(3);
@@ -229,19 +311,20 @@ describe('edge refresh workflow', () => {
     const requests: Request[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const request = new Request(input as RequestInfo, init); requests.push(request);
-      if (request.url.includes('wmata')) return new Response(null, { status: 503 });
+      if (!request.url.includes('gtfs_supplemented')) return new Response(null, { status: 503 });
       return request.headers.get('if-none-match') === '"v1"' ? new Response(null, { status: 304 }) : new Response(archive, { headers: { etag: '"v1"' } });
     });
     vi.spyOn(console, 'info').mockImplementation(() => {}); vi.spyOn(console, 'warn').mockImplementation(() => {});
     await checkStaticSources(env, Date.now());
-    expect(created).toEqual([{ id: `refresh-nyc-${hash.slice(0, 32)}`, params: { coverageId: 'nyc', archiveSha256: hash, retrievedAt: new Date(NOW).toISOString() } }]);
+    // The primary feed keeps the instance ID it had before coverages held several feeds.
+    expect(created).toEqual([{ id: `refresh-nyc-${hash.slice(0, 32)}`, params: { coverageId: 'nyc', feedId: 'mta_subway', archiveSha256: hash, retrievedAt: new Date(NOW).toISOString() } }]);
     expect(await db.bucket.head(sourceKeys('nyc').archive(hash))).not.toBeNull();
     // Inside the interval: no request at all.
     await checkStaticSources(env, Date.now() + 60_000);
-    expect(requests.filter(request => request.url.includes('rrgtfsfeeds'))).toHaveLength(1);
+    expect(requests.filter(request => request.url.includes('gtfs_supplemented'))).toHaveLength(1);
     // Next interval: a 304 costs no body and starts nothing new.
     await checkStaticSources(env, Date.now() + 10 * 60_000);
-    const conditional = requests.filter(request => request.url.includes('rrgtfsfeeds')).at(-1)!;
+    const conditional = requests.filter(request => request.url.includes('gtfs_supplemented')).at(-1)!;
     expect(conditional.headers.get('if-none-match')).toBe('"v1"');
     expect(created).toHaveLength(1);
     // DC is not active in this environment and is never contacted.

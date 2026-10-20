@@ -24,6 +24,8 @@ export interface NormalizedStopUpdate {
   scheduleMatch?: 'matched' | 'unscheduled_call' | 'unmatched_trip';
   /** Last reported stop of the observed train, for unscheduled rows only. */
   destinationStopId?: string;
+  /** Track the train uses at this stop, as the MTA railroads publish it. */
+  track?: string;
 }
 
 export type TripRelationship = 'SCHEDULED' | 'ADDED' | 'UNSCHEDULED' | 'CANCELED' | 'REPLACEMENT' | 'DUPLICATED' | 'UNKNOWN';
@@ -225,7 +227,38 @@ function nyctTrainIds(bytes: Uint8Array): (string | undefined)[] {
   return ids;
 }
 
-export interface DecodeOptions { /** Read NYCT's train IDs from its protobuf extension. */ nyct?: boolean }
+const TRACK = /^[A-Za-z0-9 -]{1,8}$/;
+/** The MTA railroads' StopTimeUpdate extension (field 1005) names the track at each stop
+ * (field 1). Per feed entity, one entry per stop time update, in feed order. */
+function mtaRailroadTracks(bytes: Uint8Array): (string | undefined)[][] {
+  const tracks: (string | undefined)[][] = [];
+  eachField(bytes, (field, wire, entity) => {
+    if (field !== 2 || wire !== 2 || !entity) return;
+    const stops: (string | undefined)[] = [];
+    eachField(entity, (kind, kindWire, update) => {
+      if (kind !== 3 || kindWire !== 2 || !update) return;
+      eachField(update, (part, partWire, stop) => {
+        if (part !== 2 || partWire !== 2 || !stop) return;
+        let track: string | undefined;
+        eachField(stop, (extension, extensionWire, railroad) => {
+          if (extension !== 1005 || extensionWire !== 2 || !railroad) return;
+          eachField(railroad, (item, itemWire, value) => {
+            const text = item === 1 && itemWire === 2 && value ? new TextDecoder().decode(value).trim() : undefined;
+            if (text && TRACK.test(text)) track ??= text;
+          });
+        });
+        stops.push(track);
+      });
+    });
+    tracks.push(stops);
+  });
+  return tracks;
+}
+
+export interface DecodeOptions {
+  /** Read NYCT's train IDs from its protobuf extension. */ nyct?: boolean;
+  /** Read the MTA railroads' track numbers from their protobuf extension. */ mtaRailroad?: boolean;
+}
 
 export function decodeRealtimeFeed(bytes: Uint8Array, options: DecodeOptions = {}): NormalizedRealtimeFeed {
   let message: transit_realtime.FeedMessage, repaired = false;
@@ -255,6 +288,8 @@ export function decodeRealtimeFeed(bytes: Uint8Array, options: DecodeOptions = {
   // A train ID is a label beside the feed, never a reason to reject it.
   let trainIds: (string | undefined)[] = [];
   if (options.nyct) try { trainIds = nyctTrainIds(bytes); } catch { trainIds = []; }
+  let tracks: (string | undefined)[][] = [];
+  if (options.mtaRailroad) try { tracks = mtaRailroadTracks(bytes); } catch { tracks = []; }
   for (const [index, entity] of message.entity.entries()) {
     if (entity.isDeleted) { feed.warnings.push('unsupported_deleted_entity'); continue; }
     if (entity.tripUpdate) {
@@ -266,11 +301,12 @@ export function decodeRealtimeFeed(bytes: Uint8Array, options: DecodeOptions = {
         startDate: identifier(descriptor.startDate), startTime: identifier(descriptor.startTime), scheduleRelationship: relationships[raw] ?? 'UNKNOWN',
         rawScheduleRelationship: raw, delaySeconds: ownNumber(update, 'delay'), stops: [],
         ...(update.tripProperties ? { tripProperties: { tripId: identifier(update.tripProperties.tripId), startDate: identifier(update.tripProperties.startDate), startTime: identifier(update.tripProperties.startTime) } } : {}) };
-      for (const stop of update.stopTimeUpdate ?? []) {
+      for (const [stopIndex, stop] of (update.stopTimeUpdate ?? []).entries()) {
+        const track = tracks[index]?.[stopIndex];
         const normalized: DecodedStopUpdate = { entityId: trip.entityId, tripId: trip.tripId, routeId: trip.routeId, stopId: identifier(stop.stopId),
           stopSequence: ownNumber(stop, 'stopSequence'), arrivalTimeSeconds: ownNumber(stop.arrival, 'time'), departureTimeSeconds: ownNumber(stop.departure, 'time'),
           arrivalDelaySeconds: ownNumber(stop.arrival, 'delay'), departureDelaySeconds: ownNumber(stop.departure, 'delay'),
-          stopScheduleRelationship: stopRelationships[stop.scheduleRelationship ?? 0] ?? 'UNKNOWN' };
+          stopScheduleRelationship: stopRelationships[stop.scheduleRelationship ?? 0] ?? 'UNKNOWN', ...(track ? { track } : {}) };
         trip.stops.push(normalized);
         if (normalized.stopId) feed.tripUpdates.push({ ...normalized, stopId: normalized.stopId });
       }

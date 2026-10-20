@@ -5,6 +5,7 @@ import { getCoverage } from '../../src/transit/core/coverage';
 import { formatEntityRef } from '../../src/transit/core/refs';
 import { compileSchedule } from '../../src/transit/gtfs/static/compiler';
 import { partitionSchedule } from '../../src/transit/gtfs/static/partition';
+import { composeManifest } from '../../src/transit/gtfs/static/compose';
 import { StaticArtifactStore } from '../../src/transit/gtfs/realtime/snapshot-store';
 import { RegionFeedHub } from '../../src/transit/gtfs/realtime/region-feed-hub';
 import type { GtfsScheduleFiles } from '../../src/transit/gtfs/static/schema';
@@ -77,6 +78,16 @@ export async function bandedArtifact(coverageId: 'dc' | 'nyc', db = memoryStorag
   for (const { key, bytes } of partitioned.objects) await db.bucket.put(key, bytes);
   const version = await new StaticArtifactStore(db.bucket, coverageId).publish(partitioned.manifest);
   return { db, coverageId, feedId, compiled, partitioned, version, ref: (kind: 'stop' | 'route' | 'trip' | 'agency', id: string) => formatEntityRef({ coverage: coverageId, feed: feedId, kind, id }) };
+}
+
+/** Adds one more feed to a published coverage, as an edge refresh of that feed does. */
+export async function composeFeed(db: ReturnType<typeof memoryStorage>, coverageId: 'dc' | 'nyc', feedId: string, files: GtfsScheduleFiles, bandSeconds = 3600) {
+  const compiled = await compileSchedule({ coverage: getCoverage(coverageId)!, feedId, files, window: { startDate: '20261018', endDate: '20261021' },
+    source: { url: `https://example.org/${feedId}.zip`, retrievedAt: '2026-10-18T00:00:00Z' } });
+  const partitioned = await partitionSchedule(compiled, bandSeconds);
+  for (const { key, bytes } of partitioned.objects) await db.bucket.put(key, bytes);
+  const store = new StaticArtifactStore(db.bucket, coverageId);
+  return store.publish(composeManifest((await store.current())?.manifest ?? null, partitioned.manifest));
 }
 
 type Entity = transit_realtime.IFeedEntity;

@@ -1,0 +1,8 @@
+{
+  "coverageId": "nyc",
+  "warnings": [
+    { "code": "missing_feed_contact_email_and_url", "reason": "LIRR feed_info.txt has no contact; publisher metadata only, no effect on service facts.", "expires": "2026-12-31" },
+    { "code": "missing_recommended_field", "reason": "LIRR omits feed_start_date/feed_end_date and routes.agency_id (one agency, so every route resolves to it). Service dates come from calendar_dates.txt.", "expires": "2026-12-31" },
+    { "code": "stop_without_stop_time", "reason": "Belmont Park (24) has no scheduled service; it cannot appear in departures or journeys.", "expires": "2026-12-31" }
+  ]
+}

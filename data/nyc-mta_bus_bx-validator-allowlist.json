@@ -1,0 +1,15 @@
+{
+  "coverageId": "nyc",
+  "warnings": [
+    {
+      "code": "mixed_case_recommended_field",
+      "reason": "Stop and route names are published in capitals; names are display text only.",
+      "expires": "2026-12-31"
+    },
+    {
+      "code": "unexpected_enum_value",
+      "reason": "route_type 711 is an extended GTFS bus type; the compiler maps the 700-799 range to bus.",
+      "expires": "2026-12-31"
+    }
+  ]
+}

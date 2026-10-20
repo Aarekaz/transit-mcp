@@ -111,7 +111,8 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     if (!calendars[serviceId]) throw new Error('unknown service reference');
     return { ref: ref('trip', id), providerId: id, routeRef: reference('route', required(row, 'route_id')), serviceId,
       patternId: '', headsign: row.trip_headsign ?? '', directionId: row.direction_id ? integer(row, 'direction_id', undefined, 1) : null,
-      blockId: row.block_id ?? '', wheelchairAccessible: integer(row, 'wheelchair_accessible', 0, 2), bikesAllowed: integer(row, 'bikes_allowed', 0, 2), stopTimes: [] };
+      blockId: row.block_id ?? '', wheelchairAccessible: integer(row, 'wheelchair_accessible', 0, 2), bikesAllowed: integer(row, 'bikes_allowed', 0, 2), stopTimes: [],
+      ...(row.trip_short_name ? { shortName: row.trip_short_name } : {}) };
   }).sort((a, b) => a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0);
   const tripsByRef = new Map(trips.map(trip => [trip.ref, trip]));
   const stopRoutes: Record<TransitRef, TransitRef[]> = {};
@@ -155,7 +156,12 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     if (endSeconds <= startSeconds || headwaySeconds === 0) throw new Error('Invalid frequency interval');
     return { tripRef: reference('trip', required(row, 'trip_id')), startSeconds, endSeconds, headwaySeconds, exactTimes: integer(row, 'exact_times', 0, 1) };
   });
-  const transfers = rows('transfers.txt').map(row => {
+  // A trip-to-trip timed transfer (type 1; the MTA railroads publish thousands) only
+  // promises that the departing train waits. Without it the stop's own transfer rule
+  // applies, which never allows a shorter connection, so it is not compiled; this keeps
+  // per-date and time-banded builds free of references to other dates' trips.
+  const timedTripTransfer = (row: Record<string, string>) => integer(row, 'transfer_type', 0, 5) === 1 && Boolean(row.from_trip_id || row.to_trip_id);
+  const transfers = rows('transfers.txt').filter(row => !timedTripTransfer(row)).map(row => {
     const transferType = integer(row, 'transfer_type', 0, 5);
     if (transferType < 4 && (!row.from_stop_id || !row.to_stop_id)) throw new Error('Missing transfer endpoints');
     if (transferType >= 4 && (!row.from_trip_id || !row.to_trip_id)) throw new Error('Missing in-seat transfer endpoints');
@@ -183,10 +189,12 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
     ...(input.identity?.derivedFrom ? { derivedFrom: input.identity.derivedFrom } : {}),
     ...(anonymousAgencyId ? { anonymousAgencyRef: ref('agency', anonymousAgencyId) } : {}) };
   for (const info of source.feedInfo) {
+    // Published metadata never carries a URL that could hold a credential. The publisher's
+    // link is left out instead (MTA bus feeds give a forum link with a #! fragment).
     for (const field of ['feed_publisher_url', 'feed_contact_url']) {
       if (!info[field]) continue;
-      const link = new URL(info[field]);
-      if (!['http:', 'https:'].includes(link.protocol) || link.username || link.password || link.search || link.hash) throw new Error('Invalid public feed_info URL');
+      const link = (() => { try { return new URL(info[field]!); } catch { return null; } })();
+      if (!link || !['http:', 'https:'].includes(link.protocol) || link.username || link.password || link.search || link.hash) delete info[field];
     }
     if (info.feed_start_date) parseServiceDate(info.feed_start_date);
     if (info.feed_end_date) parseServiceDate(info.feed_end_date);
