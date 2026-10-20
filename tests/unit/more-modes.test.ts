@@ -8,7 +8,7 @@ import { decodeRealtimeFeed, type NormalizedRealtimeFeed } from '../../src/trans
 import { applyTripUpdates, matchTripInstance, type AppliedTripUpdates } from '../../src/transit/gtfs/realtime/trip-match';
 import { combineApplied, routeByTimetable } from '../../src/transit/gtfs/realtime/region-feed-hub';
 import { staticVersion } from '../../src/transit/gtfs/realtime/snapshot-store';
-import { getRealtimeSource, getRealtimeSources, sourceFeedIds } from '../../src/transit/gtfs/realtime/sources';
+import { getRealtimeSource, getRealtimeSources, publishedKinds, sourceFeedIds } from '../../src/transit/gtfs/realtime/sources';
 import { getStaticSource, isPrimaryFeed } from '../../src/transit/gtfs/refresh/policy';
 import { sourceKeys } from '../../src/transit/gtfs/refresh/refresh';
 import { planningFeedIds, getCoverage } from '../../src/transit/core/coverage';
@@ -127,7 +127,15 @@ describe('composing a coverage from several feeds', () => {
 
 describe('feed configuration', () => {
   it('gives every feed its own realtime source, buses no planning, and primaries their old keys', () => {
-    expect(getRealtimeSources('nyc').map(source => source.policy.namespace)).toEqual(['nyc:mta', 'nyc:lirr', 'nyc:mnr', 'nyc:mta_bus']);
+    expect(getRealtimeSources('nyc').map(source => source.policy.namespace)).toEqual(['nyc:mta', 'nyc:lirr', 'nyc:mnr', 'nyc:mta_bus',
+      'nyc:mta_bus_bx', 'nyc:mta_bus_b', 'nyc:mta_bus_m', 'nyc:mta_bus_q', 'nyc:mta_bus_si', 'nyc:mta_bus_co']);
+    // The Bus Time relay makes every request and publishes alerts; each borough matches its own trips.
+    const relay = getRealtimeSources('nyc').find(source => source.policy.namespace === 'nyc:mta_bus')!;
+    expect([...publishedKinds(relay)]).toEqual(['service_alerts']);
+    const queens = getRealtimeSources('nyc').find(source => source.policy.namespace === 'nyc:mta_bus_q')!;
+    expect([...publishedKinds(queens)].sort()).toEqual(['trip_updates', 'vehicle_positions']);
+    expect(queens.policy).toMatchObject({ feedId: 'mta_bus_q', relayFrom: relay.policy.relayTo!.prefix });
+    expect(sourceFeedIds(queens.policy)).toEqual(['mta_bus_q']);
     expect(getRealtimeSources('dc').map(source => source.policy.namespace)).toEqual(['dc:wmata', 'dc:wmata_bus']);
     expect(sourceFeedIds(getRealtimeSource('nyc', 'mta_bus_q')!.policy)).toEqual(['mta_bus_bx', 'mta_bus_b', 'mta_bus_m', 'mta_bus_q', 'mta_bus_si', 'mta_bus_co']);
     expect(getRealtimeSource('nyc', 'mta_bus_q')!.policy.auth).toEqual({ kind: 'query_token', secretEnv: 'MTA_BUS_API_KEY', param: 'key' });

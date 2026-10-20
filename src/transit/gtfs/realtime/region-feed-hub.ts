@@ -165,7 +165,8 @@ export class RegionFeedHub implements DurableObject {
   readonly #artifacts?: StaticArtifactStore;
   readonly #quota?: ApiKeyQuota;
   // Polls reuse the verified timetable and discovery index while their hashes are unchanged.
-  readonly #shards = new DecodedShardCache(24 * 1024 * 1024);
+  // Bus borough coordinators may share an isolate with their siblings; their hour of timetable is small.
+  #shards = new DecodedShardCache(24 * 1024 * 1024);
   readonly #discoveries = new Map<string, { sha256: string; index: DiscoveryIndex }>();
   /** Agency-split feeds: the last trip-update poll's matched trips, so a vehicle poll can
    * resolve vehicles without decoding every agency group again. */
@@ -186,6 +187,7 @@ export class RegionFeedHub implements DurableObject {
     const source = this.#source;
     if (!source) return;
     this.#quota = new ApiKeyQuota(state.storage, source.policy.budget);
+    if (source.policy.relayFrom) this.#shards = new DecodedShardCache(8 * 1024 * 1024);
     if (env.TRANSIT_ARTIFACTS) {
       const primary = getRealtimeSource(source.coverage.id)?.policy.feedId === source.policy.feedId;
       this.#snapshots = new RealtimeSnapshotStore(state.storage, env.TRANSIT_ARTIFACTS, source.coverage.id, primary ? undefined : source.policy.feedId);
@@ -274,6 +276,22 @@ export class RegionFeedHub implements DurableObject {
     }
   }
 
+  /** One provider request stored for the coordinators that share it; nothing is decoded here. */
+  async #relay(source: RealtimeSource, spec: RealtimeFeedSpec, nowSeconds: number): Promise<void> {
+    const bytes = await this.#fetchBytes(source, spec, feedParts(spec)[0]!.url, nowSeconds);
+    if (!bytes.length) throw new Error('Malformed GTFS-Realtime feed');
+    await this.#env.TRANSIT_ARTIFACTS!.put(`${source.policy.relayTo!.prefix}/${spec.kind}.pb`, bytes);
+    console.info(JSON.stringify({ event: 'regional_feed_relayed', region: source.coverage.id, source: source.policy.feedId, feed: spec.kind, bytes: bytes.length }));
+  }
+
+  /** The relay's latest document. Its own header timestamp, not this read, dates it. */
+  async #readRelay(source: RealtimeSource, spec: RealtimeFeedSpec): Promise<NormalizedRealtimeFeed> {
+    const object = await this.#env.TRANSIT_ARTIFACTS!.get(`${source.policy.relayFrom}/${spec.kind}.pb`);
+    if (!object) throw new Error('upstream_status_404');
+    if (object.size > spec.maxBytes) throw new Error('Realtime payload byte budget exceeded');
+    return decodeRealtimeFeed(new Uint8Array(await object.arrayBuffer()), { nyct: source.policy.extensions === 'nyct', mtaRailroad: source.policy.extensions === 'mta_railroad' });
+  }
+
   async #fetchPart(source: RealtimeSource, spec: RealtimeFeedSpec, url: URL, nowSeconds: number): Promise<NormalizedRealtimeFeed> {
     return decodeRealtimeFeed(await this.#fetchBytes(source, spec, url, nowSeconds), { nyct: source.policy.extensions === 'nyct', mtaRailroad: source.policy.extensions === 'mta_railroad' });
   }
@@ -305,10 +323,11 @@ export class RegionFeedHub implements DurableObject {
       if (!feedIds.length) return;
       await this.#state.storage.put(pollAttemptState(spec.kind, nowSeconds));
       if (spec.format) return await this.#pollEquipment(source, spec, nowSeconds, current.version);
+      if (policy.relayTo?.kinds.includes(spec.kind)) return await this.#relay(source, spec, nowSeconds);
       const parts = feedParts(spec);
       const timings: Record<string, number> = {}, startedAt = Date.now();
       const lap = (phase: string) => { timings[phase] = Date.now() - startedAt; };
-      const settled = await Promise.allSettled(parts.map(part => this.#fetchPart(source, spec, part.url, nowSeconds)));
+      const settled = await Promise.allSettled(parts.map(part => policy.relayFrom ? this.#readRelay(source, spec) : this.#fetchPart(source, spec, part.url, nowSeconds)));
       const failed = settled.flatMap((result, index) => result.status === 'rejected' ? [parts[index]!.id] : []);
       if (failed.length) {
         if (parts.length === 1) throw (settled[0] as PromiseRejectedResult).reason;
@@ -345,7 +364,12 @@ export class RegionFeedHub implements DurableObject {
       if (spec.kind === 'trip_updates' || spec.kind === 'vehicle_positions') {
         const discoveries = await Promise.all(feedIds.map(discoveryOf));
         lap('discovery');
-        const routed = feedIds.length === 1 ? [decoded] : routeByTimetable(decoded, discoveries);
+        // A borough reading the relay keeps only its own timetable's trips; a trip in none is
+        // not this coordinator's to match.
+        const own = (tripId: string | undefined) => tripId !== undefined && listed(discoveries[0]!.tripProviderIds, tripId);
+        const mine = policy.relayFrom ? { ...decoded, trips: decoded.trips.filter(trip => own(trip.tripId)),
+          tripUpdates: decoded.tripUpdates.filter(update => own(update.tripId)), vehicles: decoded.vehicles.filter(vehicle => own(vehicle.tripId)) } : decoded;
+        const routed = feedIds.length === 1 ? [mine] : routeByTimetable(mine, discoveries);
         const applied: AppliedTripUpdates[] = [], matchedVehicles: unknown[] = [];
         let unavailable = false, windowReasons: string[] = [];
         const groupStats: unknown[] = [];

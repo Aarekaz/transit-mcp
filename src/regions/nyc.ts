@@ -11,10 +11,12 @@ export const NYC_BUS_FEEDS = Object.keys(NYC_BUS_ARCHIVES) as (keyof typeof NYC_
 const busTime = 'https://gtfsrt.prod.obanyc.com';
 /** Like Metrobus, NYC buses are too large for the planner; they serve departures, vehicles
  * and alerts, and a journey from a bus stop walks to rail. */
-const busFeeds = NYC_BUS_FEEDS.map((id, index) => ({ id, planning: false as const, realtime: index > 0 ? [] : [
+/** Bus Time publishes one document per kind for every borough; each timetable's coordinator
+ * matches its own share of it (see the relay in the realtime sources). */
+const busFeeds = NYC_BUS_FEEDS.map((id, index) => ({ id, planning: false as const, realtime: [
   { kind: 'trip_updates' as const, url: new URL(`${busTime}/tripUpdates`), weight: 4, minIntervalSeconds: 60, maxBytes: 8_000_000, timeoutMs: 15_000 },
   { kind: 'vehicle_positions' as const, url: new URL(`${busTime}/vehiclePositions`), weight: 2, minIntervalSeconds: 60, maxBytes: 4_000_000, timeoutMs: 10_000 },
-  { kind: 'service_alerts' as const, url: new URL(`${busTime}/alerts`), weight: 1, minIntervalSeconds: 120, maxBytes: 4_000_000, timeoutMs: 10_000 },
+  ...index > 0 ? [] : [{ kind: 'service_alerts' as const, url: new URL(`${busTime}/alerts`), weight: 1, minIntervalSeconds: 120, maxBytes: 4_000_000, timeoutMs: 10_000 }],
 ] }));
 
 /** MTA supplemented subway GTFS (planned service changes for the coming days) and

@@ -7,6 +7,8 @@ import { SF511_QUOTA_NAMESPACE } from './snapshot-store';
 import { NYC_BUS_FEEDS } from '../../../regions/nyc';
 
 const wmataKey = { kind: 'header', header: 'api_key', secretEnv: 'WMATA_API_KEY' } as const;
+const busTimeKey = { kind: 'query_token', secretEnv: 'MTA_BUS_API_KEY', param: 'key' } as const;
+const BUS_TIME_RELAY = 'realtime/nyc/relay/mta_bus';
 /** Server-side provider adapters, one per static feed: each gets its own coordinator,
  * snapshots and request budget. A coverage's first feed is its primary one. Public
  * coverage manifests stay credential-free. */
@@ -33,8 +35,14 @@ const policies: Readonly<Record<string, readonly RealtimeSourcePolicy[]>> = {
     alertAgencyAliases: { MNR: '1' } },
   // MTA Bus Time: one realtime source for every NYC bus timetable. It never polls without
   // MTA_BUS_API_KEY, so NYC bus predictions, locations and alerts stay off until it is set.
-  { namespace: 'nyc:mta_bus', feedId: NYC_BUS_FEEDS[0]!, alsoFeedIds: NYC_BUS_FEEDS.slice(1), auth: { kind: 'query_token', secretEnv: 'MTA_BUS_API_KEY', param: 'key' },
-    budget: { requestsPerHour: 400, safetyFactor: 1, reserveForStatic: 0 }, tripMatching: 'exact', matchWindowSeconds: 3600 }],
+  // One relay makes every Bus Time request (about two a minute) and publishes the alerts;
+  // each borough timetable has its own coordinator reading the relayed documents, since one
+  // isolate cannot hold the whole city's matching (81,000 calls an hour, six timetables).
+  { namespace: 'nyc:mta_bus', feedId: NYC_BUS_FEEDS[0]!, alsoFeedIds: NYC_BUS_FEEDS.slice(1), auth: busTimeKey,
+    budget: { requestsPerHour: 400, safetyFactor: 1, reserveForStatic: 0 }, tripMatching: 'exact', matchWindowSeconds: 3600,
+    kinds: ['trip_updates', 'vehicle_positions', 'service_alerts'], relayTo: { prefix: BUS_TIME_RELAY, kinds: ['trip_updates', 'vehicle_positions'] } },
+  ...NYC_BUS_FEEDS.map(feedId => ({ namespace: `nyc:${feedId}`, feedId, auth: busTimeKey, budget: { requestsPerHour: 240, safetyFactor: 1, reserveForStatic: 0 },
+    tripMatching: 'exact' as const, matchWindowSeconds: 3600, kinds: ['trip_updates', 'vehicle_positions'] as const, relayFrom: BUS_TIME_RELAY }))],
 };
 
 /** Every static feed a source's realtime describes. */
@@ -45,7 +53,7 @@ export function sourceFeedIds(policy: RealtimeSourcePolicy): readonly string[] {
 export interface RealtimeSource { coverage: CoverageManifest; policy: RealtimeSourcePolicy; feeds: readonly RealtimeFeedSpec[] }
 
 function source(coverage: CoverageManifest, policy: RealtimeSourcePolicy): RealtimeSource | undefined {
-  const feeds = coverage.feeds.find(feed => feed.id === policy.feedId)?.realtime ?? [];
+  const feeds = (coverage.feeds.find(feed => feed.id === policy.feedId)?.realtime ?? []).filter(spec => !policy.kinds || policy.kinds.includes(spec.kind));
   return feeds.length ? { coverage, policy, feeds } : undefined;
 }
 
@@ -75,7 +83,8 @@ export function credential(source: RealtimeSource, env: Env): string | undefined
 
 /** Every kind the coordinator publishes, including kinds read from another kind's documents. */
 export function publishedKinds(source: RealtimeSource): ReadonlySet<RealtimeFeedKind> {
-  return new Set(source.feeds.flatMap(feed => [feed.kind, ...feed.alsoPublishes ?? []]));
+  // A relay stores documents for other coordinators; it publishes nothing of those kinds.
+  return new Set(source.feeds.flatMap(feed => [feed.kind, ...feed.alsoPublishes ?? []]).filter(kind => !source.policy.relayTo?.kinds.includes(kind)));
 }
 
 export function feedParts(spec: RealtimeFeedSpec): readonly { id: string; url: URL }[] {

@@ -5,7 +5,7 @@ import { archiveText, bandText, bandTextRows, buildServiceDate, rangedStopTimes,
 import { readZipDirectory, zipEntryStream } from '../static/zip';
 import type { ArtifactManifestV2 } from '../static/schema';
 import { StaticArtifactStore, readBoundedObject, staticVersion } from '../realtime/snapshot-store';
-import { getRealtimeSource } from '../realtime/sources';
+import { getRealtimeSource, getRealtimeSources, publishedKinds } from '../realtime/sources';
 import { getStaticSource, getStaticSources, isPrimaryFeed, type StaticSourcePolicy } from './policy';
 import { composeManifest } from '../static/compose';
 
@@ -90,7 +90,8 @@ export function guardRefresh(previous: PublishedStats | null, next: PublishedSta
 }
 
 async function coordinatorStats(env: Env, coverageId: string, feedId: string): Promise<MatchStats | null> {
-  const realtime = getRealtimeSource(coverageId, feedId);
+  // The coordinator that matches this feed's trips (a borough's, not the Bus Time relay).
+  const realtime = getRealtimeSources(coverageId).find(source => source.policy.feedId === feedId && publishedKinds(source).has('trip_updates')) ?? getRealtimeSource(coverageId, feedId);
   if (!realtime || !env.REGION_FEED_HUB) return null;
   const response = await env.REGION_FEED_HUB.get(env.REGION_FEED_HUB.idFromName(realtime.policy.namespace)).fetch(`https://region-feed-hub.internal/stats?feed=${encodeURIComponent(feedId)}`);
   return response.ok ? await response.json<MatchStats | null>() : null;

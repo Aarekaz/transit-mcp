@@ -87,4 +87,12 @@ export interface RealtimeSourcePolicy {
   providerQuirks?: { renumberedStopSequences?: true; advisoryStartTimes?: true; staleEntities?: true };
   /** Timetable span loaded to match trip updates; defaults to six hours. */
   matchWindowSeconds?: number;
+  /** Only these kinds of the feed's realtime run in this source; all when omitted. */
+  kinds?: readonly RealtimeFeedKind[];
+  /** Fetch these kinds once and store the raw documents under `prefix` in R2 for coordinators
+   * that share them (one provider request, several timetables), without publishing them. */
+  relayTo?: { prefix: string; kinds: readonly RealtimeFeedKind[] };
+  /** Read documents from a relay's R2 prefix instead of the provider, keeping only the trips
+   * and vehicles of this source's own timetable. */
+  relayFrom?: string;
 }

@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { transit_realtime } from 'gtfs-realtime-bindings';
 import { NYC_TRIP_FEEDS } from '../../src/regions/nyc';
 import { formatEntityRef, formatTripInstanceRef, parseTransitRef } from '../../src/transit/core/refs';
+import { RegionFeedHub } from '../../src/transit/gtfs/realtime/region-feed-hub';
+import { memoryStorage } from '../helpers/realtime-fixture';
 import { NOW, NYC_FILES, SERVICE_DATE, bandedArtifact, composeFeed, callTool, civil, feedBytes, liveEnv, nowSeconds, nyctEquipmentDocuments, nyctOutage, nyctTrip, nyctVehicle, upstream, wireHub, wmataIncident, wmataIncidentDocument } from '../helpers/dc-nyc-realtime';
 
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW)); });
@@ -513,6 +515,45 @@ describe('Washington Metrorail through the global tools', () => {
       headerText: { translation: [{ text: 'Weekend Scheduled Maintenance', language: 'en' }] } } }] });
     const byRoute = (await callTool(f.env, 'get_service_status', { ref: f.ref('route', 'RED') })).structuredContent;
     expect(byRoute).toMatchObject({ status: 'realtime', alerts: [{ id: '7c875cc3', routeIds: ['RED'], activePeriods: [{ end: null }] }] });
+  });
+});
+
+describe('NYC buses: one Bus Time relay, one coordinator per borough timetable', () => {
+  const busFiles = (agency: string, route: string, trip: string, stops: [string, string, number, number][]) => ({
+    'agency.txt': `agency_id,agency_name,agency_url,agency_timezone\n${agency},MTA New York City Transit,https://new.mta.info,America/New_York\n`,
+    'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\n' + stops.map(([id, name, lat, lon]) => `${id},${name},${lat},${lon}`).join('\n') + '\n',
+    'routes.txt': `agency_id,route_id,route_short_name,route_long_name,route_type\n${agency},${route},${route},${route} local,3\n`,
+    'trips.txt': `route_id,service_id,trip_id,trip_headsign\n${route},Weekday,${trip},Northbound\n`,
+    'stop_times.txt': `trip_id,arrival_time,departure_time,stop_id,stop_sequence\n${trip},09:05:00,09:05:00,${stops[0]![0]},1\n${trip},09:15:00,09:15:00,${stops[1]![0]},2\n`,
+    'calendar.txt': 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nWeekday,1,1,1,1,1,0,0,20261001,20261031\n',
+  });
+  it('fetches Bus Time once and has each borough publish only its own buses, live', async () => {
+    quiet();
+    const artifact = await bandedArtifact('nyc');
+    await composeFeed(artifact.db, 'nyc', 'mta_bus_m', busFiles('MTA NYCT', 'M15', 'MV_M15_0905', [['401', '1 Av/E 14 St', 40.7317, -73.9818], ['402', '1 Av/E 23 St', 40.7366, -73.9784]]));
+    await composeFeed(artifact.db, 'nyc', 'mta_bus_bx', busFiles('MTA NYCT', 'BX12', 'BX_BX12_0905', [['101', 'Fordham Rd/Grand Concourse', 40.8623, -73.8977], ['102', 'Fordham Rd/Webster Av', 40.8612, -73.8909]]));
+    const env = liveEnv(artifact.db, { MTA_BUS_API_KEY: 'test-bus-key' } as never);
+    const hubs = new Map<string, RegionFeedHub>();
+    env.REGION_FEED_HUB = { idFromName: (name: string) => ({ toString: () => name }), get: (id: { toString(): string }) => ({
+      fetch: (request: string | Request) => hubs.get(id.toString())?.fetch(typeof request === 'string' ? new Request(request) : request) ?? Promise.resolve(new Response(null, { status: 409 })) }) } as unknown as DurableObjectNamespace;
+    for (const name of ['nyc:mta_bus', 'nyc:mta_bus_m', 'nyc:mta_bus_bx']) hubs.set(name, new RegionFeedHub({ id: { toString: () => name }, storage: memoryStorage().storage,
+      blockConcurrencyWhile: async (run: () => Promise<void>) => run() } as unknown as DurableObjectState, env));
+    const stamp = nowSeconds();
+    const trip = (tripId: string, routeId: string, stop: string, time: number) => ({ id: tripId, tripUpdate: { trip: { tripId, routeId, startDate: SERVICE_DATE }, stopTimeUpdate: [{ stopId: stop, stopSequence: 1, arrival: { time }, departure: { time } }] } });
+    const network = upstream({ tripUpdates: feedBytes(stamp, [trip('MV_M15_0905', 'M15', '401', civil('09:07:00')), trip('BX_BX12_0905', 'BX12', '101', civil('09:06:00'))]),
+      vehiclePositions: feedBytes(stamp, []), alerts: feedBytes(stamp, []) });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(network.fetcher);
+    // The relay polls the provider; the boroughs read what it stored.
+    await hubs.get('nyc:mta_bus')!.alarm();
+    await hubs.get('nyc:mta_bus_m')!.alarm(); await hubs.get('nyc:mta_bus_bx')!.alarm();
+    const paths = network.requests.map(request => new URL(request.url).pathname).sort();
+    expect(paths).toEqual(['/alerts', '/tripUpdates', '/vehiclePositions']);
+    expect(network.requests.every(request => new URL(request.url).searchParams.get('key') === 'test-bus-key')).toBe(true);
+    const busStop = (feed: string, id: string) => formatEntityRef({ coverage: 'nyc', feed, kind: 'stop', id });
+    const m15 = (await callTool(env, 'get_departures', { stopRef: busStop('mta_bus_m', '401'), windowSeconds: 3600 })).structuredContent;
+    expect(m15).toMatchObject({ status: 'realtime', departures: [{ routeName: 'M15', status: 'realtime', predictedTime: new Date(civil('09:07:00') * 1000).toISOString() }] });
+    const bx12 = (await callTool(env, 'get_departures', { stopRef: busStop('mta_bus_bx', '101'), windowSeconds: 3600 })).structuredContent;
+    expect(bx12).toMatchObject({ status: 'realtime', departures: [{ routeName: 'BX12', status: 'realtime', predictedTime: new Date(civil('09:06:00') * 1000).toISOString() }] });
   });
 });
 
