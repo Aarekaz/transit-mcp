@@ -110,7 +110,9 @@ export async function loadData(context: MetroMcpContext, coverageId: string, sig
       index = decodeDiscoveryIndex(bytes);
       // Content-addressed and verified: safe to reuse across requests in this isolate.
       discoveryCache.set(descriptor.sha256, index);
-      while (discoveryCache.size > 4) discoveryCache.delete(discoveryCache.keys().next().value!);
+      // Keep every index this manifest uses (NYC has one per feed); drop only older versions.
+      const inUse = new Set(current.manifest.discoveries.map(item => item.sha256));
+      for (const sha of [...discoveryCache.keys()]) if (discoveryCache.size > inUse.size + 4 && !inUse.has(sha)) discoveryCache.delete(sha);
     }
     if (index.coverageId !== coverage.id || index.feedId !== descriptor.feedId || index.sourceSha256 !== current.version.sourceVersions[index.feedId]) throw new Error('Discovery identity');
     indexes.push(index);
@@ -140,7 +142,6 @@ function entityIndex(data: TransitData, index: DiscoveryIndex): EntityIndex {
   const list = [
     ...index.stops.map(stop => ({ ref: stop.ref, providerId: stop.providerId, name: sanitizeTransitText(stop.name), kind: 'stop' as const })),
     ...index.routes.map(route => ({ ref: route.ref, providerId: route.providerId, name: sanitizeTransitText(`${route.shortName} ${route.longName}`.trim()), kind: 'route' as const })),
-    ...index.tripProviderIds.map(id => ({ ref: formatEntityRef({ coverage: index.coverageId, feed: index.feedId, kind: 'trip', id }), providerId: id, name: sanitizeTransitText(id), kind: 'trip' as const })),
     ...agencies.map(ref => ({ ref, providerId: parseTransitRef(ref)!.id, name: sanitizeTransitText(parseTransitRef(ref)!.id), kind: 'agency' as const })),
   ].map(entity => Object.freeze({ ...entity, coverage: index.coverageId, feed: index.feedId }) as Candidate);
   const names = new Map(list.map(entity => {
@@ -152,6 +153,18 @@ function entityIndex(data: TransitData, index: DiscoveryIndex): EntityIndex {
   byAgencies.set(key, built);
   return built;
 }
+/** Trips are looked up by exact ID, never listed: a bus network publishes hundreds of
+ * thousands, and `tripProviderIds` is sorted, so a binary search finds one. */
+function tripCandidate(index: DiscoveryIndex, id: string): Candidate | undefined {
+  const ids = index.tripProviderIds;
+  let low = 0, high = ids.length - 1;
+  while (low <= high) {
+    const middle = (low + high) >>> 1, value = ids[middle]!;
+    if (value === id) return Object.freeze({ ref: formatEntityRef({ coverage: index.coverageId, feed: index.feedId, kind: 'trip', id }), providerId: id, name: sanitizeTransitText(id), kind: 'trip', coverage: index.coverageId, feed: index.feedId }) as Candidate;
+    if (value < id) low = middle + 1; else high = middle - 1;
+  }
+  return undefined;
+}
 export function entities(data: TransitData): readonly Candidate[] {
   return data.indexes.length === 1 ? entityIndex(data, data.indexes[0]!).list : data.indexes.flatMap(index => entityIndex(data, index).list);
 }
@@ -159,6 +172,8 @@ export function candidates(data: TransitData, query: string, kind?: string): Can
   const normalized = normalizeEntityName(query), aliasStops = aliasStopNames(data, normalized);
   const found: { entity: Candidate; exact: boolean }[] = [];
   for (const index of data.indexes) {
+    const trip = !kind || kind === 'trip' ? tripCandidate(index, query.trim()) : undefined;
+    if (trip) found.push({ entity: trip, exact: true });
     const { list, names } = entityIndex(data, index);
     for (const entity of list) {
       if (kind && kind !== entity.kind) continue;
@@ -303,7 +318,7 @@ export function knownEntity(data: TransitData, ref: string): Candidate {
   const parsed = validRef(ref, ['agency', 'route', 'stop', 'trip']);
   const base = formatEntityRef(parsed);
   const index = data.indexes.find(index => index.feedId === parsed.feed);
-  const entity = index && entityIndex(data, index).byRef.get(base);
+  const entity = index && (parsed.kind === 'trip' ? tripCandidate(index, parsed.id) : entityIndex(data, index).byRef.get(base));
   if (!entity) throw new TransitToolError('ENTITY_NOT_FOUND');
   return { ...entity, ref };
 }
