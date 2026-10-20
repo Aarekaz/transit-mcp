@@ -6,7 +6,7 @@ import { formatEntityRef } from './transit/core/refs';
 import type { Env } from './types';
 
 /** A production self-check: the same tool calls an agent makes, through the real MCP
- * handler, judged on what a rider would get. Run on the cron; read at /health/deep. */
+ * handler, judged on what a rider would get. Run every other day; read at /health/deep. */
 export interface CanaryCheck { name: string; ok: boolean; ms: number; detail: string }
 export interface CanaryReport { at: string; ok: boolean; checks: CanaryCheck[] }
 interface CanaryState { latest: CanaryReport; history: { at: string; ok: boolean; failed: string[] }[] }
@@ -14,8 +14,13 @@ interface CanaryState { latest: CanaryReport; history: { at: string; ok: boolean
 export const CANARY_KEY = 'health/canary.json';
 /** A check slower than this fails: a rider would have given up. */
 const SLOW_MS = 30_000;
-/** A report older than this means the check itself stopped running. */
-export const CANARY_STALE_SECONDS = 40 * 60;
+/** Runs every other day at 14:00 UTC (10:00 in New York, 07:00 in San Francisco). */
+export function canaryDue(scheduledTime: number): boolean {
+  const at = new Date(scheduledTime);
+  return Math.floor(scheduledTime / 86_400_000) % 2 === 0 && at.getUTCHours() === 14 && at.getUTCMinutes() < 5;
+}
+/** A report older than this means the check itself stopped running (two days and a margin). */
+export const CANARY_STALE_SECONDS = 50 * 3600;
 const HISTORY = 96;
 
 type Structured = Record<string, any>;
@@ -151,7 +156,7 @@ export async function recordCanary(env: Env, now = Date.now()): Promise<CanaryRe
   return report;
 }
 
-/** 200 when the latest self-check passed recently; 503 otherwise, for an uptime monitor. */
+/** 200 when the latest self-check passed within two days; 503 otherwise, for an uptime monitor. */
 export async function canaryHealthResponse(env: Env, now = Date.now()): Promise<Response> {
   const state = await env.TRANSIT_ARTIFACTS?.get(CANARY_KEY).then(object => object?.json<CanaryState>()).catch(() => undefined);
   const headers = { 'content-type': 'application/json', 'cache-control': 'no-store' };
