@@ -180,6 +180,8 @@ export class RealtimeSnapshotStore {
   /** Latest metadata per kind. This coordinator is its storage's only writer, so reads need
    * not wait on storage (they queued behind a poll's writes for seconds). */
   readonly #metadata = new Map<RealtimeFeedKind, SnapshotMetadata>();
+  /** A whole-snapshot load in flight, shared by the filtered reads waiting on it. */
+  readonly #loading = new Map<RealtimeFeedKind, Promise<NormalizedRealtimeSnapshot<unknown> | null>>();
   private readonly prefix: string;
   /** `feedId` scopes a coverage's non-primary feeds: every coordinator collects only the
    * objects it wrote. The primary feed keeps the coverage-level prefix. */
@@ -271,8 +273,17 @@ export class RealtimeSnapshotStore {
       const wanted = stopIds && new Set(stopIds);
       return { ...base, payload: (wanted ? resident.payload.filter(record => wanted.has(indexKey(record))) : resident.payload) as T[], ...(wanted ? {} : { etag: resident.etag }) };
     }
-    const selected = stopIds ? new Set(stopIds.map(partition)) : null;
-    const chosen = shards.filter(descriptor => !selected || selected.has(descriptor.partition));
+    // Not resident (a restarted coordinator): load the whole snapshot once and filter in
+    // memory. Reading partitions per request re-parsed nearly all of them for each plan.
+    if (stopIds) {
+      const loading = this.#loading.get(kind) ?? this.read<T>(kind, version).finally(() => this.#loading.delete(kind));
+      this.#loading.set(kind, loading);
+      const whole = await loading as NormalizedRealtimeSnapshot<T> | null, wanted = new Set(stopIds);
+      if (!whole || whole.payload === null) return whole;
+      const { etag: _etag, ...rest } = whole;
+      return { ...rest, payload: whole.payload.filter(record => wanted.has(indexKey(record))) };
+    }
+    const chosen = shards;
     let total = 0;
     for (const descriptor of chosen) {
       total += descriptor.byteLength;
@@ -283,9 +294,8 @@ export class RealtimeSnapshotStore {
       const bytes = await readBoundedObject(this.bucket, descriptor.key, SHARD_BYTES);
       if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Realtime shard integrity failure');
       const records = expandShard(JSON.parse(new TextDecoder().decode(bytes))) as T[];
-      return stopIds ? records.filter(record => stopIds.includes(indexKey(record))) : records;
+      return records;
     });
-    if (stopIds) return { ...base, payload: parts.flat() };
     const payload = parts.flat(), etag = await sha256(new TextEncoder().encode(identity));
     this.#latest.set(kind, { identity, etag, payload });
     return { ...base, payload, etag };

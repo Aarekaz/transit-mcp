@@ -203,7 +203,10 @@ describe('bounded snapshot storage and manifest policy', () => {
     const result = await restored.read('trip_updates', version, ['S1']);
     expect(result?.payload).toHaveLength(150);
     expect(result?.producerTimestampSeconds).toBe(1000);
-    expect(db.reads.length).toBeLessThan(db.objects.size);
+    // A restarted coordinator loads the snapshot once; later filtered reads stay in memory.
+    const loaded = db.reads.length;
+    expect((await restored.read('trip_updates', version, ['S2']))?.payload).toHaveLength(150);
+    expect(db.reads.length).toBe(loaded);
     const mismatch = await restored.read('trip_updates', { ...version, artifactVersion: 'a'.repeat(64) });
     expect(mismatch).toMatchObject({ payload: null, warnings: ['SCHEDULE_REALTIME_MISMATCH'] });
   });
