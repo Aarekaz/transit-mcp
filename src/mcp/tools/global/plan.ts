@@ -1,4 +1,5 @@
 import { CLIENT_CAPABILITIES_META_KEY, ProtocolError, ProtocolErrorCode, acceptedContent, inputRequired, inputResponse, type McpServer, type RequestStateCodec } from '@modelcontextprotocol/server';
+import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import { z } from 'zod';
 import type { MetroMcpContext, TransitRequestState } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
@@ -11,7 +12,7 @@ import type { SourceStatus, VerificationReason } from '../../../transit/core/res
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { canonicalJson, sha256 } from '../../../transit/gtfs/static/shards';
 import { DecodedShardCache } from '../../../transit/planner/schedule-index';
-import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, routeHints, routeHintsSchema, effectiveCapabilities, journeyAgencies, validRef, candidates, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, sameStation, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, routeHints, routeHintsSchema, routeName, effectiveCapabilities, journeyAgencies, validRef, candidates, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, sameStation, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
 
 const journeyEndpoint = z.union([z.string(), coordinatesSchema]);
 const transitLeg = z.strictObject({ kind: z.literal('transit'), from: z.string(), to: z.string(), tripRef: z.string(), tripInstanceRef: z.string(), serviceDate: z.string(), instanceStartSeconds: z.number(),
@@ -21,9 +22,17 @@ const transitLeg = z.strictObject({ kind: z.literal('transit'), from: z.string()
   transferRequired: z.boolean(), sources: z.array(sourceSchema), validatorOutcome: z.literal('valid') });
 const walkLeg = z.strictObject({ kind: z.literal('walk'), from: journeyEndpoint, to: journeyEndpoint, departureTime: instantSchema, arrivalTime: instantSchema, distanceMetres: z.number(),
   verification: z.enum(['pathway', 'unverified']), estimated: z.boolean(), pathwayId: z.string().optional(), validatorOutcome: z.literal('valid') });
+/** The rider's view of an itinerary: consecutive walks (station walkways, street) merged, every
+ * stop and line named. `legs` stay exact for rechecking with get_service_status. */
+const stepSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('walk'), fromName: z.string().nullable(), toName: z.string().nullable(), departureTime: instantSchema, arrivalTime: instantSchema,
+    distanceMetres: z.number().nonnegative(), minutes: z.number().int().nonnegative(), throughStation: z.boolean().describe('Includes walkways inside a station (published pathways).') }),
+  z.strictObject({ kind: z.literal('ride'), routeName: z.string(), headsign: z.string(), mode: z.string(), fromName: z.string(), toName: z.string(), departureTime: instantSchema, arrivalTime: instantSchema,
+    status: z.enum(['realtime', 'scheduled_only']), intermediateStopCount: z.number().int().nonnegative(), tripInstanceRef: z.string() }),
+]).describe('fromName/toName null means the caller\'s own map point.');
 export const itinerarySchema = z.strictObject({ coverageId: z.string(), artifactVersion: z.string(), origin: journeyEndpoint, destination: journeyEndpoint, departAt: instantSchema, windowSeconds: z.number().int(),
   maxWalkMetres: z.number(), maxTransfers: z.number().int(), departureTime: instantSchema, arrivalTime: instantSchema, walkingMetres: z.number(), transfers: z.number().int(),
-  status: z.enum(['realtime', 'scheduled_only']), legs: z.array(z.union([transitLeg, walkLeg])) });
+  status: z.enum(['realtime', 'scheduled_only']), legs: z.array(z.union([transitLeg, walkLeg])), steps: z.array(stepSchema).optional() });
 
 export const planInput = z.strictObject({ origin: endpointSchema, destination: endpointSchema, coverage: coverageSchema.optional(), departAt: instantSchema.optional(),
   windowSeconds: z.number().int().min(1).max(604800).default(7200), maxWalkMetres: z.number().min(0).max(800).default(800), maxTransfers: z.number().int().min(0).max(4).default(3),
@@ -108,7 +117,12 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     if (!viaRoutes && !effectiveCapabilities(context, data.coverage, false).planning) return hinted(['PLANNING_UNAVAILABLE']);
     // Only the published feeds a journey can ride: a bus feed's state says nothing about a rail plan.
     const planning = (viaRoutes ? [...new Set(viaRoutes.map(ref => parseTransitRef(ref)!.feed))] : planningFeedIds(data.coverage)).filter(feedId => data.version.sourceVersions[feedId] !== undefined);
-    const now = new Date().toISOString(), feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', Date.parse(now) / 1000, handler.mcpReq.signal, [], planning);
+    // Named lines need only their own stops' predictions, not a whole region's feed. A hub
+    // filters at most 200 stops; beyond that read everything rather than drop rows.
+    const routeStops = viaRoutes && new Set(data.indexes.flatMap(index => Object.entries(index.stopRoutes).filter(([, refs]) => refs.some(ref => viaRoutes.includes(ref))).map(([ref]) => ref)));
+    const routeStopIds = routeStops && [...new Set(data.indexes.flatMap(index => index.stops).filter(stop => routeStops.has(stop.ref)).map(stop => stop.providerId))];
+    const now = new Date().toISOString(), feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', Date.parse(now) / 1000, handler.mcpReq.signal,
+      routeStopIds && routeStopIds.length <= 200 ? routeStopIds : [], planning);
     // Step-free: board, alight and change only where access is step-free now. Without a
     // current equipment report, or with an endpoint cut off, refuse rather than guess.
     let stepFree: { usableStopRefs: ReadonlySet<TransitRef> } | undefined, accessSources: SourceStatus[] = [];
@@ -126,11 +140,20 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     if (feed.payload?.some(update => ['DUPLICATED', 'REPLACEMENT'].includes(update.scheduleRelationship ?? ''))) {
       return complete({ ...unavailable(coverageId, data, ['REALTIME_UNAVAILABLE']), sources: [...metadata(coverageId, data).sources, ...realtimeSource(data, feed, 'trip_updates', Date.parse(now) / 1000)], itineraries: [] });
     }
-    // A stop in a feed the planner does not search (Metrobus) is planned from its location:
-    // the journey walks from there to a stop it can use.
+    // A stop the search cannot board or alight at (a Metrobus stop in an open search, or a stop
+    // none of the named lines serve) is planned from its location: the journey walks from or to it.
+    const allStops = data.indexes.flatMap(index => index.stops);
+    // Remember what the rider asked for: an endpoint planned from its location keeps its name.
+    const askedName = (endpoint: JourneyEndpoint | undefined) => {
+      if (typeof endpoint !== 'string') return null;
+      const stop = allStops.find(item => item.ref === endpoint), parent = stop?.parentStationRef ? allStops.find(item => item.ref === stop.parentStationRef) : undefined;
+      return stop ? sanitizeTransitText(parent?.name ?? stop.name, 200) : null;
+    };
+    const asked = { origin: askedName(resolved.origin), destination: askedName(resolved.destination) };
+    const servedByRoutes = (ref: string) => [ref, ...allStops.filter(stop => stop.parentStationRef === ref).map(stop => stop.ref)].some(stop => routeStops!.has(stop));
     for (const endpoint of ['origin', 'destination'] as const) {
       const value = resolved[endpoint], parsed = typeof value === 'string' ? parseTransitRef(value) : null;
-      if (!parsed || planning.includes(parsed.feed)) continue;
+      if (!parsed || planning.includes(parsed.feed) && (!routeStops || servedByRoutes(value as string))) continue;
       const stop = data.indexes.find(index => index.feedId === parsed.feed)?.stops.find(item => item.ref === value);
       if (stop?.latitude != null && stop.longitude != null) resolved[endpoint] = { latitude: stop.latitude, longitude: stop.longitude };
     }
@@ -158,11 +181,42 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     if (feed) meta.sources.push(...realtimeSource(data, feed, 'trip_updates', Date.parse(now) / 1000));
     meta.sources.push(...accessSources);
     const routes = data.indexes.flatMap(index => index.routes);
+    const stopRows = new Map(data.indexes.flatMap(index => index.stops).map(stop => [stop.ref as string, stop]));
+    const placeName = (endpoint: unknown) => {
+      if (typeof endpoint !== 'string') return null;
+      const stop = stopRows.get(endpoint), parent = stop?.parentStationRef ? stopRows.get(stop.parentStationRef) : undefined;
+      return sanitizeTransitText(parent?.name ?? stop?.name ?? '', 200);
+    };
+    type OutLeg = { kind: string; from: unknown; to: unknown; departureTime: string; arrivalTime: string; distanceMetres?: number; verification?: string; routeRef?: string; headsign?: string;
+      mode?: string; status?: 'realtime' | 'scheduled_only'; intermediateStopCount?: number; tripInstanceRef?: string };
+    const riderSteps = (legs: OutLeg[]) => {
+      const steps: z.infer<typeof stepSchema>[] = [];
+      for (const leg of legs) {
+        const last = steps.at(-1);
+        if (leg.kind === 'walk' && last?.kind === 'walk') {
+          last.toName = placeName(leg.to); last.arrivalTime = leg.arrivalTime; last.distanceMetres += leg.distanceMetres ?? 0;
+          last.throughStation ||= leg.verification === 'pathway';
+        } else if (leg.kind === 'walk') {
+          steps.push({ kind: 'walk', fromName: placeName(leg.from), toName: placeName(leg.to), departureTime: leg.departureTime, arrivalTime: leg.arrivalTime,
+            distanceMetres: leg.distanceMetres ?? 0, minutes: 0, throughStation: leg.verification === 'pathway' });
+        } else {
+          const route = routes.find(item => item.ref === leg.routeRef);
+          steps.push({ kind: 'ride', routeName: route ? routeName(route) : '', headsign: sanitizeTransitText(leg.headsign ?? '', 200), mode: leg.mode ?? '', fromName: placeName(leg.from) ?? '', toName: placeName(leg.to) ?? '',
+            departureTime: leg.departureTime, arrivalTime: leg.arrivalTime, status: leg.status ?? 'scheduled_only', intermediateStopCount: leg.intermediateStopCount ?? 0, tripInstanceRef: leg.tripInstanceRef ?? '' });
+        }
+      }
+      for (const step of steps) if (step.kind === 'walk') { step.distanceMetres = Math.round(step.distanceMetres); step.minutes = Math.round((Date.parse(step.arrivalTime) - Date.parse(step.departureTime)) / 60000); }
+      // A zero-length walk (boarding where you stand) says nothing to a rider.
+      const kept = steps.filter(step => step.kind === 'ride' || step.distanceMetres > 0), first = kept[0], final = kept.at(-1);
+      if (first?.kind === 'walk' && first.fromName === null) first.fromName = asked.origin;
+      if (final?.kind === 'walk' && final.toName === null) final.toName = asked.destination;
+      return kept;
+    };
     return complete({ ...meta, status: result.status, reasons: [...new Set([...result.reasons, ...feed.reasons])], itineraries: result.candidates.map(candidate => ({ ...candidate, legs: candidate.legs.map((leg, index) => {
       if (leg.kind === 'walk') return { ...leg, validatorOutcome: 'valid' as const };
       const route = routes.find(route => route.ref === leg.routeRef)!;
       return { ...leg, mode: route.mode, agencyRef: route.agencyRef, intermediateStopCount: (sequences.get(leg.tripRef) ?? []).filter(sequence => sequence > leg.boardSequence && sequence < leg.alightSequence).length,
         transferRequired: candidate.legs.slice(0, index).some(prior => prior.kind === 'transit') && !leg.continuation, sources: meta.sources.filter(source => source.scheduleVersion === leg.scheduleVersion), validatorOutcome: 'valid' as const };
-    }) })), ...(result.candidates.length ? {} : { routeHints: routeHints(data, resolved.origin!, resolved.destination!, walkMetres) }) });
+    }) })).map(itinerary => ({ ...itinerary, steps: riderSteps(itinerary.legs) })), ...(result.candidates.length ? {} : { routeHints: routeHints(data, resolved.origin!, resolved.destination!, walkMetres) }) });
   }, () => complete({ ...unavailable(args.coverage), itineraries: [] })));
 }
