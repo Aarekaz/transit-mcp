@@ -514,12 +514,14 @@ async function readOwnedFeed<T>(context: MetroMcpContext, data: TransitData, sou
   for (const stop of kind === 'trip_updates' ? stopIds.slice(0, 200) : []) url.searchParams.append('stop', stop);
   const heldKey = `${source.policy.namespace}\n${kind}`, held = kind === 'trip_updates' && stopIds.length ? undefined : heldPayloads.get(heldKey);
   if (held) url.searchParams.set('have', held.etag);
+  url.searchParams.set('sent', String(Date.now()));
   signal.throwIfAborted();
   try {
     const response = await phase('hub', () => context.env.REGION_FEED_HUB!.get(context.env.REGION_FEED_HUB!.idFromName(source.policy.namespace)).fetch(url.href, { signal }));
     signal.throwIfAborted();
     if (!response.ok) return missing();
-    const { notModified, ...feed } = await response.json<FeedRead<T[]> & { notModified?: boolean }>();
+    const { notModified, queuedMs, servedMs, ...feed } = await response.json<FeedRead<T[]> & { notModified?: boolean; queuedMs?: number; servedMs?: number }>();
+    count('hubQueuedMs', queuedMs ?? 0); count('hubServedMs', servedMs ?? 0);
     if (notModified && held && feed.etag === held.etag) feed.payload = held.payload as T[];
     else if (feed.etag && Array.isArray(feed.payload) && !(kind === 'trip_updates' && stopIds.length)) heldPayloads.set(heldKey, { etag: feed.etag, payload: feed.payload });
     const policy = data.coverage.thresholds;

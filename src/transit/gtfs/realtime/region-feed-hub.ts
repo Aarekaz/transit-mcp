@@ -204,6 +204,8 @@ export class RegionFeedHub implements DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    // How long the read waited to be delivered (behind a poll), for the caller's trace.
+    const queuedMs = Math.max(0, Date.now() - (Number(url.searchParams.get('sent')) || Date.now()));
     const source = this.#source;
     if (!source) return Response.json({ error: 'inactive_coordinator' }, { status: 409 });
     if (url.pathname === '/health') return new Response(null, { status: 204 });
@@ -231,8 +233,8 @@ export class RegionFeedHub implements DurableObject {
     if (snapshot) core.replace(kind, snapshot);
     const read = core.read(kind, now);
     // The reader already holds this exact payload: send only the freshness metadata.
-    if (read.etag && url.searchParams.get('have') === read.etag) return Response.json({ ...read, payload: null, notModified: true });
-    return Response.json(read);
+    if (read.etag && url.searchParams.get('have') === read.etag) return Response.json({ ...read, payload: null, notModified: true, queuedMs, servedMs: Date.now() - queuedMs - Number(url.searchParams.get('sent')) });
+    return Response.json({ ...read, queuedMs, servedMs: Date.now() - queuedMs - Number(url.searchParams.get('sent')) });
   }
 
   async alarm(): Promise<void> {
