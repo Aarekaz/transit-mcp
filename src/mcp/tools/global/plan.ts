@@ -1,6 +1,7 @@
 import { CLIENT_CAPABILITIES_META_KEY, ProtocolError, ProtocolErrorCode, acceptedContent, inputRequired, inputResponse, type McpServer, type RequestStateCodec } from '@modelcontextprotocol/server';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import { z } from 'zod';
+import { traced } from '../../../transit/trace';
 import type { MetroMcpContext, TransitRequestState } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
 import { getCoverage, planningFeedIds } from '../../../transit/core/coverage';
@@ -57,7 +58,7 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     annotations: readOnlyLive('Plan a transit journey'),
     inputSchema: planInput,
     outputSchema: z.strictObject({ ...resultShape, itineraries: z.array(itinerarySchema).max(3), routeHints: routeHintsSchema.optional() }),
-  }, async (args, handler) => guarded(handler, async () => {
+  }, async (args, handler) => guarded(handler, () => traced('plan_trip', async () => {
     const state = checkState(handler, 'plan_trip');
     const requestHash = await planRequestHash(args);
     if (state && (state.phase !== 'transit-selection' || state.tool !== 'plan_trip' || state.requestHash !== requestHash)) throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Transit selection state does not match this request');
@@ -218,5 +219,5 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       return { ...leg, mode: route.mode, agencyRef: route.agencyRef, intermediateStopCount: (sequences.get(leg.tripRef) ?? []).filter(sequence => sequence > leg.boardSequence && sequence < leg.alightSequence).length,
         transferRequired: candidate.legs.slice(0, index).some(prior => prior.kind === 'transit') && !leg.continuation, sources: meta.sources.filter(source => source.scheduleVersion === leg.scheduleVersion), validatorOutcome: 'valid' as const };
     }) })).map(itinerary => ({ ...itinerary, steps: riderSteps(itinerary.legs) })), ...(result.candidates.length ? {} : { routeHints: routeHints(data, resolved.origin!, resolved.destination!, walkMetres) }) });
-  }, () => complete({ ...unavailable(args.coverage), itineraries: [] })));
+  }), () => complete({ ...unavailable(args.coverage), itineraries: [] })));
 }

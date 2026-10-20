@@ -1,4 +1,5 @@
 import type { RealtimeFeedKind } from '../../../regions/types';
+import { count, phase } from '../../trace';
 import type { ArtifactManifestV2 } from '../static/schema';
 import { canonicalJson, sha256 } from '../static/shards';
 
@@ -33,6 +34,13 @@ export function sameStaticVersion(left: StaticVersion, right: StaticVersion): bo
 }
 
 export async function readBoundedObject(bucket: R2Bucket, key: string, maximum: number): Promise<Uint8Array> {
+  return phase('r2', async () => {
+    const bytes = await readBounded(bucket, key, maximum);
+    count('r2Reads'); count('r2Bytes', bytes.byteLength);
+    return bytes;
+  });
+}
+async function readBounded(bucket: R2Bucket, key: string, maximum: number): Promise<Uint8Array> {
   const object = await bucket.get(key);
   if (!object) throw new Error('Artifact object is unavailable');
   if (object.size > maximum) throw new Error('Artifact object byte budget exceeded');

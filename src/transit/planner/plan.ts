@@ -1,4 +1,5 @@
 import { parseTransitRef } from '../core/refs';
+import { phase } from '../trace';
 import type { VerificationReason } from '../core/results';
 import { sameStaticVersion, staticVersion } from '../gtfs/realtime/snapshot-store';
 import { loadScheduleWindow } from './schedule-index';
@@ -13,6 +14,9 @@ import type { JourneyQuery, JourneyResult } from './types';
 const DECODED_SHARD_FACTOR = 4;
 
 export async function planJourney(query: JourneyQuery, signal?: AbortSignal): Promise<JourneyResult> {
+  return phase('plan', () => planJourneyUntraced(query, signal));
+}
+async function planJourneyUntraced(query: JourneyQuery, signal?: AbortSignal): Promise<JourneyResult> {
   assertNotAborted(signal);
   parseInstant(query.departAt);
   const now = parseInstant(query.now) / 1000;

@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { traced } from '../../../transit/trace';
 import type { MetroMcpContext } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
 import { getCoverage } from '../../../transit/core/coverage';
@@ -75,7 +76,7 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       legChecks: z.array(z.strictObject({ index: z.number().int(), valid: z.boolean(), reasons: z.array(z.string()) })),
       transferChecks: z.array(z.strictObject({ fromLegIndex: z.number().int(), toLegIndex: z.number().int(), valid: z.literal(false), reasons: z.array(z.string()) })),
       equipment: equipmentSchema.optional().describe('Elevator and escalator outages in scope, where the coverage publishes them.') }),
-  }, async (args, handler) => guarded(handler, async () => {
+  }, async (args, handler) => guarded(handler, () => traced('get_service_status', async () => {
     checkState(handler, 'get_service_status');
     const parsed = args.ref ? validRef(args.ref, ['agency', 'route', 'stop', 'trip'], true) : undefined;
     // The advertised input stays small; the itinerary contract is enforced here.
@@ -234,5 +235,5 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
     sources.push(...equipment.sources);
     return complete({ ...meta, sources, equipment: equipment.report,
       status: usable && journeyValid !== false ? 'realtime' as const : 'unavailable' as const, reasons: resultReasons.size ? [...resultReasons] : usable ? [] : ['REALTIME_UNAVAILABLE' as const], alerts, journeyValid, journeyReasons, legChecks, transferChecks });
-  }, () => complete({ ...unavailable(args.coverage), alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] })));
+  }), () => complete({ ...unavailable(args.coverage), alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] })));
 }

@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { traced } from '../../../transit/trace';
 import type { MetroMcpContext } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
 import { formatEntityRef, parseTransitRef } from '../../../transit/core/refs';
@@ -30,7 +31,7 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
       previousStopName: z.string().nullable(),
       coordinates: coordinatesSchema.nullable(), coordinatesSource: z.enum(['vehicle', 'stop']).nullable(),
       bearing: z.number().nullable(), speedMetersPerSecond: z.number().nullable(), observedAt: instantSchema, ageSeconds: z.number().nonnegative() })) }),
-  }, async (args, handler) => guarded(handler, async () => {
+  }, async (args, handler) => guarded(handler, () => traced('get_vehicle_status', async () => {
     checkState(handler, 'get_vehicle_status');
     if (!args.ref === !args.stop) throw new TransitToolError('INVALID_TRANSIT_REF');
     let ref = args.ref, data: TransitData | null = null;
@@ -87,5 +88,5 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
     const available = fresh && (parsed.kind !== 'trip' || vehicles.length > 0);
     return complete({ ...meta, sources: [...meta.sources, ...(feed ? realtimeSource(data, feed, 'vehicle_positions', now) : [])],
       status: available ? 'realtime' as const : 'unavailable' as const, reasons: feed.reasons.length ? feed.reasons : available ? [] : ['REALTIME_UNAVAILABLE' as const], vehicles });
-  }, () => complete({ ...unavailable(args.ref ? parseTransitRef(args.ref)?.coverage : getCoverage(args.coverage ?? '')?.id, undefined, ['REALTIME_UNAVAILABLE']), vehicles: [] })));
+  }), () => complete({ ...unavailable(args.ref ? parseTransitRef(args.ref)?.coverage : getCoverage(args.coverage ?? '')?.id, undefined, ['REALTIME_UNAVAILABLE']), vehicles: [] })));
 }

@@ -1,4 +1,5 @@
 import { ProtocolError, ProtocolErrorCode, type ServerContext } from '@modelcontextprotocol/server';
+import { count, phase } from '../../../transit/trace';
 import { z } from 'zod';
 import type { MetroMcpContext, TransitRequestState } from '../../context';
 import { complete } from '../../shared';
@@ -93,6 +94,9 @@ function artifactStore(bucket: R2Bucket, coverageId: string): StaticArtifactStor
 const discoveryCaches = new WeakMap<R2Bucket, Map<string, DiscoveryIndex>>();
 /** Public mode checks belong at the data boundary; catalog registration never changes. */
 export async function loadData(context: MetroMcpContext, coverageId: string, signal: AbortSignal, version?: string): Promise<TransitData | null> {
+  return phase('loadData', () => loadDataUntraced(context, coverageId, signal, version));
+}
+async function loadDataUntraced(context: MetroMcpContext, coverageId: string, signal: AbortSignal, version?: string): Promise<TransitData | null> {
   const coverage = getCoverage(coverageId);
   if (!coverage || getCoverageMode(coverage.id, context.env) !== 'on' || !context.env.TRANSIT_ARTIFACTS) return null;
   const bucket = context.env.TRANSIT_ARTIFACTS, store = artifactStore(bucket, coverage.id);
@@ -112,6 +116,7 @@ export async function loadData(context: MetroMcpContext, coverageId: string, sig
       const bytes = await readObject(descriptor.key);
       if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Discovery integrity');
       index = decodeDiscoveryIndex(bytes);
+      count('discoveryDecoded'); count('discoveryBytes', bytes.byteLength);
       // Content-addressed and verified: safe to reuse across requests in this isolate.
       discoveryCache.set(descriptor.sha256, index);
       // Keep every index this manifest uses (NYC has one per feed); drop only older versions.
@@ -510,7 +515,7 @@ async function readOwnedFeed<T>(context: MetroMcpContext, data: TransitData, sou
   if (held) url.searchParams.set('have', held.etag);
   signal.throwIfAborted();
   try {
-    const response = await context.env.REGION_FEED_HUB.get(context.env.REGION_FEED_HUB.idFromName(source.policy.namespace)).fetch(url.href, { signal });
+    const response = await phase('hub', () => context.env.REGION_FEED_HUB!.get(context.env.REGION_FEED_HUB!.idFromName(source.policy.namespace)).fetch(url.href, { signal }));
     signal.throwIfAborted();
     if (!response.ok) return missing();
     const { notModified, ...feed } = await response.json<FeedRead<T[]> & { notModified?: boolean }>();
