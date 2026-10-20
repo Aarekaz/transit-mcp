@@ -126,8 +126,14 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     // filters at most 200 stops; beyond that read everything rather than drop rows.
     const routeStops = viaRoutes && new Set(data.indexes.flatMap(index => Object.entries(index.stopRoutes).filter(([, refs]) => refs.some(ref => viaRoutes.includes(ref))).map(([ref]) => ref)));
     const routeStopIds = routeStops && [...new Set(data.indexes.flatMap(index => index.stops).filter(stop => routeStops.has(stop.ref)).map(stop => stop.providerId))];
-    const now = new Date().toISOString(), feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', Date.parse(now) / 1000, handler.mcpReq.signal,
+    // Read lazily: the network planner reads only its proposals' stops, and a whole region's
+    // predictions (all of 511 SF Bay) cost seconds to move and parse.
+    const now = new Date().toISOString();
+    let wholeRead: ReturnType<typeof readFeed<NormalizedStopUpdate>> | undefined;
+    const readPlanning = () => wholeRead ??= readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', Date.parse(now) / 1000, handler.mcpReq.signal,
       routeStopIds && routeStopIds.length <= 200 ? routeStopIds : [], planning);
+    type PlanningRead = Awaited<ReturnType<typeof readPlanning>>;
+    const duplicated = (read: PlanningRead) => read.payload?.some(update => ['DUPLICATED', 'REPLACEMENT'].includes(update.scheduleRelationship ?? ''));
     // Step-free: board, alight and change only where access is step-free now. Without a
     // current equipment report, or with an endpoint cut off, refuse rather than guess.
     let stepFree: { usableStopRefs: ReadonlySet<TransitRef> } | undefined, accessSources: SourceStatus[] = [];
@@ -142,9 +148,7 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       }
       stepFree = { usableStopRefs: access.usable as ReadonlySet<TransitRef> };
     }
-    if (feed.payload?.some(update => ['DUPLICATED', 'REPLACEMENT'].includes(update.scheduleRelationship ?? ''))) {
-      return complete({ ...unavailable(coverageId, data, ['REALTIME_UNAVAILABLE']), sources: [...metadata(coverageId, data).sources, ...realtimeSource(data, feed, 'trip_updates', Date.parse(now) / 1000)], itineraries: [] });
-    }
+    const refuseDuplicated = (read: PlanningRead) => complete({ ...unavailable(coverageId, data, ['REALTIME_UNAVAILABLE']), sources: [...metadata(coverageId, data).sources, ...realtimeSource(data, read, 'trip_updates', Date.parse(now) / 1000)], itineraries: [] });
     // A stop the search cannot board or alight at (a Metrobus stop in an open search, or a stop
     // none of the named lines serve) is planned from its location: the journey walks from or to it.
     const allStops = data.indexes.flatMap(index => index.stops);
@@ -167,25 +171,25 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     // One decode per shard: the planner fills this, and leg details read trips from it.
     const decoded = new DecodedShardCache(Number.MAX_SAFE_INTEGER);
     // Journeys come only from schedule data; observed-only rows cannot form legs.
-    const plannerRealtime = (read: typeof feed) => read.payload !== null && read.version && read.receivedAtSeconds !== undefined
+    const plannerRealtime = (read: PlanningRead) => read.payload !== null && read.version && read.receivedAtSeconds !== undefined
       ? { ...read, payload: scheduledRealtimeRows(read.payload), version: read.version, receivedAtSeconds: read.receivedAtSeconds } : undefined;
-    const realtimeReads: (typeof feed)[] = [feed];
+    const realtimeReads: PlanningRead[] = [];
     let result: Awaited<ReturnType<typeof planJourney>> | null = null;
     if (network) {
       try {
         result = await planNetworkJourney({ manifest: data.manifest, indexes: data.indexes, readShard: data.readObject, decoded, origin: requested.origin!, destination: requested.destination!,
           departAt: args.departAt ?? now, now, windowSeconds: args.windowSeconds, maxWalkMetres: args.maxWalkMetres, maxTransfers: args.maxTransfers,
-          realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds, realtime: plannerRealtime(feed), ...(stepFree ? { stepFree } : {}),
+          realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds, ...(stepFree ? { stepFree } : {}),
           networkFeedIds: data.manifest.sources.map(source => source.feedId).filter(feedId => data.version.sourceVersions[feedId] !== undefined),
           readCompact: async key => { const object = await context.env.TRANSIT_ARTIFACTS!.get(key); if (!object) return null; if (object.size > 32 * 1024 * 1024) throw new Error('Compact band too large'); return new Uint8Array(await object.arrayBuffer()); },
-          // The rail read above covers rail lines; a bus line reads its own stops' predictions.
+          // Each proposal reads its own lines' stops; past the hub's 200-stop filter, the whole read.
           realtimeFor: async (routeRefs, feedIds) => {
-            if (feedIds.every(feedId => planning.includes(feedId))) return plannerRealtime(feed);
             const stops = new Set(data.indexes.flatMap(index => Object.entries(index.stopRoutes).filter(([, refs]) => refs.some(ref => routeRefs.has(ref))).map(([ref]) => ref)));
             const ids = [...new Set(allStops.filter(stop => stops.has(stop.ref)).map(stop => stop.providerId))];
-            const read = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', Date.parse(now) / 1000, handler.mcpReq.signal, ids.length <= 200 ? ids : [], feedIds);
-            if (read.payload?.some(update => ['DUPLICATED', 'REPLACEMENT'].includes(update.scheduleRelationship ?? ''))) return null;
-            realtimeReads.push(read);
+            const read = ids.length > 200 && feedIds.every(feedId => planning.includes(feedId)) ? await readPlanning()
+              : await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', Date.parse(now) / 1000, handler.mcpReq.signal, ids.length <= 200 ? ids : [], feedIds);
+            if (duplicated(read)) return null;
+            if (!realtimeReads.includes(read)) realtimeReads.push(read);
             return plannerRealtime(read);
           } }, handler.mcpReq.signal);
       } catch (error) {
@@ -196,6 +200,9 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       if (!result && !wholeFeed) return hinted(['PLANNING_UNAVAILABLE']);
     }
     if (!result) {
+    const feed = await readPlanning();
+    if (duplicated(feed)) return refuseDuplicated(feed);
+    realtimeReads.push(feed);
     const planned = planJourney({ manifest: data.manifest, feedIds: planning, readShard: data.readObject, decoded, origin: resolved.origin!, destination: resolved.destination!, departAt: args.departAt ?? now, now,
       windowSeconds: args.windowSeconds, maxWalkMetres: args.maxWalkMetres, maxTransfers: args.maxTransfers, realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds,
       // Journeys come only from schedule data; observed-only rows cannot form legs.
