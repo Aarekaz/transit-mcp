@@ -2,6 +2,7 @@ import type { Config } from './config';
 import { loadConfig } from './config';
 import { getServerInfo } from './server-info';
 import type { Env } from './types';
+import { canaryHealthResponse } from './canary';
 
 const OPENAI_APPS_CHALLENGE = 'A4dphR5uRWU44rm5ytkVkwHt8wj3aJmxoRja8nLMnsg';
 
@@ -21,6 +22,7 @@ export async function handlePublicRequest(
       },
     });
   }
+  if (pathname === '/health/deep' && request.method === 'GET') return canaryHealthResponse(env);
   if (pathname === '/.well-known/openai-apps-challenge' && request.method === 'GET') {
     return new Response(OPENAI_APPS_CHALLENGE, {
       headers: { 'Content-Type': 'text/plain; charset=UTF-8' },
