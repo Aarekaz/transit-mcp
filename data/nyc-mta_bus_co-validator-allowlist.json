@@ -1,0 +1,15 @@
+{
+  "coverageId": "nyc",
+  "warnings": [
+    {
+      "code": "fast_travel_between_consecutive_stops",
+      "reason": "MTA Bus Company publishes 84 stop pairs timed faster than a bus can travel. Buses are not planned; departures show the published times beside live predictions.",
+      "expires": "2026-12-31"
+    },
+    {
+      "code": "mixed_case_recommended_field",
+      "reason": "Stop and route names are published in capitals; names are display text only.",
+      "expires": "2026-12-31"
+    }
+  ]
+}

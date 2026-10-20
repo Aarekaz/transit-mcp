@@ -26,6 +26,45 @@ Neither equipment API has a feed clock: a complete, validated retrieval is the o
 
 Refresh MTA's station list when stations become accessible: `bun scripts/refresh-nyc-ada.ts`, review the diff (it records source URL, retrieval time and SHA-256), commit. The script refuses inconsistent direction flags and an implausibly short list.
 
+## Commuter rail and buses
+
+| Coverage / feed | Schedule (static) | Realtime | Planned |
+| --- | --- | --- | --- |
+| `nyc` / `lirr` | `rrgtfsfeeds.s3.amazonaws.com/gtfslirr.zip` | `mtagtfsfeeds/lirr%2Fgtfs-lirr` (vehicles with GPS ride in it), `camsys%2Flirr-alerts` | Yes |
+| `nyc` / `mnr` | `rrgtfsfeeds.s3.amazonaws.com/gtfsmnr.zip` | `mtagtfsfeeds/mnr%2Fgtfs-mnr`, `camsys%2Fmnr-alerts`; no usable vehicles | Yes |
+| `nyc` / `mta_bus_bx`, `_b`, `_m`, `_q`, `_si`, `_co` | `rrgtfsfeeds.s3.amazonaws.com/gtfs_{bx,b,m,q,si,busco}.zip` | MTA Bus Time `gtfsrt.prod.obanyc.com/{tripUpdates,vehiclePositions,alerts}?key=` (`MTA_BUS_API_KEY`) | No |
+| `dc` / `wmata_bus` | `api.wmata.com/gtfs/bus-gtfs-static.zip` (key header, answers If-None-Match) | `api.wmata.com/gtfs/bus-gtfsrt-*.pb` (same WMATA key) | No |
+
+- **One manifest per coverage.** Each feed is compiled and validated on its own; `composeManifest` replaces one feed's sources, discovery and shards and keeps every other feed as published. Validator evidence moves to `validators` keyed by feed. A coverage's first feed keeps its existing storage keys and Workflow instance IDs; other feeds are scoped below it (`sources/nyc/lirr/…`).
+- **One coordinator per realtime source**, each with its own budget: `nyc:lirr`, `nyc:mnr`, `nyc:mta_bus`, `dc:wmata_bus`. Rail and bus share the WMATA key at 480 + 320 requests an hour at most. A coordinator whose feed is not yet published spends no request; Bus Time never polls without its key. Tools read every source of a coverage; departures read only the stop's own feed, because provider stop IDs repeat across feeds (LIRR 101 is not subway 101).
+- **Matching.** LIRR and Metrobus trip IDs equal the timetable's. Metro-North's `trip_id` is internal: the entity ID is the train number (`trip_short_name`, now compiled as an optional trip field) and the start date and time are the civil departure, so train 1299 at 00:05 on the 20th is service day 19 at 24:05 (`train_number`). Bus Time's one document covers six timetables; each trip goes to the timetable whose discovery index lists its `trip_id` (binary search; IDs are unique across the six archives) and the schedule-identity gate is judged on the combined totals. Trips scheduled to start beyond the matched timetable span are counted as `beyondWindow`, not as mismatches. Published rows run from ten minutes before the poll to the end of that span.
+- **Tracks.** The MTA railroads' StopTimeUpdate extension (field 1005) carries the track; departures report it in `platform`.
+- **Why buses are not planned.** On the full Metrobus timetable a Dupont Circle to Rosslyn search reached 83,570 route labels, 153 MB retained and 7.4 s, and bus-to-bus searches 133,000-146,000 labels and up to 243 MB: beyond one isolate. Bus feeds carry `planning: false`; `plan_trip` loads and reads only planning feeds, and a bus-stop endpoint becomes its coordinates.
+- **Time bands.** Bus feeds use one-hour bands. Each band carries only the stops its trips serve (and their stations): with 7,540 Metrobus stops the full list was 1.3 MB of every band. Banded shards keep `blockId` on trips and publish an empty block table; the planner and validator read continuations from the trips a query loads, and every band overlapping the window is loaded. A timed trip-to-trip transfer (type 1) is not compiled: it only promises a hold, and the stop's own rule applies instead.
+- **Dense edge refresh.** A Metrobus day is about 600,000 stop times scattered through a 177 MB table, so reading a date by ranges buffered most of the file (500 MB+). Feeds marked `splitByBand` add one step per first-departure band that streams the stored copy once and keeps that band's rows (about 6.5 MB); date steps then read the stored small tables and band objects, never the archive. Measured under a 96 MB V8 heap cap on the real Metrobus archive: 27 band steps at 11-13.5 s CPU, a date step at 18.6 s CPU for 13,541 trips. A one-second `step.sleep` follows each band and date step so CPU never accumulates in one invocation. Output is byte-identical to the offline compile.
+
+### Validator findings (MobilityData 8.0.1)
+
+No ERROR and no system errors in any of the nine new archives. Reviewed warnings are allowlisted per feed in `data/<coverage>-<feed>-validator-allowlist.json`: LIRR (missing feed contact and feed dates, Belmont Park unserved), Metro-North (no feed_info, unused and one-point shapes), Metrobus (holiday services with no weekday flags), NYCT buses (names in capitals, extended route type 711), MTA Bus Company (84 stop pairs timed implausibly fast, names in capitals). MTA bus feed_info contact URLs carry a `#!` fragment; the compiler now leaves out any feed_info link that could carry a credential instead of refusing the feed.
+
+### Live evidence (2026-10-19, evening)
+
+| Feed | Matched | Coordinator poll | Shown |
+| --- | --- | --- | --- |
+| LIRR | 98-99 of 98-99 trips | 0.15 s | Jamaica departures with tracks; trains with GPS |
+| Metro-North | 95 of 98 | 0.18 s | Grand Central departures with tracks |
+| Metrobus | 654 of 654 in window (565 beyond) | 1.6 s, 57 MB | Georgetown departures realtime; D80 buses with GPS |
+| NYC buses (all six timetables) | 2,296 of 2,312 (99.3%) | 2.7 s, 62 MB, 51,000 rows | M15, B44, Bx12 departures realtime; buses with GPS; Bx12 detour alerts |
+| Subway, Metrorail | unchanged (80%, 100%) | 0.3-0.8 s | |
+
+Full-day planning sweeps on the composed artifacts: DC rail 72 plans, NYC rail (subway, LIRR, Metro-North) 120 plans, none refused; cross-mode journeys such as Times Sq to Hicksville (walk to Penn Station, LIRR), White Plains to Union Sq (Metro-North, walk, subway) and Babylon to Atlantic Av (LIRR via Jamaica). NYC plans with commuter rail estimate 36-87 MB and retain at most 52 MB.
+
+### Activating
+
+1. Deploy. New coordinators stay idle and new feeds are absent until their schedules are published.
+2. Let the edge refresh publish each feed (the cron checks LIRR and Metro-North every 30 minutes, NYC buses hourly, Metrobus every 6 hours), or publish the offline builds: `TRANSIT_COVERAGE=<c> TRANSIT_FEED=<feed> … TRANSIT_MERGE_INTO=<previous build> bun scripts/build-transit-artifact.ts <out>` for each feed (bus feeds with `TRANSIT_BAND_HOURS=1`), then `bun scripts/publish-transit-artifact.ts <out>/ <bucket> --remote` (try `--dry-run` first).
+3. Set `MTA_BUS_API_KEY` as a Worker secret for NYC bus realtime. Until then NYC bus departures are timetable only.
+
 ## Result contract additions
 
 - `get_departures` rows carry `scheduleMatch`: `matched` (a call of a canonical scheduled trip instance), `unscheduled_call` (an observed stop outside that trip's pattern) or `unmatched_trip` (an observed train with no published schedule). Observed rows have `scheduledTime: null` and `stopSequence: null`; their headsign is the last reported stop.

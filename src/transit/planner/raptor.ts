@@ -88,10 +88,10 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
       if (previous === undefined) { pathwayDefinitions.set(key, definition); pathways.push(pathway); }
     }
   }
-  for (const endpoint of [query.origin, query.destination]) if (typeof endpoint === 'string' && !stops.has(endpoint)) {
-    // Agency-split shards carry only stops their service reaches: no loaded service here.
-    if (query.agencyRefs) return { candidates: [], reasons: [], rounds: 0, estimatedWorkingSetBytes: baseBytes + realtimeBytes };
-    throw new Error('ENTITY_NOT_FOUND: unknown journey stop');
+  // Time bands carry only the stops they serve. The tool resolves endpoints against the
+  // feed's discovery index first, so an endpoint absent here has no service in this window.
+  if ([query.origin, query.destination].some(endpoint => typeof endpoint === 'string' && !stops.has(endpoint))) {
+    return { candidates: [], reasons: [], rounds: 0, estimatedWorkingSetBytes: baseBytes + realtimeBytes };
   }
   if (baseBytes + realtimeBytes + stops.size * 512 >= ROUTER_BUDGET_BYTES) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
   const reasons = new Set<VerificationReason>();

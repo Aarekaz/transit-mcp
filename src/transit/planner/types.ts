@@ -55,6 +55,8 @@ export interface JourneyQuery extends Omit<ValidationSource, 'shards'> {
   maxTransfers?: number;
   /** For agency-split schedules: the agencies whose service this search may use. */
   agencyRefs?: TransitRef[];
+  /** Feeds the search may use; all of the manifest's when omitted. */
+  feedIds?: readonly string[];
 }
 export interface ValidationResult {
   valid: boolean;

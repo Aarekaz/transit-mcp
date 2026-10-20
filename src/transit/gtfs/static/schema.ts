@@ -46,6 +46,8 @@ export interface ScheduleTrip {
   ref: TransitRef; providerId: string; routeRef: TransitRef; serviceId: string;
   patternId: string; headsign: string; directionId: number | null; blockId: string;
   wheelchairAccessible: number; bikesAllowed: number; stopTimes: TripStopTime[];
+  /** Publisher trip_short_name (a railroad train number); absent when not published. */
+  shortName?: string;
 }
 export interface SchedulePattern {
   id: string; routeRef: TransitRef; directionId: number | null;
@@ -107,7 +109,10 @@ export interface ArtifactManifestV2 {
   shards: (ArtifactObject & { feedId: string; window: ServiceWindow; maxStopTimeSeconds: number; timeRange?: ShardTimeRange;
     /** Present when a band is split by agency: the only agencies whose trips it holds. */
     agencyRefs?: TransitRef[] })[];
+  /** Validator evidence of a single-feed manifest. */
   validator?: ValidatorEvidence;
+  /** Validator evidence per feed once a coverage composes several (see composeManifest). */
+  validators?: Record<string, ValidatorEvidence>;
 }
 export interface CompileScheduleInput {
   coverage: CoverageManifest; feedId: string; files: GtfsScheduleFiles;

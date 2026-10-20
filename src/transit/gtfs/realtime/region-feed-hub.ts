@@ -1,18 +1,20 @@
 import type { Env } from '../../../types';
 import type { RealtimeFeedKind, RealtimeFeedSpec } from '../../../regions/types';
 import { allocatePollIntervals } from '../upstream/budget';
-import { decodeRealtimeFeed, type NormalizedAlert, type NormalizedRealtimeFeed, type NormalizedVehicle } from './decode';
+import { decodeRealtimeFeed, type NormalizedAlert, type NormalizedRealtimeFeed } from './decode';
 import { RegionalFeedHubCore } from './hub-core';
 import { ApiKeyQuota, RealtimeSnapshotStore, StaticArtifactStore, readBoundedObject, type StaticVersion } from './snapshot-store';
 import { DecodedShardCache, loadScheduleWindow } from '../../planner/schedule-index';
-import { applyTripUpdates, applyVehiclePositions, matchVehicles, mergeAppliedTripUpdates, settleStoppedVehicles } from './trip-match';
+import { MIN_ELIGIBLE_FOR_MATCH_RATE, applyTripUpdates, applyVehiclePositions, matchVehicles, settleStoppedVehicles, type AppliedTripUpdates } from './trip-match';
 import { decodeDiscoveryIndex, sha256 } from '../static/shards';
 import type { ArtifactManifestV2, DiscoveryIndex } from '../static/schema';
 import type { TransitRef } from '../../core/refs';
 import { decodeEquipmentOutages } from '../../accessibility/equipment';
-import { feedParts, getRealtimeSource, getRealtimeSources, ingestionActive, publishedKinds, upstreamRequest, type RealtimeSource } from './sources';
+import { feedParts, getRealtimeSource, getRealtimeSources, ingestionActive, publishedKinds, sourceFeedIds, upstreamRequest, type RealtimeSource } from './sources';
 
 const POLLED_PREFIX = 'polled:';
+/** Calls this long before the poll are not published. */
+export const PAST_CALL_SECONDS = 600;
 
 function polledKey(kind: RealtimeFeedKind): string {
   return `${POLLED_PREFIX}${kind}`;
@@ -26,6 +28,7 @@ export function safePollFailureReason(error: unknown): string {
   if (error instanceof Error && error.message === 'upstream_body_too_large') return error.message;
   if (error instanceof Error && (error.message === 'Malformed GTFS-Realtime feed' || error.message === 'Malformed equipment feed')) return 'malformed_feed';
   if (error instanceof Error && error.message.startsWith('incomplete_feed')) return 'incomplete_feed';
+  if (error instanceof Error && /^Realtime (payload byte|metadata) budget exceeded$/.test(error.message)) return 'snapshot_budget_exceeded';
   // Fixed vocabulary only: never echo upstream bodies, URLs or credentials.
   if (error instanceof Error && /^upstream_(status_\d{3}|quota_exhausted|credential_missing|empty_body)$/.test(error.message)) return error.message;
   if (error instanceof Error && error.name === 'AbortError') return 'upstream_timeout';
@@ -56,18 +59,54 @@ export function mergeRealtimeParts(parts: NormalizedRealtimeFeed[]): NormalizedR
   };
 }
 
-/** The agency groups of an agency-split schedule, or null when shards are not split. */
-export function agencyGroups(manifest: ArtifactManifestV2): Set<string>[] | null {
-  const groups = new Map<string, Set<string>>();
-  for (const shard of manifest.shards) if (shard.agencyRefs) groups.set(shard.agencyRefs.join('\n'), new Set(shard.agencyRefs));
-  return groups.size ? [...groups.values()] : null;
-}
-
 /** Reviewed provider aliases only; unknown agency IDs remain unmatched. */
 export function aliasAlertAgencies(alerts: NormalizedAlert[], aliases: Readonly<Record<string, string>> | undefined): NormalizedAlert[] {
   if (!aliases) return alerts;
   return alerts.map(alert => ({ ...alert, selectors: alert.selectors.map(selector =>
     selector.agencyId !== undefined && Object.hasOwn(aliases, selector.agencyId) ? { ...selector, agencyId: aliases[selector.agencyId] } : selector) }));
+}
+
+/** True when the sorted provider ID list (a discovery index's tripProviderIds) holds `id`. */
+function listed(sorted: readonly string[], id: string): boolean {
+  let low = 0, high = sorted.length - 1;
+  while (low <= high) {
+    const middle = (low + high) >>> 1, value = sorted[middle]!;
+    if (value === id) return true;
+    if (value < id) low = middle + 1; else high = middle - 1;
+  }
+  return false;
+}
+
+/** One realtime document for several timetables (MTA Bus Time): each trip and vehicle goes
+ * to the feed whose timetable lists its trip_id; one no timetable lists goes to the first. */
+export function routeByTimetable(feed: NormalizedRealtimeFeed, discoveries: readonly DiscoveryIndex[]): NormalizedRealtimeFeed[] {
+  const owner = (tripId: string | undefined) => Math.max(0, tripId === undefined ? 0 : discoveries.findIndex(discovery => listed(discovery.tripProviderIds, tripId)));
+  const entities = feed.trips.map(trip => owner(trip.tripId)), byEntity = new Map(feed.trips.map((trip, index) => [trip.entityId, entities[index]!]));
+  return discoveries.map((_, index) => ({ ...feed,
+    trips: feed.trips.filter((_, position) => entities[position] === index),
+    tripUpdates: feed.tripUpdates.filter(update => (byEntity.get(update.entityId) ?? 0) === index),
+    vehicles: feed.vehicles.filter(vehicle => owner(vehicle.tripId) === index) }));
+}
+
+/** Matching across several timetables is judged on the combined totals: one borough's few
+ * trips say nothing about the schedule's identity. */
+/** One feed's agency groups when its schedule is agency-split (SF Bay), else null. */
+export function agencyGroups(manifest: ArtifactManifestV2, feedId: string): Set<string>[] | null {
+  const groups = new Map<string, Set<string>>();
+  for (const shard of manifest.shards) if (shard.feedId === feedId && shard.agencyRefs) groups.set(shard.agencyRefs.join('\n'), new Set(shard.agencyRefs));
+  return groups.size ? [...groups.values()] : null;
+}
+
+export function combineApplied(results: readonly AppliedTripUpdates[], minimumScheduleMatchRate: number, version: AppliedTripUpdates['version']): AppliedTripUpdates {
+  const sum = (pick: (result: AppliedTripUpdates) => number) => results.reduce((total, result) => total + pick(result), 0);
+  const eligible = sum(result => result.match.eligible), matched = sum(result => result.match.matched), rate = eligible ? matched / eligible : 1;
+  const excluded = { nonRevenue: sum(result => result.excluded.nonRevenue), invalidExtras: sum(result => result.excluded.invalidExtras),
+    unrepresentableAdded: sum(result => result.excluded.unrepresentableAdded), beyondWindow: sum(result => result.excluded.beyondWindow) };
+  const mismatched = eligible >= MIN_ELIGIBLE_FOR_MATCH_RATE ? rate < minimumScheduleMatchRate : eligible > 0 && matched === 0;
+  const degraded = excluded.invalidExtras > 0 || mismatched;
+  const warnings = [...new Set(results.flatMap(result => result.warnings).filter(warning => warning !== 'SCHEDULE_REALTIME_MISMATCH'))];
+  return { version, trips: results.flatMap(result => result.trips), stopUpdates: results.flatMap(result => result.stopUpdates),
+    match: { eligible, matched, rate }, excluded, degraded, warnings: [...warnings, ...(degraded ? ['SCHEDULE_REALTIME_MISMATCH'] : [])] };
 }
 
 async function readBody(response: Response, maxBytes: number): Promise<Uint8Array> {
@@ -100,7 +139,7 @@ export class RegionFeedHub implements DurableObject {
   readonly #quota?: ApiKeyQuota;
   // Polls reuse the verified timetable and discovery index while their hashes are unchanged.
   readonly #shards = new DecodedShardCache(24 * 1024 * 1024);
-  #discovery?: { sha256: string; index: DiscoveryIndex };
+  readonly #discoveries = new Map<string, { sha256: string; index: DiscoveryIndex }>();
 
   constructor(state: DurableObjectState, env: Env) {
     this.#state = state;
@@ -112,7 +151,8 @@ export class RegionFeedHub implements DurableObject {
     if (!source) return;
     this.#quota = new ApiKeyQuota(state.storage, source.policy.budget);
     if (env.TRANSIT_ARTIFACTS) {
-      this.#snapshots = new RealtimeSnapshotStore(state.storage, env.TRANSIT_ARTIFACTS, source.coverage.id);
+      const primary = getRealtimeSource(source.coverage.id)?.policy.feedId === source.policy.feedId;
+      this.#snapshots = new RealtimeSnapshotStore(state.storage, env.TRANSIT_ARTIFACTS, source.coverage.id, primary ? undefined : source.policy.feedId);
       this.#artifacts = new StaticArtifactStore(env.TRANSIT_ARTIFACTS, source.coverage.id);
     }
     this.#intervals = allocatePollIntervals({
@@ -129,7 +169,10 @@ export class RegionFeedHub implements DurableObject {
     const source = this.#source;
     if (!source) return Response.json({ error: 'inactive_coordinator' }, { status: 409 });
     if (url.pathname === '/health') return new Response(null, { status: 204 });
-    if (url.pathname === '/stats') return Response.json(await this.#state.storage.get('stats:trip_updates') ?? null);
+    if (url.pathname === '/stats') {
+      const feed = url.searchParams.get('feed');
+      return Response.json(await this.#state.storage.get(feed ? `stats:trip_updates:${feed}` : 'stats:trip_updates') ?? await this.#state.storage.get('stats:trip_updates') ?? null);
+    }
     if (url.pathname === '/quota/static' && request.method === 'POST') {
       return Response.json({ allowed: await this.#quota!.claim('static', Math.floor(Date.now() / 1000)) });
     }
@@ -195,7 +238,7 @@ export class RegionFeedHub implements DurableObject {
   }
 
   async #fetchPart(source: RealtimeSource, spec: RealtimeFeedSpec, url: URL, nowSeconds: number): Promise<NormalizedRealtimeFeed> {
-    return decodeRealtimeFeed(await this.#fetchBytes(source, spec, url, nowSeconds), { nyct: source.policy.extensions === 'nyct' });
+    return decodeRealtimeFeed(await this.#fetchBytes(source, spec, url, nowSeconds), { nyct: source.policy.extensions === 'nyct', mtaRailroad: source.policy.extensions === 'mta_railroad' });
   }
 
   /** Agency equipment reports carry no feed clock: a complete, validated retrieval is the
@@ -215,24 +258,14 @@ export class RegionFeedHub implements DurableObject {
     console.info(JSON.stringify({ event: 'regional_feed_polled', region: source.coverage.id, feed: spec.kind, outages: decoded.outages.length }));
   }
 
-  /** The feed's verified discovery index, decoded once per artifact version. */
-  async #discoveryIndex(feedId: string, manifest: ArtifactManifestV2): Promise<DiscoveryIndex> {
-    const descriptors = manifest.discoveries.filter(item => item.feedId === feedId);
-    if (descriptors.length !== 1) throw new Error('Discovery identity missing or ambiguous');
-    const descriptor = descriptors[0]!;
-    if (this.#discovery?.sha256 !== descriptor.sha256) {
-      const discoveryBytes = await readBoundedObject(this.#env.TRANSIT_ARTIFACTS!, descriptor.key, Math.min(descriptor.byteLength, 64 * 1024 * 1024));
-      if (discoveryBytes.length !== descriptor.byteLength || await sha256(discoveryBytes) !== descriptor.sha256) throw new Error('Discovery integrity failure');
-      this.#discovery = { sha256: descriptor.sha256, index: decodeDiscoveryIndex(discoveryBytes) };
-    }
-    return this.#discovery.index;
-  }
-
   async #poll(source: RealtimeSource, spec: RealtimeFeedSpec, nowSeconds: number): Promise<void> {
     const { coverage, policy } = source;
     try {
       const current = await this.#artifacts?.current();
       if (!current || !this.#snapshots || !this.#env.TRANSIT_ARTIFACTS) return;
+      // A feed whose schedule is not published yet has nothing to match: spend no request.
+      const feedIds = sourceFeedIds(policy).filter(feedId => current.manifest.sources.some(item => item.feedId === feedId));
+      if (!feedIds.length) return;
       await this.#state.storage.put(pollAttemptState(spec.kind, nowSeconds));
       if (spec.format) return await this.#pollEquipment(source, spec, nowSeconds, current.version);
       const parts = feedParts(spec);
@@ -251,74 +284,83 @@ export class RegionFeedHub implements DurableObject {
       lap('fetched');
       let payload = payloadFor(spec.kind, decoded), warnings = decoded.warnings, degraded = false, vehicles: unknown[] | undefined;
       const readShard = (key: string) => readBoundedObject(this.#env.TRANSIT_ARTIFACTS!, key, 64 * 1024 * 1024);
-      const matchWindow = () => loadScheduleWindow({ manifest: current.manifest, instant: new Date(nowSeconds * 1000).toISOString(),
-        windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [policy.feedId], decoded: this.#shards });
-      const matching = { manifest: current.manifest, version: current.version, feedId: policy.feedId, tripMatching: policy.tripMatching,
-        minimumScheduleMatchRate: coverage.thresholds.minimumScheduleMatchRate };
-      // Agency-split schedules (SF Bay) are matched one agency group at a time, so the
-      // coordinator never holds the whole region's timetable.
-      const groups = agencyGroups(current.manifest);
-      if (spec.kind === 'trip_updates' && groups) {
-        const discovery = await this.#discoveryIndex(policy.feedId, current.manifest);
+      const matchWindow = (feedId: string) => loadScheduleWindow({ manifest: current.manifest, instant: new Date(nowSeconds * 1000).toISOString(),
+        windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [feedId], decoded: this.#shards });
+      const matching = (feedId: string) => ({ manifest: current.manifest, version: current.version, feedId, tripMatching: policy.tripMatching,
+        minimumScheduleMatchRate: coverage.thresholds.minimumScheduleMatchRate, horizonEndSeconds: nowSeconds + (policy.matchWindowSeconds ?? 6 * 3600) });
+      const discoveryOf = async (feedId: string) => {
+        const descriptors = current.manifest.discoveries.filter(item => item.feedId === feedId);
+        if (descriptors.length !== 1) throw new Error('Discovery identity missing or ambiguous');
+        const descriptor = descriptors[0]!, held = this.#discoveries.get(feedId);
+        if (held?.sha256 === descriptor.sha256) return held.index;
+        const discoveryBytes = await readBoundedObject(this.#env.TRANSIT_ARTIFACTS!, descriptor.key, Math.min(descriptor.byteLength, 64 * 1024 * 1024));
+        if (discoveryBytes.length !== descriptor.byteLength || await sha256(discoveryBytes) !== descriptor.sha256) throw new Error('Discovery integrity failure');
+        const index = decodeDiscoveryIndex(discoveryBytes);
+        this.#discoveries.set(feedId, { sha256: descriptor.sha256, index });
+        return index;
+      };
+      if (spec.kind === 'trip_updates' || spec.kind === 'vehicle_positions') {
+        const discoveries = await Promise.all(feedIds.map(discoveryOf));
         lap('discovery');
-        const parts: Awaited<ReturnType<typeof applyTripUpdates>>[] = [], vehicleParts: NormalizedVehicle[][] = [], groupNames: string[] = [], unmatchedSamples: string[][] = [];
-        const agencyOf = new Map(discovery.routes.map(route => [route.providerId, route.agencyRef as string]));
-        for (const group of [...groups, null]) {
-          // The last pass holds trips on routes the schedule does not publish: all unmatched.
-          const inGroup = (routeId: string | undefined) => group ? group.has(agencyOf.get(routeId ?? '') ?? '') : !groups.some(known => known.has(agencyOf.get(routeId ?? '') ?? ''));
-          const trips = decoded.trips.filter(trip => inGroup(trip.routeId));
-          if (!trips.length) continue;
-          const window = group ? await loadScheduleWindow({ manifest: current.manifest, instant: new Date(nowSeconds * 1000).toISOString(),
-            windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [policy.feedId], agencyRefs: [...group] as TransitRef[] }) : null;
-          const shards = window?.shards.map(entry => entry.shard) ?? [];
-          parts.push(await applyTripUpdates({ ...decoded, trips }, { ...matching, shards, discoveries: [discovery] }));
-          groupNames.push(group ? [...group].map(agency => agency.split(':').at(-1)!).join('+').slice(0, 48) : 'unpublished');
-          const matchedIds = new Set(parts.at(-1)!.stopUpdates.map(update => update.tripId));
-          unmatchedSamples.push(trips.filter(trip => trip.scheduleRelationship === 'SCHEDULED' && !matchedIds.has(trip.tripId)).slice(0, 3).map(trip => `${trip.tripId}@${trip.startDate}/${trip.startTime}`));
-          if (spec.alsoPublishes?.includes('vehicle_positions')) vehicleParts.push(matchVehicles(decoded.vehicles.filter(vehicle => inGroup(vehicle.routeId)), { ...matching, shards }));
+        const routed = feedIds.length === 1 ? [decoded] : routeByTimetable(decoded, discoveries);
+        const applied: AppliedTripUpdates[] = [], matchedVehicles: unknown[] = [];
+        let unavailable = false, windowReasons: string[] = [];
+        const groupStats: unknown[] = [];
+        for (const [index, feedId] of feedIds.entries()) {
+          const part = routed[index]!;
+          if (!part.trips.length && !part.vehicles.length && feedIds.length > 1) continue;
+          // An agency-split schedule (SF Bay) is matched one agency group at a time, so the
+          // coordinator never holds the whole region's timetable; a last pass holds trips on
+          // routes the schedule does not publish, which stay unmatched.
+          const groups = agencyGroups(current.manifest, feedId);
+          const agencyOf = new Map(groups ? discoveries[index]!.routes.map(route => [route.providerId, route.agencyRef as string]) : []);
+          const agency = (routeId: string | undefined) => agencyOf.get(routeId ?? '') ?? '';
+          const feedResults: AppliedTripUpdates[] = [];
+          for (const group of groups ? [...groups, null] : [undefined]) {
+            const inGroup = (routeId: string | undefined) => group === undefined || (group ? group.has(agency(routeId)) : !groups!.some(known => known.has(agency(routeId))));
+            const sub = group === undefined ? part : { ...part, trips: part.trips.filter(trip => inGroup(trip.routeId)), vehicles: part.vehicles.filter(vehicle => inGroup(vehicle.routeId)) };
+            if (group !== undefined && !sub.trips.length && !sub.vehicles.length) continue;
+            const window = group === undefined ? await matchWindow(feedId) : group === null ? null : await loadScheduleWindow({ manifest: current.manifest,
+              instant: new Date(nowSeconds * 1000).toISOString(), windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [feedId], agencyRefs: [...group] as TransitRef[] });
+            const shards = window?.shards.map(entry => entry.shard) ?? [];
+            if (window) { unavailable ||= window.status === 'unavailable'; windowReasons = [...new Set([...windowReasons, ...window.reasons])]; }
+            if (spec.kind === 'vehicle_positions') { matchedVehicles.push(...await applyVehiclePositions(sub.vehicles, { ...matching(feedId), shards })); continue; }
+            const result = await applyTripUpdates(sub, { ...matching(feedId), shards, discoveries: [discoveries[index]!] });
+            applied.push(result); feedResults.push(result);
+            if (groups) {
+              // Which agency groups match, with a few unmatched trips, so a low rate can be traced.
+              const matchedIds = new Set(result.stopUpdates.map(update => update.tripId));
+              groupStats.push([group ? [...group].map(ref => ref.split(':').at(-1)!).join('+').slice(0, 48) : 'unpublished', result.match.eligible, result.match.matched,
+                sub.trips.filter(trip => trip.scheduleRelationship === 'SCHEDULED' && !matchedIds.has(trip.tripId)).slice(0, 3).map(trip => `${trip.tripId}@${trip.startDate}/${trip.startTime}`)]);
+            }
+            // Same documents, same verified shards: no second fetch or integrity pass.
+            if (spec.alsoPublishes?.includes('vehicle_positions')) matchedVehicles.push(...matchVehicles(settleStoppedVehicles(sub.vehicles, sub.trips), { ...matching(feedId), shards }));
+          }
+          if (feedResults.length) {
+            const feedMatch = feedResults.length === 1 ? feedResults[0]!.match : combineApplied(feedResults, coverage.thresholds.minimumScheduleMatchRate, current.version).match;
+            await this.#state.storage.put(`stats:trip_updates:${feedId}`, { artifactVersion: current.version.artifactVersion, ...feedMatch, atSeconds: nowSeconds });
+          }
         }
+        if (groupStats.length) console.info(JSON.stringify({ event: 'regional_trip_match_groups', region: coverage.id, feed: policy.feedId, groups: groupStats }));
         lap('matched');
-        const applied = mergeAppliedTripUpdates(parts, decoded.trips, current.version, coverage.thresholds.minimumScheduleMatchRate, decoded.warnings);
-        // Which agency groups match, so a low rate can be traced to its publisher.
-        console.info(JSON.stringify({ event: 'regional_trip_match_groups', region: coverage.id,
-          groups: parts.map((part, index) => [groupNames[index] ?? 'unpublished', part.match.eligible, part.match.matched, unmatchedSamples[index] ?? []]) }));
-        payload = applied.stopUpdates; degraded = applied.degraded; warnings = applied.warnings;
-        if (spec.alsoPublishes?.includes('vehicle_positions')) vehicles = vehicleParts.flat();
-        Object.assign(timings, { rows: payload.length, groups: groups.length });
-        console.info(JSON.stringify({ event: 'regional_trip_match', region: coverage.id, ...applied.match, ...applied.excluded }));
-        await this.#state.storage.put('stats:trip_updates', { artifactVersion: current.version.artifactVersion, ...applied.match, atSeconds: nowSeconds });
-      } else if (spec.kind === 'trip_updates') {
-        const window = await matchWindow();
-        lap('schedule');
-        const discovery = await this.#discoveryIndex(policy.feedId, current.manifest);
-        lap('discovery');
-        const applied = await applyTripUpdates(decoded, { ...matching, shards: window.shards.map(entry => entry.shard), discoveries: [discovery] });
-        lap('matched');
-        payload = applied.stopUpdates; degraded = applied.degraded || window.status === 'unavailable'; warnings = [...applied.warnings, ...window.reasons];
-        // Same documents, same verified shards: no second fetch or integrity pass.
-        if (spec.alsoPublishes?.includes('vehicle_positions')) vehicles = matchVehicles(settleStoppedVehicles(decoded.vehicles, decoded.trips), { ...matching, shards: window.shards.map(entry => entry.shard) });
-        Object.assign(timings, { rows: payload.length });
-        console.info(JSON.stringify({ event: 'regional_trip_match', region: coverage.id, ...applied.match, ...applied.excluded }));
-        // The schedule refresh compares this before and after publishing a new artifact.
-        await this.#state.storage.put('stats:trip_updates', { artifactVersion: current.version.artifactVersion, ...applied.match, atSeconds: nowSeconds });
-      }
-      if (spec.kind === 'vehicle_positions' && groups) {
-        const discovery = await this.#discoveryIndex(policy.feedId, current.manifest);
-        const agencyOf = new Map(discovery.routes.map(route => [route.providerId, route.agencyRef as string]));
-        const matched: NormalizedVehicle[] = [];
-        for (const group of groups) {
-          const own = decoded.vehicles.filter(vehicle => group.has(agencyOf.get(vehicle.routeId ?? '') ?? ''));
-          if (!own.length) continue;
-          const window = await loadScheduleWindow({ manifest: current.manifest, instant: new Date(nowSeconds * 1000).toISOString(),
-            windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [policy.feedId], agencyRefs: [...group] as TransitRef[] });
-          matched.push(...await applyVehiclePositions(own, { ...matching, shards: window.shards.map(entry => entry.shard) }));
+        if (spec.kind === 'vehicle_positions') payload = matchedVehicles;
+        else {
+          const combined = applied.length === 1 ? applied[0]! : combineApplied(applied, coverage.thresholds.minimumScheduleMatchRate, current.version);
+          // Publish the calls someone can still use: none more than ten minutes past, and none
+          // beyond the timetable span this poll matched against. Elsewhere the timetable
+          // stands. A busy bus network's snapshot is otherwise mostly passed or distant calls.
+          const past = nowSeconds - PAST_CALL_SECONDS, horizon = nowSeconds + (policy.matchWindowSeconds ?? 6 * 3600);
+          payload = combined.stopUpdates.filter(row => {
+            const times = [row.departureTimeSeconds, row.arrivalTimeSeconds, row.scheduledDepartureTimeSeconds, row.scheduledArrivalTimeSeconds].filter((time): time is number => time !== undefined);
+            return !times.length || times.some(time => time >= past && time <= horizon);
+          });
+          degraded = combined.degraded || unavailable; warnings = [...combined.warnings, ...windowReasons];
+          if (spec.alsoPublishes?.includes('vehicle_positions')) vehicles = matchedVehicles;
+          Object.assign(timings, { rows: payload.length });
+          console.info(JSON.stringify({ event: 'regional_trip_match', region: coverage.id, feed: policy.feedId, ...combined.match, ...combined.excluded }));
+          // The schedule refresh compares this before and after publishing a new artifact.
+          await this.#state.storage.put('stats:trip_updates', { artifactVersion: current.version.artifactVersion, ...combined.match, atSeconds: nowSeconds });
         }
-        // Vehicles on routes the schedule does not publish stay as observed, unmatched.
-        matched.push(...decoded.vehicles.filter(vehicle => !groups.some(group => group.has(agencyOf.get(vehicle.routeId ?? '') ?? ''))).map(({ tripInstanceRef: _unverified, ...vehicle }) => vehicle));
-        payload = matched;
-      } else if (spec.kind === 'vehicle_positions') {
-        const window = await matchWindow();
-        payload = await applyVehiclePositions(decoded.vehicles, { ...matching, shards: window.shards.map(entry => entry.shard) });
       }
       if (spec.kind === 'service_alerts') payload = aliasAlertAgencies(decoded.alerts, policy.alertAgencyAliases);
       await this.#snapshots.publish(spec.kind, {
@@ -333,7 +375,7 @@ export class RegionFeedHub implements DurableObject {
         Object.assign(timings, { vehicles: vehicles.length });
       }
       lap('published');
-      console.info(JSON.stringify({ event: 'regional_feed_polled', region: coverage.id, feed: spec.kind, ...timings }));
+      console.info(JSON.stringify({ event: 'regional_feed_polled', region: coverage.id, source: policy.feedId, feed: spec.kind, ...timings }));
     } catch (error) {
       const reason = safePollFailureReason(error);
       if (reason === 'malformed_feed') await this.#snapshots?.warn(spec.kind, reason);

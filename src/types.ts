@@ -36,6 +36,7 @@ export interface Env extends CoverageWorkerBindings {
 
   // API Keys
   WMATA_API_KEY: string;           // DC Metro (WMATA) API key (secret)
+  MTA_BUS_API_KEY?: string;        // MTA Bus Time key (secret); NYC bus realtime stays off without it
   REGION_FEED_HUB?: DurableObjectNamespace;
   /** Edge schedule refresh (Cloudflare Workflow). */
   TRANSIT_REFRESH?: Workflow;

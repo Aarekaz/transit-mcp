@@ -4,13 +4,27 @@ const mta = 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds';
 /** Every NYCT subway trip-update document. Lines are published separately, and a
  * train rerouted onto another line still reports in its own line's document. */
 export const NYC_TRIP_FEEDS = ['gtfs', 'gtfs-ace', 'gtfs-bdfm', 'gtfs-g', 'gtfs-jz', 'gtfs-nqrw', 'gtfs-l', 'gtfs-si'] as const;
+/** MTA publishes bus timetables per borough plus MTA Bus Company; Bus Time publishes one
+ * realtime document for all of them. Archive names on rrgtfsfeeds. */
+export const NYC_BUS_ARCHIVES = { mta_bus_bx: 'gtfs_bx', mta_bus_b: 'gtfs_b', mta_bus_m: 'gtfs_m', mta_bus_q: 'gtfs_q', mta_bus_si: 'gtfs_si', mta_bus_co: 'gtfs_busco' } as const;
+export const NYC_BUS_FEEDS = Object.keys(NYC_BUS_ARCHIVES) as (keyof typeof NYC_BUS_ARCHIVES)[];
+const busTime = 'https://gtfsrt.prod.obanyc.com';
+/** Like Metrobus, NYC buses are too large for the planner; they serve departures, vehicles
+ * and alerts, and a journey from a bus stop walks to rail. */
+const busFeeds = NYC_BUS_FEEDS.map((id, index) => ({ id, planning: false as const, realtime: index > 0 ? [] : [
+  { kind: 'trip_updates' as const, url: new URL(`${busTime}/tripUpdates`), weight: 4, minIntervalSeconds: 60, maxBytes: 8_000_000, timeoutMs: 15_000 },
+  { kind: 'vehicle_positions' as const, url: new URL(`${busTime}/vehiclePositions`), weight: 2, minIntervalSeconds: 60, maxBytes: 4_000_000, timeoutMs: 10_000 },
+  { kind: 'service_alerts' as const, url: new URL(`${busTime}/alerts`), weight: 1, minIntervalSeconds: 120, maxBytes: 4_000_000, timeoutMs: 10_000 },
+] }));
 
 /** MTA supplemented subway GTFS (planned service changes for the coming days) and
  * NYCT GTFS-Realtime. NYCT vehicle entities ride in the trip feeds and report a stop
- * and status (stopped at, approaching, heading to), never coordinates. */
+ * and status (stopped at, approaching, heading to), never coordinates. The Long Island
+ * Rail Road and Metro-North share the coverage so a journey can change between them and
+ * the subway (Penn Station, Atlantic Av, Jamaica, Grand Central, Harlem-125 St). */
 export const NYC_COVERAGE = {
-  id: 'nyc', kind: 'region', displayName: 'New York City Subway',
-  aliases: ['NYC', 'New York', 'New York City', 'NYC Subway', 'MTA Subway'],
+  id: 'nyc', kind: 'region', displayName: 'New York City Subway, LIRR and Metro-North',
+  aliases: ['NYC', 'New York', 'New York City', 'NYC Subway', 'MTA Subway', 'MTA', 'LIRR', 'Long Island Rail Road', 'Metro-North', 'Metro-North Railroad'],
   feeds: [{ id: 'mta_subway', realtime: [
     { kind: 'trip_updates', parts: NYC_TRIP_FEEDS.map(id => ({ id, url: new URL(`${mta}/nyct%2F${id}`) })), alsoPublishes: ['vehicle_positions'],
       weight: 8, minIntervalSeconds: 30, maxBytes: 4_000_000, timeoutMs: 10_000 },
@@ -20,9 +34,21 @@ export const NYC_COVERAGE = {
     { kind: 'equipment_outages', format: 'nyct_ene', accept: 'application/json', parts: [
       { id: 'outages', url: new URL(`${mta}/nyct%2Fnyct_ene.json`) }, { id: 'equipment', url: new URL(`${mta}/nyct%2Fnyct_ene_equipments.json`) }],
       weight: 1, minIntervalSeconds: 300, maxBytes: 4_000_000, timeoutMs: 15_000 },
-  ] }],
-  agencyTimezones: {}, supportedModes: ['subway'],
-  bounds: [-74.3, 40.45, -73.65, 40.95],
+  ] },
+  // Vehicles ride in the trip document and carry GPS positions.
+  { id: 'lirr', realtime: [
+    { kind: 'trip_updates', url: new URL(`${mta}/lirr%2Fgtfs-lirr`), alsoPublishes: ['vehicle_positions'], weight: 4, minIntervalSeconds: 30, maxBytes: 4_000_000, timeoutMs: 10_000 },
+    { kind: 'service_alerts', url: new URL(`${mta}/camsys%2Flirr-alerts`), weight: 1, minIntervalSeconds: 60, maxBytes: 4_000_000, timeoutMs: 10_000 },
+  ] },
+  // Metro-North vehicle entities carry neither a position nor a stop, so none are published.
+  { id: 'mnr', realtime: [
+    { kind: 'trip_updates', url: new URL(`${mta}/mnr%2Fgtfs-mnr`), weight: 4, minIntervalSeconds: 30, maxBytes: 4_000_000, timeoutMs: 10_000 },
+    { kind: 'service_alerts', url: new URL(`${mta}/camsys%2Fmnr-alerts`), weight: 1, minIntervalSeconds: 60, maxBytes: 4_000_000, timeoutMs: 10_000 },
+  ] },
+  ...busFeeds],
+  agencyTimezones: {}, supportedModes: ['subway', 'rail', 'bus'],
+  // Montauk, New Haven and Poughkeepsie included.
+  bounds: [-74.3, 40.45, -71.8, 41.8],
   capabilities: { schedules: true, planning: true, realtimeDepartures: true, alerts: true, vehicles: true, accessibility: true },
   thresholds: {
     tripUpdates: { realtimeSeconds: 180, staleSeconds: 600 },

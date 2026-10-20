@@ -6,8 +6,8 @@ import { agencyGrouping, partitionSchedule } from '../../src/transit/gtfs/static
 import { decodeScheduleShard } from '../../src/transit/gtfs/static/shards';
 import type { GtfsScheduleFiles } from '../../src/transit/gtfs/static/schema';
 import { loadScheduleWindow } from '../../src/transit/planner/schedule-index';
-import { mergeAppliedTripUpdates, type AppliedTripUpdates } from '../../src/transit/gtfs/realtime/trip-match';
-import { agencyGroups } from '../../src/transit/gtfs/realtime/region-feed-hub';
+import type { AppliedTripUpdates } from '../../src/transit/gtfs/realtime/trip-match';
+import { agencyGroups, combineApplied } from '../../src/transit/gtfs/realtime/region-feed-hub';
 
 /** Two bus agencies that never meet, joined by a rail backbone; every trip has a block. */
 const FILES: GtfsScheduleFiles = {
@@ -30,10 +30,9 @@ const compile = (ignore = true) => compileSchedule({ coverage: getCoverage('sfba
   source: { url: 'https://api.511.org/transit/datafeeds', retrievedAt: '2026-10-20T01:30:33Z' }, ...(ignore ? { ignoredFields: ['trips.txt:block_id' as const] } : {}) });
 
 describe('agency-split schedules', () => {
-  it('drops block continuations only when the build says so, so bands can carry the feed', async () => {
-    await expect(partitionSchedule(await compile(false), 3600)).rejects.toThrow(/block continuations/);
-    const compiled = await compile();
-    expect(compiled.shard.trips.every(trip => trip.blockId === '')).toBe(true);
+  it('drops block continuations only when the build says so', async () => {
+    expect((await compile(false)).shard.trips.map(trip => trip.blockId).sort()).toEqual(['b1', 'b1', 'b2', 'b3']);
+    expect((await compile()).shard.trips.every(trip => trip.blockId === '')).toBe(true);
   });
 
   it('groups the backbone together, then the busiest agencies, and scopes each shard to its own service', async () => {
@@ -69,7 +68,8 @@ describe('agency-split schedules', () => {
     const agencies = new Set(window.shards.flatMap(entry => entry.shard.routes.map(route => route.agencyRef)));
     expect([...agencies].sort()).toEqual([ref('agency', 'BA'), ref('agency', 'MU')].sort());
     expect(read.every(key => split.manifest.shards.find(descriptor => descriptor.key === key)!.agencyRefs!.some(agency => agency !== ref('agency', 'AC')))).toBe(true);
-    expect(agencyGroups(split.manifest)!.map(group => [...group])).toHaveLength(3);
+    expect(agencyGroups(split.manifest, 'sf511')!.map(group => [...group])).toHaveLength(3);
+    expect(agencyGroups(split.manifest, 'other')).toBeNull();
   });
 
   it('never reads the fields it declares unused, so errors about them cannot change a journey', async () => {
@@ -87,13 +87,13 @@ describe('agency-split schedules', () => {
 
   it('judges schedule identity over all groups, never one small group', () => {
     const part = (eligible: number, matched: number): AppliedTripUpdates => ({ version: {} as AppliedTripUpdates['version'], trips: [], stopUpdates: [],
-      match: { eligible, matched, rate: eligible ? matched / eligible : 1 }, excluded: { nonRevenue: 0, invalidExtras: 0, unrepresentableAdded: 0 },
+      match: { eligible, matched, rate: eligible ? matched / eligible : 1 }, excluded: { nonRevenue: 0, invalidExtras: 0, unrepresentableAdded: 0, beyondWindow: 0 },
       degraded: eligible > 0 && matched === 0, warnings: eligible > 0 && matched === 0 ? ['SCHEDULE_REALTIME_MISMATCH'] : [] });
     // A ferry group with one unmatched trip beside 99 matched buses is healthy.
-    const healthy = mergeAppliedTripUpdates([part(99, 99), part(1, 0)], [], {} as AppliedTripUpdates['version'], 0.95, []);
+    const healthy = combineApplied([part(99, 99), part(1, 0)], 0.95, {} as AppliedTripUpdates['version']);
     expect(healthy).toMatchObject({ degraded: false, match: { eligible: 100, matched: 99 } });
     expect(healthy.warnings).not.toContain('SCHEDULE_REALTIME_MISMATCH');
-    const broken = mergeAppliedTripUpdates([part(60, 50), part(40, 30)], [], {} as AppliedTripUpdates['version'], 0.95, []);
+    const broken = combineApplied([part(60, 50), part(40, 30)], 0.95, {} as AppliedTripUpdates['version']);
     expect(broken).toMatchObject({ degraded: true, match: { eligible: 100, matched: 80 } });
     expect(broken.warnings).toContain('SCHEDULE_REALTIME_MISMATCH');
   });

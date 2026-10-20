@@ -36,7 +36,7 @@ const metadataSchema = z.object({
     mode: z.enum(['tram', 'subway', 'rail', 'bus', 'ferry', 'cable_tram', 'aerial', 'funicular', 'trolleybus', 'monorail']),
     routeType: uint, color: z.string(), textColor: z.string() })),
   trips: z.array(z.object({ ...tripIdentity, patternId: hash, headsign: z.string(), directionId: direction,
-    blockId: z.string(), wheelchairAccessible: uint.max(2), bikesAllowed: uint.max(2) })),
+    blockId: z.string(), wheelchairAccessible: uint.max(2), bikesAllowed: uint.max(2), shortName: id.optional() })),
   patterns: z.array(z.object({ id: hash, routeRef, directionId: direction, stopRefs: z.array(stopRef).min(1),
     pickupTypes: z.array(uint.max(3)), dropOffTypes: z.array(uint.max(3)) })),
   calendars: z.record(id, calendar),

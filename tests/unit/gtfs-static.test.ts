@@ -249,10 +249,17 @@ describe('coverage-neutral schedule compilation', () => {
     await expect(compiler.compileSchedule({ ...scheduleInput(), source: { url: 'https://511.org/?api_key=secret', retrievedAt: '2026-10-17T00:00:00Z' } })).rejects.toThrow(/source URL/);
   });
 
-  it('rejects credential-bearing feed_info links instead of storing them in artifacts', async () => {
+  it('never stores a feed_info link that could carry a credential, leaving it out', async () => {
     const input = scheduleInput();
     input.files['feed_info.txt'] = input.files['feed_info.txt'].replace('https://511.org,en', 'https://511.org?api_key=do-not-publish,en');
-    await expect(compiler.compileSchedule(input)).rejects.toThrow(/feed_info URL/);
+    const compiled = await compiler.compileSchedule(input);
+    expect(compiled.manifest.sources[0]!.feedInfo[0]).not.toHaveProperty('feed_publisher_url');
+    expect(new TextDecoder().decode(compiled.shardBytes)).not.toContain('do-not-publish');
+    // A fragment is left out too (MTA bus feeds link a forum with #!); a clean link is kept.
+    const fragment = scheduleInput();
+    fragment.files['feed_info.txt'] = fragment.files['feed_info.txt'].replace('https://511.org,en', 'https://groups.example.org/forum/#!forum/developers,en');
+    expect((await compiler.compileSchedule(fragment)).manifest.sources[0]!.feedInfo[0]).not.toHaveProperty('feed_publisher_url');
+    expect((await compiler.compileSchedule(scheduleInput())).manifest.sources[0]!.feedInfo[0]).toHaveProperty('feed_publisher_url', 'https://511.org');
   });
 
   it('rejects transfers without their required endpoints or minimum time', async () => {
