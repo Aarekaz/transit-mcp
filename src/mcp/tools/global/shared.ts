@@ -577,9 +577,12 @@ export async function trainCandidates(context: MetroMcpContext, data: TransitDat
   // A DC train number (`644`) or an NYCT train ID (`1A 1023 207/FAR`), compared case- and spacing-insensitively.
   const normalize = (value: string) => value.trim().replace(/\s+/g, ' ').toUpperCase();
   const number = normalize(query.replace(/^\s*train\s+/i, ''));
-  if (!/^[A-Z0-9 +/.-]{1,32}$/.test(number) || !effectiveCapabilities(context, data.coverage, false).vehicles) return { candidates: [], sources: [] };
+  // Every train number has a digit; a station name without one never waits on vehicle feeds.
+  if (!/^[A-Z0-9 +/.-]{1,32}$/.test(number) || !/\d/.test(number) || !effectiveCapabilities(context, data.coverage, false).vehicles) return { candidates: [], sources: [] };
   const now = Math.floor(Date.now() / 1000);
-  const feed = await readFeed<NormalizedVehicle>(context, data, 'vehicle_positions', now, signal);
+  // Trains only: bus feeds (kept out of whole-feed planning) hold thousands of vehicles and no train numbers.
+  const trainFeeds = data.coverage.feeds.filter(feed => !('planning' in feed && feed.planning === false)).map(feed => feed.id);
+  const feed = await readFeed<NormalizedVehicle>(context, data, 'vehicle_positions', now, signal, [], trainFeeds);
   const maxAge = data.coverage.thresholds.vehiclePositions.realtimeSeconds;
   const candidates = new Map<string, Candidate>();
   for (const vehicle of feed.status === 'realtime' ? feed.payload ?? [] : []) {
