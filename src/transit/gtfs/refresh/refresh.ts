@@ -281,6 +281,12 @@ export async function collectGarbage(bucket: R2Bucket, coverageId: string, runAr
   return { deleted: garbage.length };
 }
 
+/** Whole days from one service date (YYYYMMDD) to another; negative when `to` is earlier. */
+function daysBetween(from: string, to: string): number {
+  const at = (date: string) => Date.UTC(Number(date.slice(0, 4)), Number(date.slice(4, 6)) - 1, Number(date.slice(6, 8)));
+  return Math.round((at(to) - at(from)) / 86_400_000);
+}
+
 /** Claims one request from the coordinator that owns this coverage's credential budget. */
 async function claimStaticQuota(env: Env, coverageId: string, feedId: string): Promise<boolean> {
   const realtime = getRealtimeSource(coverageId, feedId);
@@ -362,9 +368,15 @@ export async function checkStaticSources(env: Env, now: number): Promise<void> {
       const published = await new StaticArtifactStore(bucket, policy.coverageId).current().catch(() => null);
       const publishedSource = published?.manifest.sources.find(source => source.feedId === policy.feedId);
       const publishedArchive = publishedSource?.derivedFrom?.archiveSha256 ?? publishedSource?.archiveSha256;
-      if (policy.build !== 'offline' && next.sha256 && next.retrievedAt && publishedArchive !== next.sha256) {
-        // Instance IDs from before coverages held several feeds stay valid for the primary feed.
-        const id = `refresh-${policy.coverageId}-${primary ? '' : `${policy.feedId}-`}${next.sha256.slice(0, 32)}`;
+      // A timetable covers a fixed window of days from when it was built. An archive the
+      // publisher leaves unchanged must still be rebuilt before that window runs out.
+      const today = new Date(now).toISOString().slice(0, 10).replaceAll('-', '');
+      const windowEnd = published?.manifest.shards.filter(shard => shard.feedId === policy.feedId).reduce((end, shard) => shard.window.endDate > end ? shard.window.endDate : end, '');
+      const rewindow = publishedArchive === next.sha256 && !!windowEnd && daysBetween(today, windowEnd) < Math.ceil(policy.windowDays / 2);
+      if (policy.build !== 'offline' && next.sha256 && next.retrievedAt && (publishedArchive !== next.sha256 || rewindow)) {
+        // Instance IDs from before coverages held several feeds stay valid for the primary feed;
+        // a rebuild of the same archive is one instance per day.
+        const id = `refresh-${policy.coverageId}-${primary ? '' : `${policy.feedId}-`}${next.sha256.slice(0, 32)}${rewindow ? `-w${today}` : ''}`;
         try {
           await workflow.create({ id, params: { coverageId: policy.coverageId, feedId: policy.feedId, archiveSha256: next.sha256, retrievedAt: next.retrievedAt } satisfies RefreshParams });
           console.info(JSON.stringify({ event: 'schedule_refresh_started', coverage: policy.coverageId, feed: policy.feedId, id }));

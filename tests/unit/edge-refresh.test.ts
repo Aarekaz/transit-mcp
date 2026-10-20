@@ -283,6 +283,28 @@ describe('edge refresh workflow', () => {
     expect([...f.db.objects.keys()].some(key => key.startsWith('work/'))).toBe(false);
   });
 
+  it('rebuilds an unchanged archive before its published window runs out', async () => {
+    const f = await setup();
+    expect((await runRefresh(f.env, f.params, steps())).outcome).toBe('published');
+    const archive = new Uint8Array(await (await f.db.bucket.get(f.keys.archive(f.hash)))!.arrayBuffer());
+    const created: string[] = [];
+    const env = { ...f.env, TRANSIT_REFRESH: { create: async (options: { id: string }) => {
+      if (created.includes(options.id)) throw new Error('instance already exists');
+      created.push(options.id);
+    }, get: async () => ({ status: async () => ({ status: 'running' }), restart: async () => {} }) } } as unknown as Env;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => String(input instanceof Request ? input.url : input).includes('gtfs_supplemented')
+      ? new Response(archive, { headers: { etag: '"same"' } }) : new Response(null, { status: 503 }));
+    vi.spyOn(console, 'info').mockImplementation(() => {}); vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Freshly built: a full window ahead, nothing to do.
+    await checkStaticSources(env, Date.now());
+    expect(created).toEqual([]);
+    // Five days on, under half the window is left: rebuild the same archive, once that day.
+    vi.setSystemTime(Date.now() + 5 * 86_400_000);
+    await checkStaticSources(env, Date.now());
+    await checkStaticSources(env, Date.now() + 10 * 60_000);
+    expect(created).toEqual([`refresh-nyc-${f.hash.slice(0, 32)}-w${new Date(Date.now()).toISOString().slice(0, 10).replaceAll('-', '')}`]);
+  });
+
   it('restarts a failed refresh for the current archive a bounded number of times', async () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW));
     const db = memoryStorage(), archive = await zip(NYC_FILES as Record<string, string>);
