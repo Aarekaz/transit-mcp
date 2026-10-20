@@ -6,7 +6,7 @@ It covers:
 
 - **New York:** the subway, the Long Island Rail Road, Metro-North and NYC buses.
 - **Washington DC:** Metrorail and Metrobus.
-- **SF Bay Area:** every operator in 511 SF Bay's regional feed, including BART, Muni, Caltrain, AC Transit, VTA, SamTrans and the ferries. Departures, alerts, vehicles and trip planning all work there.
+- **SF Bay Area:** every operator in 511 SF Bay's regional feed, including BART, Muni, Caltrain, AC Transit, VTA, SamTrans and the ferries. Departures, alerts and vehicles work there, and so does trip planning.
 
 **Metro MCP is now Transit MCP.**
 
