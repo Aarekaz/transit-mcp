@@ -127,7 +127,8 @@ export function combineApplied(results: readonly AppliedTripUpdates[], minimumSc
   const sum = (pick: (result: AppliedTripUpdates) => number) => results.reduce((total, result) => total + pick(result), 0);
   const eligible = sum(result => result.match.eligible), matched = sum(result => result.match.matched), rate = eligible ? matched / eligible : 1;
   const excluded = { nonRevenue: sum(result => result.excluded.nonRevenue), invalidExtras: sum(result => result.excluded.invalidExtras),
-    unrepresentableAdded: sum(result => result.excluded.unrepresentableAdded), beyondWindow: sum(result => result.excluded.beyondWindow) };
+    unrepresentableAdded: sum(result => result.excluded.unrepresentableAdded), beyondWindow: sum(result => result.excluded.beyondWindow),
+    ...(results.some(result => result.excluded.expired !== undefined) ? { expired: sum(result => result.excluded.expired ?? 0) } : {}) };
   const mismatched = eligible >= MIN_ELIGIBLE_FOR_MATCH_RATE ? rate < minimumScheduleMatchRate : eligible > 0 && matched === 0;
   const degraded = excluded.invalidExtras > 0 || mismatched;
   const warnings = [...new Set(results.flatMap(result => result.warnings).filter(warning => warning !== 'SCHEDULE_REALTIME_MISMATCH'))];
@@ -326,7 +327,9 @@ export class RegionFeedHub implements DurableObject {
       const matchWindow = (feedId: string) => loadScheduleWindow({ manifest: current.manifest, instant: windowStart, windowSeconds, readShard, feedIds: [feedId], decoded: this.#shards });
       const matching = (feedId: string) => ({ manifest: current.manifest, version: current.version, feedId, tripMatching: policy.tripMatching,
         minimumScheduleMatchRate: coverage.thresholds.minimumScheduleMatchRate, horizonEndSeconds: nowSeconds + (policy.matchWindowSeconds ?? 6 * 3600),
-        ...(policy.undatedTrips ? { undatedWindow: { startSeconds: nowSeconds - lookback, endSeconds: nowSeconds + (policy.matchWindowSeconds ?? 6 * 3600) } } : {}) });
+        ...(policy.undatedTrips ? { undatedWindow: { startSeconds: nowSeconds - lookback, endSeconds: nowSeconds + (policy.matchWindowSeconds ?? 6 * 3600) } } : {}),
+        ...(policy.providerQuirks?.renumberedStopSequences ? { renumberedStopSequences: true } : {}), ...(policy.providerQuirks?.advisoryStartTimes ? { advisoryStartTimes: true } : {}),
+        ...(policy.providerQuirks?.staleEntities ? { expiredBeforeSeconds: nowSeconds - lookback } : {}) });
       const discoveryOf = async (feedId: string) => {
         const descriptors = current.manifest.discoveries.filter(item => item.feedId === feedId);
         if (descriptors.length !== 1) throw new Error('Discovery identity missing or ambiguous');

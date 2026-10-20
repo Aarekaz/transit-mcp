@@ -81,6 +81,10 @@ export interface RealtimeSourcePolicy {
   /** `current_service_day`: the provider omits start_date on unambiguous trips (allowed by
    * GTFS-Realtime); resolve them only to the one scheduled instance in the match window. */
   undatedTrips?: 'current_service_day';
+  /** Reviewed deviations of this provider from GTFS-Realtime, each handled narrowly (see
+   * TripMatchContext): renumbered stop_sequence, actual start_time, and stale entities
+   * still reported after every predicted time has passed. */
+  providerQuirks?: { renumberedStopSequences?: true; advisoryStartTimes?: true; staleEntities?: true };
   /** Timetable span loaded to match trip updates; defaults to six hours. */
   matchWindowSeconds?: number;
 }

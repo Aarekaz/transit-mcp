@@ -21,6 +21,16 @@ export interface TripMatchContext {
    * the epoch span a trip instance must overlap to be resolved from today's or yesterday's
    * service day. Only an exactly-one instance matches; absent, undated trips never match. */
   undatedWindow?: { startSeconds: number; endSeconds: number };
+  /** The provider renumbers stop_sequence (511 sends Muni and VTA one lower than the
+   * timetable): a call is identified by stop_id, and the sequence only chooses between
+   * repeated visits, else the next visit in order. An exact repeat of a call is skipped. */
+  renumberedStopSequences?: boolean;
+  /** The provider sends actual start times: a non-frequency trip instance is identified by
+   * trip ID and service date alone, as GTFS defines it. */
+  advisoryStartTimes?: boolean;
+  /** Epoch seconds: a trip whose every predicted time is earlier is a stale entity, counted
+   * as `expired` rather than judged. */
+  expiredBeforeSeconds?: number;
 }
 /** Below this many eligible trips a match rate is not evidence about the schedule. */
 export const MIN_ELIGIBLE_FOR_MATCH_RATE = 20;
@@ -39,7 +49,7 @@ export interface AppliedTripUpdates {
   version: StaticVersion; trips: NormalizedTripUpdate[]; stopUpdates: NormalizedStopUpdate[];
   match: { eligible: number; matched: number; rate: number };
   /** Trips proven to serve no rider; never part of the match rate. */
-  excluded: { nonRevenue: number; invalidExtras: number; unrepresentableAdded: number; beyondWindow: number }; degraded: boolean; warnings: string[];
+  excluded: { nonRevenue: number; invalidExtras: number; unrepresentableAdded: number; beyondWindow: number; expired?: number }; degraded: boolean; warnings: string[];
   /** Up to five unmatched trips and why (`no_instance` or `calls_rejected`), for diagnosis. */
   unmatchedSample?: string[];
 }
@@ -237,6 +247,7 @@ function tripCandidates(update: NormalizedTripUpdate, tripKey: string, serviceDa
     // NYCT start_time reports the actual dispatch, not the scheduled origin time; its
     // trip_id already encodes the scheduled origin, so identity is (trip, date, route).
     else if (context.tripMatching === 'nyct_suffix') startSeconds = first;
+    else if (context.advisoryStartTimes) startSeconds = first;
     else if (startSeconds !== first) continue;
     const result: MatchedTripInstance = { shard, trip, timezone, serviceDate, startSeconds,
       shiftSeconds: startSeconds - first, originSeconds: serviceDayOrigin(serviceDate, timezone) / 1000,
@@ -246,7 +257,7 @@ function tripCandidates(update: NormalizedTripUpdate, tripKey: string, serviceDa
   return candidates;
 }
 
-function matchedUpdates(update: NormalizedTripUpdate, match: MatchedTripInstance, why?: string[]): NormalizedStopUpdate[] | null {
+function matchedUpdates(update: NormalizedTripUpdate, match: MatchedTripInstance, why?: string[], renumbered = false): NormalizedStopUpdate[] | null {
   const { trip, shard } = match;
   let { startSeconds, originSeconds, serviceDate, tripInstanceRef, shiftSeconds } = match;
   let tripId = trip.providerId;
@@ -265,7 +276,13 @@ function matchedUpdates(update: NormalizedTripUpdate, match: MatchedTripInstance
   const stops = new Map<number, DecodedStopUpdate>(); let previousSequence = -1;
   // Cancellation applies to the whole matched instance; attached stop updates have no semantics.
   for (const stop of update.scheduleRelationship === 'CANCELED' ? [] : update.stops) {
-    const candidates = trip.stopTimes.filter(call => stop.stopSequence !== undefined ? call.sequence === stop.stopSequence : parseTransitRef(call.stopRef)?.id === stop.stopId);
+    const byStop = renumbered && stop.stopId ? trip.stopTimes.filter(call => parseTransitRef(call.stopRef)?.id === stop.stopId) : undefined;
+    let candidates = byStop ?? trip.stopTimes.filter(call => stop.stopSequence !== undefined ? call.sequence === stop.stopSequence : parseTransitRef(call.stopRef)?.id === stop.stopId);
+    if (byStop && byStop.length > 1) {
+      const chosen = byStop.find(call => call.sequence === stop.stopSequence) ?? byStop.find(call => call.sequence > previousSequence);
+      if (chosen) candidates = [chosen];
+    }
+    if (byStop && candidates.length === 1 && candidates[0]!.sequence === previousSequence) continue;
     const reject = (reason: string) => { why?.push(`${reason} seq=${stop.stopSequence ?? '-'} stop=${stop.stopId ?? '-'} scheduled=${candidates.map(item => `${item.sequence}:${parseTransitRef(item.stopRef)?.id}`).join(',').slice(0, 60)}`); return null; };
     if (candidates.length !== 1 || stop.stopScheduleRelationship === 'UNKNOWN') return reject(candidates.length ? 'ambiguous_call' : 'no_call');
     const call = candidates[0]!;
@@ -432,7 +449,7 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
     staticIds.set(discovery.feedId, ids as Set<string>);
   }
   const unmatchedSample: string[] = [];
-  const stopUpdates: NormalizedStopUpdate[] = []; let eligible = 0, matched = 0, invalidExtras = 0, nonRevenue = 0, unrepresentableAdded = 0, beyondWindow = 0;
+  const stopUpdates: NormalizedStopUpdate[] = []; let eligible = 0, matched = 0, invalidExtras = 0, nonRevenue = 0, unrepresentableAdded = 0, beyondWindow = 0, expired = 0;
   const timezone = Object.entries(context.manifest.agencyTimezones).find(([ref]) => !context.feedId || parseTransitRef(ref)?.feed === context.feedId)?.[1];
   const startsAfterHorizon = (update: NormalizedTripUpdate) => {
     if (context.horizonEndSeconds === undefined || !timezone || !update.startDate || !update.startTime) return false;
@@ -466,6 +483,10 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
       }
       continue;
     }
+    if (context.expiredBeforeSeconds !== undefined) {
+      const times = update.stops.flatMap(stop => [stop.arrivalTimeSeconds, stop.departureTimeSeconds]).filter((time): time is number => time !== undefined);
+      if (times.length && times.every(time => time < context.expiredBeforeSeconds!)) { expired++; continue; }
+    }
     eligible++;
     const match = matchIndexedTrip(update, context, index);
     if (nyct) {
@@ -480,7 +501,7 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
       if (!ids || !duplicateId || ids.has(duplicateId)) continue;
     }
     const why: string[] = [];
-    const updates = match ? matchedUpdates(update, match, why) : null;
+    const updates = match ? matchedUpdates(update, match, why, context.renumberedStopSequences) : null;
     if (updates) { matched++; stopUpdates.push(...updates); }
     else if (unmatchedSample.length < 5) {
       // For diagnosis: the reported route against the scheduled trip's own routes, or the call that failed.
@@ -496,6 +517,6 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
   const threshold = context.minimumScheduleMatchRate ?? SFBAY_COVERAGE.thresholds.minimumScheduleMatchRate;
   const mismatched = eligible >= MIN_ELIGIBLE_FOR_MATCH_RATE ? rate < threshold : eligible > 0 && matched === 0;
   const degraded = invalidExtras > 0 || mismatched;
-  return { version: context.version, trips: feed.trips, stopUpdates, unmatchedSample, match: { eligible, matched, rate }, excluded: { nonRevenue, invalidExtras, unrepresentableAdded, beyondWindow }, degraded,
+  return { version: context.version, trips: feed.trips, stopUpdates, unmatchedSample, match: { eligible, matched, rate }, excluded: { nonRevenue, invalidExtras, unrepresentableAdded, beyondWindow, ...(context.expiredBeforeSeconds !== undefined ? { expired } : {}) }, degraded,
     warnings: [...feed.warnings, ...(degraded ? ['SCHEDULE_REALTIME_MISMATCH'] : [])] };
 }

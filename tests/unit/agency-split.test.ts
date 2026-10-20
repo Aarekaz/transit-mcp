@@ -6,7 +6,7 @@ import { agencyGrouping, partitionSchedule } from '../../src/transit/gtfs/static
 import { decodeScheduleShard } from '../../src/transit/gtfs/static/shards';
 import type { GtfsScheduleFiles } from '../../src/transit/gtfs/static/schema';
 import { loadScheduleWindow } from '../../src/transit/planner/schedule-index';
-import { matchTripInstance, type AppliedTripUpdates } from '../../src/transit/gtfs/realtime/trip-match';
+import { applyTripUpdates, matchTripInstance, type AppliedTripUpdates } from '../../src/transit/gtfs/realtime/trip-match';
 import { staticVersion } from '../../src/transit/gtfs/realtime/snapshot-store';
 import { agencyGroups, combineApplied, vehiclesFromMatches } from '../../src/transit/gtfs/realtime/region-feed-hub';
 
@@ -122,6 +122,37 @@ describe('agency-split schedules', () => {
     expect(dated).toMatchObject({ tripInstanceRef: 'tr:BA:2:20' });
     expect(ambiguous!.tripInstanceRef).toBeUndefined();
     expect(unknown!.tripInstanceRef).toBeUndefined();
+  });
+
+  it('reads 511\'s renumbered sequences, repeated stops, actual start times and stale entities only under its quirks', async () => {
+    // Sequences start at 2 (as Muni's do) and the train calls at s2 twice in a row (as BART's does).
+    const files: GtfsScheduleFiles = { ...FILES,
+      'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\ns1,One,37.7,-122.4\ns2,Two,37.71,-122.4\ns3,Three,37.72,-122.4\n',
+      'routes.txt': 'route_id,agency_id,route_short_name,route_long_name,route_type\nMU:1,MU,1,California,3\n',
+      'agency.txt': 'agency_id,agency_name,agency_url,agency_timezone\nMU,Muni,https://example.com,America/Los_Angeles\n',
+      'trips.txt': 'route_id,service_id,trip_id,trip_headsign\nMU:1,D,loop,Three\n',
+      'stop_times.txt': ['trip_id,arrival_time,departure_time,stop_id,stop_sequence', 'loop,09:00:00,09:00:00,s1,2', 'loop,09:05:00,09:05:00,s2,3', 'loop,09:06:00,09:06:00,s2,4', 'loop,09:10:00,09:10:00,s3,5'].join('\n') + '\n' };
+    const compiled = await compileSchedule({ coverage: getCoverage('sfbay')!, feedId: 'sf511', files, window: { startDate: '20261020', endDate: '20261020' },
+      source: { url: 'https://api.511.org/transit/datafeeds', retrievedAt: '2026-10-20T01:30:33Z' } });
+    const version = await staticVersion(compiled.manifest), at = (time: string) => Date.parse(`2026-10-20T${time}-07:00`) / 1000;
+    const quirks = { renumberedStopSequences: true, advisoryStartTimes: true, expiredBeforeSeconds: at('08:00:00') };
+    const apply = (stops: { stopId: string; stopSequence?: number; time: string }[], extra: Record<string, unknown> = {}, flags: object = quirks) => applyTripUpdates({ producerTimestampSeconds: 0, tripUpdates: [], vehicles: [], alerts: [], warnings: [],
+      trips: [{ entityId: 'e', tripId: 'loop', startDate: '20261020', scheduleRelationship: 'SCHEDULED', rawScheduleRelationship: 0, ...extra,
+        stops: stops.map(stop => ({ entityId: 'e', stopId: stop.stopId, stopSequence: stop.stopSequence, arrivalTimeSeconds: at(stop.time), departureTimeSeconds: at(stop.time), stopScheduleRelationship: 'SCHEDULED' as const })) }] },
+      { manifest: compiled.manifest, shards: [compiled.shard], version, feedId: 'sf511', tripMatching: 'exact', ...flags });
+    const predicted = (result: Awaited<ReturnType<typeof apply>>) => result.stopUpdates.filter(row => row.status === 'realtime').map(row => `${row.stopSequence}:${row.stopId}`);
+    // One lower than the timetable, as 511 sends Muni and VTA: the stop decides.
+    expect(predicted(await apply([{ stopId: 's1', stopSequence: 1, time: '09:01:00' }, { stopId: 's3', stopSequence: 4, time: '09:11:00' }]))).toEqual(['2:s1', '3:s2', '4:s2', '5:s3']);
+    // Undated visits to a stop called twice take the next visit in order; an exact repeat is skipped.
+    expect(predicted(await apply([{ stopId: 's2', time: '09:06:00' }, { stopId: 's2', time: '09:07:00' }]))).toEqual(['3:s2', '4:s2', '5:s3']);
+    expect(predicted(await apply([{ stopId: 's1', stopSequence: 1, time: '09:01:00' }, { stopId: 's1', stopSequence: 1, time: '09:01:00' }]))).toHaveLength(4);
+    // An actual start time still names the trip's one scheduled instance.
+    expect((await apply([{ stopId: 's3', time: '09:11:00' }], { startTime: '09:00:15' })).match.matched).toBe(1);
+    // Every prediction before the lookback: a stale entity, neither matched nor judged.
+    expect((await apply([{ stopId: 's3', time: '07:00:00' }])).excluded.expired).toBe(1);
+    // Without the quirks, the renumbered sequence is rejected and the start time must agree.
+    expect((await apply([{ stopId: 's1', stopSequence: 1, time: '09:01:00' }], {}, {})).match.matched).toBe(0);
+    expect((await apply([{ stopId: 's3', stopSequence: 5, time: '09:11:00' }], { startTime: '09:00:15' }, {})).match.matched).toBe(0);
   });
 
   it('judges schedule identity over all groups, never one small group', () => {
