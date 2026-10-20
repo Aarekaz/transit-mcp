@@ -29,6 +29,11 @@ export function safePollFailureReason(error: unknown): string {
   // Fixed vocabulary only: never echo upstream bodies, URLs or credentials.
   if (error instanceof Error && /^upstream_(status_\d{3}|quota_exhausted|credential_missing|empty_body)$/.test(error.message)) return error.message;
   if (error instanceof Error && error.name === 'AbortError') return 'upstream_timeout';
+  // Our own failures, by fixed name: they say where a poll stopped, never upstream text.
+  const internal: Record<string, string> = { 'Realtime payload byte budget exceeded': 'snapshot_payload_budget', 'Realtime metadata budget exceeded': 'snapshot_metadata_budget',
+    'Schedule shard byte budget exceeded': 'schedule_byte_budget', 'Schedule shard integrity failure': 'schedule_integrity', 'Realtime schedule integrity failure': 'schedule_integrity',
+    'Schedule shard identity mismatch': 'schedule_identity', 'Discovery integrity failure': 'discovery_integrity' };
+  if (error instanceof Error && Object.hasOwn(internal, error.message)) return internal[error.message]!;
   return 'upstream_request_failed';
 }
 
@@ -256,7 +261,7 @@ export class RegionFeedHub implements DurableObject {
       if (spec.kind === 'trip_updates' && groups) {
         const discovery = await this.#discoveryIndex(policy.feedId, current.manifest);
         lap('discovery');
-        const parts: Awaited<ReturnType<typeof applyTripUpdates>>[] = [], vehicleParts: NormalizedVehicle[][] = [];
+        const parts: Awaited<ReturnType<typeof applyTripUpdates>>[] = [], vehicleParts: NormalizedVehicle[][] = [], groupNames: string[] = [], unmatchedSamples: string[][] = [];
         const agencyOf = new Map(discovery.routes.map(route => [route.providerId, route.agencyRef as string]));
         for (const group of [...groups, null]) {
           // The last pass holds trips on routes the schedule does not publish: all unmatched.
@@ -267,10 +272,16 @@ export class RegionFeedHub implements DurableObject {
             windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [policy.feedId], agencyRefs: [...group] as TransitRef[] }) : null;
           const shards = window?.shards.map(entry => entry.shard) ?? [];
           parts.push(await applyTripUpdates({ ...decoded, trips }, { ...matching, shards, discoveries: [discovery] }));
+          groupNames.push(group ? [...group].map(agency => agency.split(':').at(-1)!).join('+').slice(0, 48) : 'unpublished');
+          const matchedIds = new Set(parts.at(-1)!.stopUpdates.map(update => update.tripId));
+          unmatchedSamples.push(trips.filter(trip => trip.scheduleRelationship === 'SCHEDULED' && !matchedIds.has(trip.tripId)).slice(0, 3).map(trip => `${trip.tripId}@${trip.startDate}/${trip.startTime}`));
           if (spec.alsoPublishes?.includes('vehicle_positions')) vehicleParts.push(matchVehicles(decoded.vehicles.filter(vehicle => inGroup(vehicle.routeId)), { ...matching, shards }));
         }
         lap('matched');
         const applied = mergeAppliedTripUpdates(parts, decoded.trips, current.version, coverage.thresholds.minimumScheduleMatchRate, decoded.warnings);
+        // Which agency groups match, so a low rate can be traced to its publisher.
+        console.info(JSON.stringify({ event: 'regional_trip_match_groups', region: coverage.id,
+          groups: parts.map((part, index) => [groupNames[index] ?? 'unpublished', part.match.eligible, part.match.matched, unmatchedSamples[index] ?? []]) }));
         payload = applied.stopUpdates; degraded = applied.degraded; warnings = applied.warnings;
         if (spec.alsoPublishes?.includes('vehicle_positions')) vehicles = vehicleParts.flat();
         Object.assign(timings, { rows: payload.length, groups: groups.length });
