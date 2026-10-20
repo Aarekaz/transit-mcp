@@ -7,7 +7,7 @@ import type { VerificationReason } from '../../../transit/core/results';
 import { safeAlertIdentifier, safeAlertSelector, type NormalizedAlert, type NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import { validateItinerary } from '../../../transit/planner/validator';
-import { loadScheduleWindow } from '../../../transit/planner/schedule-index';
+import { DecodedShardCache, loadScheduleWindow } from '../../../transit/planner/schedule-index';
 import { serviceDayOrigin } from '../../../transit/planner/service-day';
 import { parseGtfsTime } from '../../../transit/gtfs/static/time';
 import { parseTransitRef } from '../../../transit/core/refs';
@@ -94,11 +94,29 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
     const sources = [...meta.sources, ...(feed ? realtimeSource(data, feed, 'alerts', nowSeconds) : [])];
     const canonicalShards: ScheduleShard[] = [];
     const scopeUnavailable = (reasons: VerificationReason[] = ['SCOPE_LIMIT_EXCEEDED']) => complete({ ...unavailable(id, data, reasons), sources, alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] });
-    const tripPatternFeeds = feed.parts.filter(part => part.payload?.some(alert => alert.selectors?.some(selector => selector.trip && selector.trip.tripId === undefined))).map(part => part.feedId);
-    if (args.coverage && tripPatternFeeds.length) {
-      const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant: now, windowSeconds: 86400, feedIds: tripPatternFeeds });
-      if (schedule.status === 'unavailable') return scopeUnavailable(schedule.reasons);
-      canonicalShards.push(...schedule.shards.map(item => item.shard));
+    // A trip-pattern selector names one trip by route, direction and start: resolving it needs
+    // only the timetable running at that start, not a day of every feed (Bus Time sends many).
+    if (args.coverage) {
+      const patterns = new Map<string, { feedId: string; date: string; start: string }>();
+      for (const part of feed.parts) for (const alert of part.payload ?? []) for (const selector of alert.selectors ?? []) {
+        const trip = selector.trip;
+        if (trip && trip.tripId === undefined && trip.startDate && trip.startTime) for (const feedId of part.feedIds ?? [part.feedId]) patterns.set(`${feedId}/${trip.startDate}/${trip.startTime}`, { feedId, date: trip.startDate, start: trip.startTime });
+      }
+      const decoded = new DecodedShardCache(Number.MAX_SAFE_INTEGER), loaded = new Set<string>();
+      // An expired timetable cannot interpret them: fail closed rather than drop alerts.
+      const patternFeeds = [...new Set([...patterns.values()].map(pattern => pattern.feedId))];
+      if (patternFeeds.length) {
+        const current = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant: now, windowSeconds: 60, feedIds: patternFeeds, decoded });
+        if (current.status === 'unavailable') return scopeUnavailable(current.reasons);
+      }
+      for (const { feedId, date, start } of patterns.values()) {
+        const timezone = Object.entries(data.manifest.agencyTimezones).find(([ref]) => parseTransitRef(ref)?.feed === feedId)?.[1];
+        if (!timezone) continue;
+        let instant: string;
+        try { instant = new Date(serviceDayOrigin(date, timezone) + parseGtfsTime(start).totalSeconds * 1000).toISOString(); } catch { continue; }
+        const schedule = await loadScheduleWindow({ manifest: data.manifest, readShard: data.readObject, instant, windowSeconds: 60, feedIds: [feedId], decoded });
+        for (const item of schedule.shards) if (!loaded.has(item.key)) { loaded.add(item.key); canonicalShards.push(item.shard); }
+      }
     }
     // Alert provider IDs are meaningful only inside the authoritative snapshot feed.
     const scopes: (AlertScope & { window?: { start: number; end: number } })[] = [], feeds = new Set<string>();

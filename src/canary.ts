@@ -114,19 +114,28 @@ export async function runCanary(env: Env, now = Date.now()): Promise<CanaryRepor
   }
   if (on('sfbay')) {
     const hour = localHour(now, 'America/Los_Angeles'), service = hour >= 6 && hour < 22;
-    await check('sfbay.guided_plan', async () => {
-      const find = async (query: string) => (await tool('find_transit', { query, coverage: 'sfbay', limit: 3 })).candidates?.find((item: Structured) => item.stopType === 'station');
-      const sfo = await find('SFO'), powell = await find('Powell St');
-      expect(sfo && powell, 'stations not found');
-      const departures = await tool('get_departures', { stopRef: sfo.ref, limit: 3 });
-      expect(departures.status !== 'unavailable' && (!service || rows(departures.departures) > 0), `no SFO departures (${departures.status})`);
-      const hinted = await tool('plan_trip', { origin: { ref: sfo.ref }, destination: { ref: powell.ref } });
-      const routes = (hinted.routeHints?.direct ?? []).slice(0, 4).map((hint: Structured) => hint.ref);
-      expect(routes.length > 0, 'no route hints');
-      const guided = await tool('plan_trip', { origin: { ref: sfo.ref }, destination: { ref: powell.ref }, routes });
-      expect(!service || rows(guided.itineraries) > 0, `no guided itinerary (${guided.reasons})`);
-      return `${rows(departures.departures)} departures, ${rows(guided.itineraries)} itineraries`;
-    });
+    // Separate checks, each on its own budget: a slow plan is not a slow search.
+    const find = async (query: string) => (await tool('find_transit', { query, coverage: 'sfbay', limit: 3 })).candidates?.find((item: Structured) => item.stopType === 'station');
+    let sfo: Structured | undefined, powell: Structured | undefined, routes: string[] = [];
+    await check('sfbay.search', async () => { sfo = await find('SFO'); powell = await find('Powell St'); expect(Boolean(sfo && powell), 'stations not found'); return `${sfo!.name}, ${powell!.name}`; });
+    if (sfo && powell) {
+      await check('sfbay.departures', async () => {
+        const departures = await tool('get_departures', { stopRef: sfo!.ref, limit: 3 });
+        expect(departures.status !== 'unavailable' && (!service || rows(departures.departures) > 0), `no SFO departures (${departures.status})`);
+        return `${departures.status}, ${rows(departures.departures)} rows`;
+      });
+      await check('sfbay.route_hints', async () => {
+        const hinted = await tool('plan_trip', { origin: { ref: sfo!.ref }, destination: { ref: powell!.ref } });
+        routes = (hinted.routeHints?.direct ?? []).slice(0, 4).map((hint: Structured) => hint.ref);
+        expect(routes.length > 0, 'no route hints');
+        return `${routes.length} direct lines`;
+      });
+      if (routes.length) await check('sfbay.guided_plan', async () => {
+        const guided = await tool('plan_trip', { origin: { ref: sfo!.ref }, destination: { ref: powell!.ref }, routes });
+        expect(!service || rows(guided.itineraries) > 0, `no guided itinerary (${guided.reasons})`);
+        return `${guided.status}, ${rows(guided.itineraries)} itineraries`;
+      });
+    }
   }
   return { at: new Date(now).toISOString(), ok: checks.every(item => item.ok), checks };
 }
