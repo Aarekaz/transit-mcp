@@ -16,6 +16,9 @@ export interface ScheduleWindowQuery {
   windowSeconds: number;
   feedIds?: string[];
   agencyRefs?: TransitRef[];
+  /** Fetch this many shards' bytes at once (decoding stays sequential). For a reader whose
+   * window is many small objects, such as one agency group's hourly bands. Default 1. */
+  readConcurrency?: number;
 }
 export interface ScheduleDay {
   agencyRef: TransitRef; timezone: string; serviceDate: string; startTime: string;
@@ -138,10 +141,16 @@ export async function loadScheduleWindow(query: ScheduleWindowQuery): Promise<Sc
   const bytesRequired = [...selected.values()].reduce((sum, item) => sum + item.descriptor.byteLength, 0);
   if (bytesRequired > BYTE_BUDGET) throw new Error('Schedule shard byte budget exceeded');
   // Sequential decoding bounds the transient byte buffers and pins one source per feed.
-  for (const { descriptor, days, source } of selected.values()) {
+  // With readConcurrency, up to that many reads are in flight ahead of the decoder.
+  const entries = [...selected.values()], concurrency = Math.max(1, Math.min(16, query.readConcurrency ?? 1));
+  const pending = new Map<number, Promise<Uint8Array>>();
+  const prefetch = (from: number) => { for (let at = from; at < Math.min(entries.length, from + concurrency); at++) if (!pending.has(at) && !query.decoded?.get(entries[at]!.descriptor)) { const read = query.readShard(entries[at]!.descriptor.key); read.catch(() => {}); pending.set(at, read); } };
+  for (const [position, { descriptor, days, source }] of entries.entries()) {
     let shard = query.decoded?.get(descriptor);
     if (!shard) {
-      const bytes = await query.readShard(descriptor.key);
+      if (concurrency > 1) prefetch(position);
+      const bytes = await (pending.get(position) ?? query.readShard(descriptor.key));
+      pending.delete(position);
       if (bytes.byteLength !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Schedule shard integrity failure');
       shard = decodeScheduleShard(bytes);
       query.decoded?.set(descriptor, shard);

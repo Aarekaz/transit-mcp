@@ -8,7 +8,7 @@ import type { GtfsScheduleFiles } from '../../src/transit/gtfs/static/schema';
 import { loadScheduleWindow } from '../../src/transit/planner/schedule-index';
 import { matchTripInstance, type AppliedTripUpdates } from '../../src/transit/gtfs/realtime/trip-match';
 import { staticVersion } from '../../src/transit/gtfs/realtime/snapshot-store';
-import { agencyGroups, combineApplied } from '../../src/transit/gtfs/realtime/region-feed-hub';
+import { agencyGroups, combineApplied, vehiclesFromMatches } from '../../src/transit/gtfs/realtime/region-feed-hub';
 
 /** Two bus agencies that never meet, joined by a rail backbone; every trip has a block. */
 const FILES: GtfsScheduleFiles = {
@@ -100,6 +100,28 @@ describe('agency-split schedules', () => {
     expect(matchTripInstance(update, { ...context(at('2026-10-19T09:00:00-07:00'), at('2026-10-20T11:00:00-07:00')), version })).toBeNull();
     expect(matchTripInstance(update, { ...context(), version })).toBeNull();
     expect(matchTripInstance(update, { ...context(at('2026-10-20T12:00:00-07:00'), at('2026-10-20T14:00:00-07:00')), version })).toBeNull();
+  });
+
+  it('loads the same window whether shard bytes are fetched one at a time or ahead', async () => {
+    const split = await partitionSchedule(await compile(), 3600, { agencyGroups: 3 });
+    const objects = new Map(split.objects.map(object => [object.key, object.bytes]));
+    const load = (readConcurrency?: number) => loadScheduleWindow({ manifest: split.manifest, instant: '2026-10-20T08:00:00-07:00', windowSeconds: 8 * 3600,
+      readShard: async key => objects.get(key)!, ...(readConcurrency ? { readConcurrency } : {}) });
+    const keys = (window: Awaited<ReturnType<typeof load>>) => window.shards.map(entry => entry.key);
+    expect(keys(await load(8))).toEqual(keys(await load()));
+    await expect(loadScheduleWindow({ manifest: split.manifest, instant: '2026-10-20T08:00:00-07:00', windowSeconds: 8 * 3600, readConcurrency: 8,
+      readShard: async key => { const bytes = objects.get(key)!.slice(); bytes[bytes.length - 1]! ^= 1; return bytes; } })).rejects.toThrow(/integrity/);
+  });
+
+  it('resolves vehicles from the last trip-update matches by the same dated-or-only-instance rule', () => {
+    const matches = { artifactVersion: 'v', atSeconds: 0, trips: {
+      'BA:1': [['20261020', 'tr:BA:1:20261020', 'RED', 'Millbrae']], 'BA:2': [['20261019', 'tr:BA:2:19', 'RED', ''], ['20261020', 'tr:BA:2:20', 'RED', '']] } } as never;
+    const vehicle = (tripId: string, startDate?: string) => ({ entityId: tripId, tripId, ...(startDate ? { startDate } : {}), tripInstanceRef: 'untrusted', latitude: 37.8, longitude: -122.4 });
+    const [undated, dated, ambiguous, unknown] = vehiclesFromMatches([vehicle('BA:1'), vehicle('BA:2', '20261020'), vehicle('BA:2'), vehicle('BA:9')], matches);
+    expect(undated).toMatchObject({ tripInstanceRef: 'tr:BA:1:20261020', routeId: 'RED', headsign: 'Millbrae' });
+    expect(dated).toMatchObject({ tripInstanceRef: 'tr:BA:2:20' });
+    expect(ambiguous!.tripInstanceRef).toBeUndefined();
+    expect(unknown!.tripInstanceRef).toBeUndefined();
   });
 
   it('judges schedule identity over all groups, never one small group', () => {

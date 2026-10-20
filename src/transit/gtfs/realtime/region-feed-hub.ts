@@ -1,7 +1,7 @@
 import type { Env } from '../../../types';
 import type { RealtimeFeedKind, RealtimeFeedSpec } from '../../../regions/types';
 import { allocatePollIntervals } from '../upstream/budget';
-import { decodeRealtimeFeed, type NormalizedAlert, type NormalizedRealtimeFeed } from './decode';
+import { decodeRealtimeFeed, type NormalizedAlert, type NormalizedRealtimeFeed, type NormalizedVehicle } from './decode';
 import { RegionalFeedHubCore } from './hub-core';
 import { ApiKeyQuota, RealtimeSnapshotStore, StaticArtifactStore, readBoundedObject, type StaticVersion } from './snapshot-store';
 import { DecodedShardCache, loadScheduleWindow } from '../../planner/schedule-index';
@@ -90,6 +90,32 @@ export function routeByTimetable(feed: NormalizedRealtimeFeed, discoveries: read
 
 /** Matching across several timetables is judged on the combined totals: one borough's few
  * trips say nothing about the schedule's identity. */
+/** A vehicle poll reuses trip matches at most this old (one trip-update interval and more). */
+export const TRIP_MATCH_REUSE_SECONDS = 15 * 60;
+/** Matched trip instances by provider trip ID: [serviceDate, tripInstanceRef, routeId, headsign]. */
+export interface TripMatches { artifactVersion: string; atSeconds: number; trips: Record<string, [string, string, string, string][]> }
+
+function collectTripMatches(into: TripMatches['trips'], result: AppliedTripUpdates, shards: readonly { trips: { providerId: string; headsign: string }[] }[]): void {
+  const headsigns = new Map(shards.flatMap(shard => shard.trips.map(trip => [trip.providerId, trip.headsign] as const)));
+  for (const row of result.stopUpdates) {
+    if (!row.tripId || !row.tripInstanceRef || !row.serviceDate || !row.routeId) continue;
+    const list = into[row.tripId] ??= [];
+    if (!list.some(entry => entry[1] === row.tripInstanceRef)) list.push([row.serviceDate, row.tripInstanceRef, row.routeId, headsigns.get(row.tripId) ?? '']);
+  }
+}
+
+/** Vehicles resolved to the instances the latest trip-update poll proved (same rule: the
+ * dated instance, or the only one when the vehicle is undated). Others stay unmatched. */
+export function vehiclesFromMatches(vehicles: readonly NormalizedVehicle[], matches: TripMatches): NormalizedVehicle[] {
+  return vehicles.map(vehicle => {
+    const { tripInstanceRef: _unverified, headsign: _headsign, ...base } = vehicle;
+    const candidates = (vehicle.tripId ? matches.trips[vehicle.tripId] ?? [] : []).filter(entry => !vehicle.startDate || entry[0] === vehicle.startDate);
+    if (candidates.length !== 1) return base;
+    const [, tripInstanceRef, routeId, headsign] = candidates[0]!;
+    return { ...base, tripInstanceRef, routeId, ...(headsign ? { headsign } : {}) };
+  });
+}
+
 /** One feed's agency groups when its schedule is agency-split (SF Bay), else null. */
 export function agencyGroups(manifest: ArtifactManifestV2, feedId: string): Set<string>[] | null {
   const groups = new Map<string, Set<string>>();
@@ -140,6 +166,9 @@ export class RegionFeedHub implements DurableObject {
   // Polls reuse the verified timetable and discovery index while their hashes are unchanged.
   readonly #shards = new DecodedShardCache(24 * 1024 * 1024);
   readonly #discoveries = new Map<string, { sha256: string; index: DiscoveryIndex }>();
+  /** Agency-split feeds: the last trip-update poll's matched trips, so a vehicle poll can
+   * resolve vehicles without decoding every agency group again. */
+  #tripMatches = new Map<string, TripMatches>();
   /** The published artifact as of this coordinator's last poll or mismatched read. Reads never
    * wait on R2 for it: while a poll uploads a snapshot, R2 connections are all in use. */
   #current?: { version: StaticVersion; manifest: ArtifactManifestV2 };
@@ -320,19 +349,26 @@ export class RegionFeedHub implements DurableObject {
         for (const [index, feedId] of feedIds.entries()) {
           const part = routed[index]!;
           if (!part.trips.length && !part.vehicles.length && feedIds.length > 1) continue;
+          if (spec.kind === 'vehicle_positions' && agencyGroups(current.manifest, feedId)) {
+            const matches = this.#tripMatches.get(feedId) ?? await this.#state.storage.get<TripMatches>(`matches:trip_updates:${feedId}`);
+            if (matches && matches.artifactVersion === current.version.artifactVersion && nowSeconds - matches.atSeconds <= TRIP_MATCH_REUSE_SECONDS) {
+              matchedVehicles.push(...vehiclesFromMatches(part.vehicles, matches));
+              continue;
+            }
+          }
           // An agency-split schedule (SF Bay) is matched one agency group at a time, so the
           // coordinator never holds the whole region's timetable; a last pass holds trips on
           // routes the schedule does not publish, which stay unmatched.
           const groups = agencyGroups(current.manifest, feedId);
           const agencyOf = new Map(groups ? discoveries[index]!.routes.map(route => [route.providerId, route.agencyRef as string]) : []);
           const agency = (routeId: string | undefined) => agencyOf.get(routeId ?? '') ?? '';
-          const feedResults: AppliedTripUpdates[] = [];
+          const feedResults: AppliedTripUpdates[] = [], tripMatchRows: TripMatches['trips'] = {};
           for (const group of groups ? [...groups, null] : [undefined]) {
             const inGroup = (routeId: string | undefined) => group === undefined || (group ? group.has(agency(routeId)) : !groups!.some(known => known.has(agency(routeId))));
             const sub = group === undefined ? part : { ...part, trips: part.trips.filter(trip => inGroup(trip.routeId)), vehicles: part.vehicles.filter(vehicle => inGroup(vehicle.routeId)) };
             if (group !== undefined && !sub.trips.length && !sub.vehicles.length) continue;
             const window = group === undefined ? await matchWindow(feedId) : group === null ? null : await loadScheduleWindow({ manifest: current.manifest,
-              instant: windowStart, windowSeconds, readShard, feedIds: [feedId], agencyRefs: [...group] as TransitRef[] });
+              instant: windowStart, windowSeconds, readShard, feedIds: [feedId], agencyRefs: [...group] as TransitRef[], readConcurrency: 8 });
             // Read through the manifest-verified loader: matching need not re-prove these bytes.
             if (window) recordVerifiedShards(window.shards, current.manifest);
             const shards = window?.shards.map(entry => entry.shard) ?? [];
@@ -340,12 +376,18 @@ export class RegionFeedHub implements DurableObject {
             if (spec.kind === 'vehicle_positions') { matchedVehicles.push(...await applyVehiclePositions(sub.vehicles, { ...matching(feedId), shards })); continue; }
             const result = await applyTripUpdates(sub, { ...matching(feedId), shards, discoveries: [discoveries[index]!] });
             applied.push(result); feedResults.push(result);
+            if (groups) collectTripMatches(tripMatchRows, result, shards);
             if (groups) {
               // Which agency groups match, with a few unmatched trips, so a low rate can be traced.
               groupStats.push([group ? [...group].map(ref => ref.split(':').at(-1)!).join('+').slice(0, 48) : 'unpublished', result.match.eligible, result.match.matched, result.unmatchedSample ?? []]);
             }
             // Same documents, same verified shards: no second fetch or integrity pass.
             if (spec.alsoPublishes?.includes('vehicle_positions')) matchedVehicles.push(...matchVehicles(settleStoppedVehicles(sub.vehicles, sub.trips), { ...matching(feedId), shards }));
+          }
+          if (groups && spec.kind === 'trip_updates') {
+            const matches: TripMatches = { artifactVersion: current.version.artifactVersion, atSeconds: nowSeconds, trips: tripMatchRows };
+            this.#tripMatches.set(feedId, matches);
+            await this.#state.storage.put(`matches:trip_updates:${feedId}`, matches);
           }
           if (feedResults.length) {
             const feedMatch = feedResults.length === 1 ? feedResults[0]!.match : combineApplied(feedResults, coverage.thresholds.minimumScheduleMatchRate, current.version).match;
