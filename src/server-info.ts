@@ -4,7 +4,7 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
   return {
     name: 'Transit MCP',
     version: SERVER_VERSION,
-    description: 'MCP server for US transit systems (DC Metro, NYC Subway)',
+    description: 'MCP server for US transit: New York, Washington DC and the SF Bay Area',
     protocolVersion: MCP_PROTOCOL_VERSION,
     status: 'operational',
     timestamp,
@@ -38,7 +38,7 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
         system: 'MTA',
         stations: 496,
         lines: 29,
-        features: ['trip-planning', 'departures', 'real-time', 'alerts', 'search', 'line-info', 'transfers', 'route-info']
+        features: ['trip-planning', 'departures', 'real-time', 'alerts', 'elevators', 'search', 'line-info', 'transfers', 'route-info', 'train-positions', 'bus-positions']
       }
     ],
     stats: {

@@ -42,15 +42,15 @@
       <p class="eyebrow">Service information</p>
       <h1>Privacy, in plain language.</h1>
       <p class="lede">Transit MCP is an anonymous, read-only transit information service. You can use it without creating an account. This page explains what a request carries and where that information can go.</p>
-      <p class="page-meta">Last updated <time datetime="2026-10-18">October 18, 2026</time></p>
+      <p class="page-meta">Last updated <time datetime="2026-10-20">October 20, 2026</time></p>
     </header>
 
     <article class="legal-copy">
       <section aria-labelledby="request-data">
         <h2 id="request-data">What a transit request includes</h2>
         <p>Your MCP client sends Transit MCP a request body with a tool name and the public transit arguments needed to answer it. Depending on the tool, those inputs can include a city, station name or code, route or line identifier, stop identifier, or a location and search radius. The Worker processes request bodies and public transit arguments only to answer the request.</p>
-        <p>Transit MCP sends the necessary transit inputs to WMATA for DC requests and MTA for NYC requests through server-to-server requests. It does not forward your IP address or conversation to those transit providers. It returns the resulting public transit information to your client. Do not include secrets or unrelated personal information in transit inputs.</p>
-        <p>SF Bay support is in development and remains unavailable. The global tools read versioned schedules and snapshots; they do not fetch transit providers during your request. The dark pipeline can read 511 SF Bay feeds independently for validation and retains 511 SF Bay and participating-operator attribution.</p>
+        <p>For the 13 original tools, Transit MCP sends the necessary transit inputs to WMATA for DC requests and MTA for NYC requests through server-to-server requests. It does not forward your IP address or conversation to those transit providers. It returns the resulting public transit information to your client. Do not include secrets or unrelated personal information in transit inputs.</p>
+        <p>The global tools, which also cover the SF Bay Area, read versioned schedules and feed snapshots that the Worker collects on its own schedule from WMATA, MTA (including MTA Bus Time) and 511 SF Bay. They do not fetch transit providers during your request, so your transit inputs for those tools stay with Transit MCP. SF Bay results keep 511 SF Bay and participating-operator attribution.</p>
       </section>
 
       <section aria-labelledby="accounts-storage">

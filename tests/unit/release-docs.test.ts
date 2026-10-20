@@ -46,12 +46,14 @@ describe('release operator documentation', () => {
     expect(llmsText).toContain('do not provide a full journey planner');
     expect(llmsText).toContain('minutesAway');
   });
-  it('documents SF Bay departures, alerts and vehicles without claiming SF planning', () => {
-    // The landing page and social image keep their in-development copy until they are redesigned.
-    expect(landingPage).toMatch(/SF Bay support is in development/i);
+  it('documents SF Bay departures, alerts, vehicles and guided planning without claiming open SF search', () => {
+    expect(landingPage).toMatch(/SF Bay Area/);
+    expect(landingPage).not.toMatch(/in development/i);
     for (const [name, document] of [['README', readme], ['public docs', publicDocs], ['LLM index', llmsText]] as const) {
       expect(document, name).toMatch(/departures, (?:service )?alerts and vehicle(?: location)?s/i);
-      expect(document, name).toMatch(/plan(?:ning|_trip)[^.]{0,80}not offered/i);
+      // Open search is withheld in SF Bay; planning along named lines (`routes`) works there.
+      expect(document, name).toMatch(/open (?:fastest-route |`plan_trip` )?search[^.]{0,80}not offered/i);
+      expect(document, name).toMatch(/routeHints/);
     }
     expect(llmsText).toContain('PLANNING_UNAVAILABLE');
     // Pages not rewritten for the launch still make no live SF claim.
@@ -69,8 +71,9 @@ describe('release operator documentation', () => {
     expect(privacy).toContain('511 SF Bay');
     expect(terms).toContain('511 SF Bay');
     expect(transitBoardSource).toContain('<title>Transit MCP Transit Board</title>');
-    expect(ogImageSvg).toContain('SF Bay: in development');
-    expect(ogImageSvg).toContain('2 live regions');
+    expect(ogImageSvg).toContain('NYC, DC and SF Bay');
+    expect(ogImageSvg).toContain('3 regions');
+    expect(ogImageSvg).toContain('18 tools');
     // Production serves SF Bay; preview stays dark.
     expect([...wrangler.matchAll(/"SFBAY_MODE": "([^"]+)"/g)].map(match => match[1]))
       .toEqual(['on', 'dark']);

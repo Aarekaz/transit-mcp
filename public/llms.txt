@@ -1,6 +1,6 @@
 # Transit MCP
 
-> Transit MCP is a free, anonymous, read-only Model Context Protocol (MCP) server for DC Metro and NYC Subway trip planning and real-time transit information. In the SF Bay Area (coverage `sfbay`, every 511 operator) departures, service alerts and vehicle locations are available; `plan_trip` is not offered there and returns `PLANNING_UNAVAILABLE`. Transit MCP was formerly Metro MCP; it is the same server.
+> Transit MCP is a free, anonymous, read-only Model Context Protocol (MCP) server for transit in New York (`nyc`: subway, LIRR, Metro-North, buses), Washington DC (`dc`: Metrorail, Metrobus) and the SF Bay Area (`sfbay`: every 511 operator, including BART, Muni, Caltrain and the ferries). It plans trips, lists departures, reports service alerts and elevator outages, and shows where trains and buses are. In SF Bay the open `plan_trip` search is not offered yet and returns `PLANNING_UNAVAILABLE` with `routeHints`; planning along named lines (`routes`) works there. Transit MCP was formerly Metro MCP; it is the same server.
 
 - MCP endpoint (Streamable HTTP): https://transitmcp.com/mcp
 - Legacy endpoint, still supported: https://metro-mcp.anuragd.me/mcp
@@ -28,6 +28,7 @@
 - Use `find_transit` to inspect coverage availability and its planning capability; the open `plan_trip` search needs its planning capability, while `routes` works wherever schedules are available. When global coverage is unavailable, use `search_stations`, `get_station_predictions` and `get_incidents` for DC/NYC departure or service questions. These legacy tools do not provide a full journey planner. Never present a route pieced together from departure boards as confirmed; have `plan_trip` check it with `routes`. Preserve `realtime`, `scheduled_only`, or `unavailable` status and source timestamps. Global tools have no Transit Board renderer.
 - DC-only: bus tools, `get_train_positions` and `get_elevator_incidents`. NYC-only: `get_route_info` and `get_station_transfers`. A null `minutesAway` means unknown, not zero; retain the returned arrival status.
 - Discovery preserves material exact alternatives up to 50 candidates per query or endpoint (100 across a two-endpoint selection). Larger ambiguous sets return `SCOPE_LIMIT_EXCEEDED` with no partial choices; narrow the query or supply an exact reference. Non-material fuzzy results honor `limit`.
+- The first call after a quiet spell can take several seconds while the timetable loads; retry a timeout once before reporting the service as down.
 
 Public results come from official WMATA (DC Metro and Metrobus) and MTA (NYC Subway, Long Island Rail Road, Metro-North and NYC buses, including MTA Bus Time) feeds. SF Bay results come from 511 SF Bay regional feeds, with attribution to 511 SF Bay and participating operators.
 

@@ -37,12 +37,12 @@ const legalPages = [
   {
     slug: 'privacy',
     title: /privacy/i,
-    lastUpdated: { datetime: '2026-10-18', text: 'October 18, 2026' },
+    lastUpdated: { datetime: '2026-10-20', text: 'October 20, 2026' },
   },
   {
     slug: 'terms',
     title: /terms/i,
-    lastUpdated: { datetime: '2026-10-18', text: 'October 18, 2026' },
+    lastUpdated: { datetime: '2026-10-20', text: 'October 20, 2026' },
   },
   {
     slug: 'support',
@@ -151,7 +151,7 @@ describe('public legal and support pages', () => {
     expect(html).toMatch(/unofficial community project/i);
     expect(html).toMatch(/not affiliated with or endorsed by[^.]*WMATA[^.]*MTA[^.]*511 SF Bay[^.]*OpenAI[^.]*Anthropic[^.]*transit agenc/i);
     expect(html).toMatch(/WMATA and MTA[^.]*availability[^.]*accuracy/i);
-    expect(html).toMatch(/dark SF Bay development pipeline[^.]*511 SF Bay/i);
+    expect(html).toMatch(/SF Bay Area data depends on 511 SF Bay/i);
     expect(html).toMatch(/fair use/i);
     expect(html).toMatch(/rate limit/i);
     expect(html).toMatch(/(?:abuse|abusive use)[^.]*disrupt(?:ion|ive)?[^.]*circumvent[^.]*unlawful/i);
