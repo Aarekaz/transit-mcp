@@ -257,6 +257,15 @@ function tripCandidates(update: NormalizedTripUpdate, tripKey: string, serviceDa
   return candidates;
 }
 
+/** Stop provider IDs by reference, built once per decoded shard: matching reads a call's
+ * stop for every predicted stop, and decoding each reference costs more than the lookup. */
+const shardStopIds = new WeakMap<ScheduleShard, Map<string, string>>();
+function stopIdsOf(shard: ScheduleShard): Map<string, string> {
+  let ids = shardStopIds.get(shard);
+  if (!ids) { ids = new Map(shard.stops.map(stop => [stop.ref as string, stop.providerId])); shardStopIds.set(shard, ids); }
+  return ids;
+}
+
 function matchedUpdates(update: NormalizedTripUpdate, match: MatchedTripInstance, why?: string[], renumbered = false): NormalizedStopUpdate[] | null {
   const { trip, shard } = match;
   let { startSeconds, originSeconds, serviceDate, tripInstanceRef, shiftSeconds } = match;
@@ -274,29 +283,34 @@ function matchedUpdates(update: NormalizedTripUpdate, match: MatchedTripInstance
     } catch { return null; }
   }
   const stops = new Map<number, DecodedStopUpdate>(); let previousSequence = -1;
+  const stopIdOf = (call: { stopRef: string }) => stopIdsOf(shard).get(call.stopRef) ?? parseTransitRef(call.stopRef)?.id;
+  let predicted = update.scheduleRelationship === 'CANCELED' ? [] : update.stops;
+  // A provider that renumbers sequences may still list calls out of their declared order.
+  if (renumbered && predicted.every(stop => stop.stopSequence !== undefined)) predicted = [...predicted].sort((a, b) => a.stopSequence! - b.stopSequence!);
   // Cancellation applies to the whole matched instance; attached stop updates have no semantics.
-  for (const stop of update.scheduleRelationship === 'CANCELED' ? [] : update.stops) {
-    const byStop = renumbered && stop.stopId ? trip.stopTimes.filter(call => parseTransitRef(call.stopRef)?.id === stop.stopId) : undefined;
-    let candidates = byStop ?? trip.stopTimes.filter(call => stop.stopSequence !== undefined ? call.sequence === stop.stopSequence : parseTransitRef(call.stopRef)?.id === stop.stopId);
+  for (const stop of predicted) {
+    const byStop = renumbered && stop.stopId ? trip.stopTimes.filter(call => stopIdOf(call) === stop.stopId) : undefined;
+    let candidates = byStop ?? trip.stopTimes.filter(call => stop.stopSequence !== undefined ? call.sequence === stop.stopSequence : stopIdOf(call) === stop.stopId);
     if (byStop && byStop.length > 1) {
       const chosen = byStop.find(call => call.sequence === stop.stopSequence) ?? byStop.find(call => call.sequence > previousSequence);
       if (chosen) candidates = [chosen];
     }
     if (byStop && candidates.length === 1 && candidates[0]!.sequence === previousSequence) continue;
-    const reject = (reason: string) => { why?.push(`${reason} seq=${stop.stopSequence ?? '-'} stop=${stop.stopId ?? '-'} scheduled=${candidates.map(item => `${item.sequence}:${parseTransitRef(item.stopRef)?.id}`).join(',').slice(0, 60)}`); return null; };
+    const reject = (reason: string) => { why?.push(`${reason} seq=${stop.stopSequence ?? '-'} stop=${stop.stopId ?? '-'} scheduled=${candidates.map(item => `${item.sequence}:${stopIdOf(item)}`).join(',').slice(0, 60)}`); return null; };
     if (candidates.length !== 1 || stop.stopScheduleRelationship === 'UNKNOWN') return reject(candidates.length ? 'ambiguous_call' : 'no_call');
     const call = candidates[0]!;
-    if (stop.stopId && parseTransitRef(call.stopRef)?.id !== stop.stopId) return reject('stop_mismatch');
+    if (stop.stopId && stopIdOf(call) !== stop.stopId) return reject('stop_mismatch');
     if (call.sequence <= previousSequence) return reject('out_of_order');
     previousSequence = call.sequence; stops.set(call.sequence, stop);
   }
   let delay = update.delaySeconds;
   const result: NormalizedStopUpdate[] = [];
+  const routeId = parseTransitRef(trip.routeRef)!.id;
   for (const call of trip.stopTimes) {
     const stop = stops.get(call.sequence), scheduledArrival = call.arrivalSeconds == null ? undefined : originSeconds + call.arrivalSeconds + shiftSeconds;
     const scheduledDeparture = call.departureSeconds == null ? undefined : originSeconds + call.departureSeconds + shiftSeconds;
-    const row: NormalizedStopUpdate = { entityId: update.entityId, tripId, routeId: parseTransitRef(trip.routeRef)!.id,
-      stopId: parseTransitRef(call.stopRef)!.id, stopSequence: call.sequence, tripInstanceRef, serviceDate,
+    const row: NormalizedStopUpdate = { entityId: update.entityId, tripId, routeId,
+      stopId: stopIdOf(call)!, stopSequence: call.sequence, tripInstanceRef, serviceDate,
       scheduleRelationship: update.scheduleRelationship, stopScheduleRelationship: stop?.stopScheduleRelationship ?? 'SCHEDULED',
       scheduledArrivalTimeSeconds: scheduledArrival, scheduledDepartureTimeSeconds: scheduledDeparture, status: 'scheduled_only',
       ...(stop?.track ? { track: stop.track } : {}) };
@@ -486,6 +500,8 @@ export async function applyTripUpdates(feed: NormalizedRealtimeFeed, context: Tr
     if (context.expiredBeforeSeconds !== undefined) {
       const times = update.stops.flatMap(stop => [stop.arrivalTimeSeconds, stop.departureTimeSeconds]).filter((time): time is number => time !== undefined);
       if (times.length && times.every(time => time < context.expiredBeforeSeconds!)) { expired++; continue; }
+      // Without a start time, a trip predicted only past the loaded timetable is out of scope.
+      if (context.horizonEndSeconds !== undefined && times.length && Math.min(...times) > context.horizonEndSeconds) { beyondWindow++; continue; }
     }
     eligible++;
     const match = matchIndexedTrip(update, context, index);
