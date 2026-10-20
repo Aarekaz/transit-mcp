@@ -14,7 +14,7 @@ import { serializeTelemetry, type TelemetryInput } from './telemetry';
 import type { Env } from './types';
 import { bootstrapRegionalFeedHub } from './transit/gtfs/realtime/bootstrap';
 import { checkStaticSources } from './transit/gtfs/refresh/refresh';
-import { recordCanary } from './canary';
+import { canaryDue, recordCanary } from './canary';
 
 // Export MetroMcpAgent so the wrangler.jsonc DO binding can resolve the class.
 // Cloudflare's bundler discovers DO classes by name at deploy time.
@@ -115,7 +115,7 @@ export default {
   scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
     ctx.waitUntil(bootstrapRegionalFeedHub(env));
     ctx.waitUntil(checkStaticSources(env, Date.now()));
-    // Every third five-minute tick: check production the way an agent uses it.
-    if (new Date(controller.scheduledTime).getUTCMinutes() % 15 < 5) ctx.waitUntil(recordCanary(env, controller.scheduledTime));
+    // Every other day: check production the way an agent uses it.
+    if (canaryDue(controller.scheduledTime)) ctx.waitUntil(recordCanary(env, controller.scheduledTime));
   },
 };
