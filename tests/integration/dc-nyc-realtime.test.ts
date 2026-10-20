@@ -173,6 +173,15 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     expect((await callTool(f.env, 'find_transit', { ref: f.ref('stop', '132') })).structuredContent.entities[0].stepFree).toBe('accessible');
   });
 
+  it('serves coordinator reads without rereading the artifact pointer from R2', async () => {
+    const f = await nyc();
+    const get = vi.spyOn(f.db.bucket, 'get');
+    const pointerReads = () => get.mock.calls.filter(([key]) => key === 'artifacts/nyc/v2/current.json').length;
+    await callTool(f.env, 'get_service_status', { coverage: 'nyc' });
+    // The Worker resolves the published version once; the coordinator answers from its last poll.
+    expect(pointerReads()).toBe(1);
+  });
+
   it('lists departures across every station of a complex', async () => {
     const f = await nyc();
     // 725 has no scheduled service of its own; the 1 and 2 leave from 127 in the same complex.
