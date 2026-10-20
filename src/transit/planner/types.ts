@@ -60,6 +60,8 @@ export interface JourneyQuery extends Omit<ValidationSource, 'shards'> {
   /** Only trips on these routes, e.g. the lines a model proposes. The search still finds
    * the trips, boarding stops, transfers and walks; every result is validated as usual. */
   routeRefs?: ReadonlySet<TransitRef>;
+  /** Shards read at once (see ScheduleWindowQuery.readConcurrency); default one. */
+  readConcurrency?: number;
 }
 export interface ValidationResult {
   valid: boolean;

@@ -20,6 +20,8 @@ export interface ScheduleWindowQuery {
   /** Fetch this many shards' bytes at once (decoding stays sequential). For a reader whose
    * window is many small objects, such as one agency group's hourly bands. Default 1. */
   readConcurrency?: number;
+  /** Decode only these routes' trips (see decodeScheduleShard): for a search along them. */
+  decodeRoutes?: ReadonlySet<TransitRef>;
 }
 export interface ScheduleDay {
   agencyRef: TransitRef; timezone: string; serviceDate: string; startTime: string;
@@ -50,16 +52,17 @@ export class DecodedShardCache {
   readonly #entries = new Map<string, { shard: ScheduleShard; bytes: number }>();
   #bytes = 0;
   constructor(private readonly maxFileBytes: number) {}
-  get(descriptor: { sha256: string; byteLength: number }): ScheduleShard | undefined {
-    const key = `${descriptor.sha256}/${descriptor.byteLength}`, entry = this.#entries.get(key);
+  /** `variant` names a route-filtered decode of the same object. */
+  get(descriptor: { sha256: string; byteLength: number }, variant = ''): ScheduleShard | undefined {
+    const key = `${descriptor.sha256}/${descriptor.byteLength}${variant}`, entry = this.#entries.get(key);
     if (!entry) return undefined;
     this.#entries.delete(key); this.#entries.set(key, entry);
     return entry.shard;
   }
   *shards(): Iterable<ScheduleShard> { for (const entry of this.#entries.values()) yield entry.shard; }
-  set(descriptor: { sha256: string; byteLength: number }, shard: ScheduleShard): void {
+  set(descriptor: { sha256: string; byteLength: number }, shard: ScheduleShard, variant = ''): void {
     if (descriptor.byteLength > this.maxFileBytes) return;
-    const key = `${descriptor.sha256}/${descriptor.byteLength}`;
+    const key = `${descriptor.sha256}/${descriptor.byteLength}${variant}`;
     if (this.#entries.has(key)) return;
     this.#entries.set(key, { shard, bytes: descriptor.byteLength }); this.#bytes += descriptor.byteLength;
     for (const [old, entry] of this.#entries) {
@@ -72,17 +75,20 @@ export class DecodedShardCache {
 export async function loadScheduleWindow(query: ScheduleWindowQuery): Promise<ScheduleWindow> {
   return phase('schedule', () => loadScheduleWindowUntraced(query));
 }
-async function loadScheduleWindowUntraced(query: ScheduleWindowQuery): Promise<ScheduleWindow> {
+export interface SelectedShard { descriptor: Descriptor; days: ScheduleDay[]; source: SourceMetadata }
+/** Which shards, for which service days, a window needs: pure, reads nothing. The compact
+ * network search selects exactly what the exact loader would. */
+export function selectScheduleWindow(query: Omit<ScheduleWindowQuery, 'readShard' | 'decoded' | 'readConcurrency'>): { window: ScheduleWindow; selected: SelectedShard[] } {
   const start = parseInstant(query.instant), end = start + query.windowSeconds * 1000;
   if (!Number.isInteger(query.windowSeconds) || query.windowSeconds <= 0 || query.windowSeconds > 7 * 86400) throw new Error('TIME_OUTSIDE_WINDOW: search window must be between 1 second and 7 days');
   const { manifest } = query;
   if (manifest.schemaVersion !== 2) throw new Error('Invalid schedule manifest');
   const result: ScheduleWindow = { status: 'scheduled_only', reasons: [], startTime: formatInstant(start, 'UTC'),
     endTime: formatInstant(end, 'UTC'), sources: [], shards: [] };
-  const unavailable = (reason: VerificationReason): ScheduleWindow => ({ ...result, status: 'unavailable', reasons: [reason], shards: [] });
+  const unavailable = (reason: VerificationReason) => ({ window: { ...result, status: 'unavailable' as const, reasons: [reason], shards: [] }, selected: [] });
   const feeds = [...new Set(query.feedIds ?? manifest.sources.map(source => source.feedId))].sort();
   if (!feeds.length) return unavailable('COVERAGE_UNAVAILABLE');
-  const selected = new Map<string, { descriptor: Descriptor; days: ScheduleDay[]; source: SourceMetadata }>();
+  const selected = new Map<string, SelectedShard>();
   for (const feed of feeds) {
     const sources = manifest.sources.filter(source => source.feedId === feed);
     if (!sources.length) return unavailable('COVERAGE_UNAVAILABLE');
@@ -142,23 +148,30 @@ async function loadScheduleWindowUntraced(query: ScheduleWindowQuery): Promise<S
       }
     }
   }
-  const bytesRequired = [...selected.values()].reduce((sum, item) => sum + item.descriptor.byteLength, 0);
+  return { window: result, selected: [...selected.values()] };
+}
+async function loadScheduleWindowUntraced(query: ScheduleWindowQuery): Promise<ScheduleWindow> {
+  const { window: result, selected: entries } = selectScheduleWindow(query);
+  if (result.status === 'unavailable') return result;
+  const { manifest } = query;
+  const variant = query.decodeRoutes ? `/${[...query.decodeRoutes].sort().join(',')}` : '';
+  const bytesRequired = entries.reduce((sum, item) => sum + item.descriptor.byteLength, 0);
   if (bytesRequired > BYTE_BUDGET) throw new Error('Schedule shard byte budget exceeded');
   // Sequential decoding bounds the transient byte buffers and pins one source per feed.
   // With readConcurrency, up to that many reads are in flight ahead of the decoder.
-  const entries = [...selected.values()], concurrency = Math.max(1, Math.min(16, query.readConcurrency ?? 1));
+  const concurrency = Math.max(1, Math.min(16, query.readConcurrency ?? 1));
   const pending = new Map<number, Promise<Uint8Array>>();
-  const prefetch = (from: number) => { for (let at = from; at < Math.min(entries.length, from + concurrency); at++) if (!pending.has(at) && !query.decoded?.get(entries[at]!.descriptor)) { const read = query.readShard(entries[at]!.descriptor.key); read.catch(() => {}); pending.set(at, read); } };
+  const prefetch = (from: number) => { for (let at = from; at < Math.min(entries.length, from + concurrency); at++) if (!pending.has(at) && !query.decoded?.get(entries[at]!.descriptor, variant)) { const read = query.readShard(entries[at]!.descriptor.key); read.catch(() => {}); pending.set(at, read); } };
   for (const [position, { descriptor, days, source }] of entries.entries()) {
-    let shard = query.decoded?.get(descriptor);
+    let shard = query.decoded?.get(descriptor, variant);
     if (!shard) {
       if (concurrency > 1) prefetch(position);
       const bytes = await (pending.get(position) ?? query.readShard(descriptor.key));
       pending.delete(position);
       if (bytes.byteLength !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Schedule shard integrity failure');
-      shard = decodeScheduleShard(bytes);
+      shard = decodeScheduleShard(bytes, query.decodeRoutes);
       count('shardsDecoded'); count('shardBytes', bytes.byteLength);
-      query.decoded?.set(descriptor, shard);
+      query.decoded?.set(descriptor, shard, variant);
     }
     const agencyTimezones = Object.fromEntries(Object.entries(manifest.agencyTimezones).filter(([ref]) => parseTransitRef(ref)?.feed === descriptor.feedId));
     if (shard.coverageId !== manifest.coverageId || shard.feedId !== descriptor.feedId || shard.source.sha256 !== source.sha256 ||

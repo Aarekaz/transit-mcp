@@ -73,8 +73,12 @@
     "SFBAY_MODE": "on",
     // DC/NYC global tools: off | dark (ingest and validate only) | on | suspended.
     "TRANSIT_COVERAGE_MODES": "{\"dc\":\"on\",\"nyc\":\"on\"}",
-    // SF Bay planning needs a dedicated planner (docs/sfbay-rollout.md); its other tools are on.
+    // SF Bay is too large for the whole-feed journey search; it plans only through the
+    // network planner below, and says PLANNING_UNAVAILABLE until its compact bands exist.
     "TRANSIT_PLANNING_OFF": "[\"sfbay\"]",
+    // plan_trip searches the whole network (buses included) over compact timetables the
+    // cron builds into compact/<coverage>/ in R2; without them it plans as before.
+    "TRANSIT_NETWORK_PLANNING": "[\"dc\",\"nyc\",\"sfbay\"]",
     "ENVIRONMENT": "production"
   },
 

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Network journey planner: `plan_trip` searches every line of DC, NYC and SF Bay, buses included, over compact timetables a cron builds in R2 (`compact/<coverage>/`), then plans and validates the proposed lines with the exact planner. Switch: `TRANSIT_NETWORK_PLANNING`; without its compact bands a coverage plans as before.
 
 - SF Bay Area (511 SF Bay regional feed, every operator): departures, service alerts and vehicle locations through the global tools. Journey planning is not offered there yet; `plan_trip` returns `PLANNING_UNAVAILABLE` (deployment setting `TRANSIT_PLANNING_OFF`).
 - Step-free journeys in DC and NYC. `plan_trip` with `accessibility: "step_free"` boards, alights and changes only at platforms reachable without stairs and avoids stations cut off by a current elevator outage; the validator rechecks every leg. It refuses with `ACCESSIBILITY_UNAVAILABLE` without a current elevator report and `ENDPOINT_NOT_STEP_FREE` when an endpoint has no step-free platform. NYC station access comes from MTA's station list, including stations accessible in one direction only.

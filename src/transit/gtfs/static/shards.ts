@@ -80,6 +80,15 @@ export function canonicalJson(value: unknown): string {
   });
 }
 
+/** canonicalJson of a record inside a decoded shard, computed once per object: decoded
+ * shards are immutable, and every band of a feed repeats its transfer and pathway tables. */
+const canonicalRecords = new WeakMap<object, string>();
+export function canonicalRecord(value: object): string {
+  let text = canonicalRecords.get(value);
+  if (text === undefined) { text = canonicalJson(value); canonicalRecords.set(value, text); }
+  return text;
+}
+
 export async function sha256(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new Uint8Array(bytes));
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
@@ -123,15 +132,49 @@ export function encodeScheduleShard(shard: ScheduleShard): Uint8Array {
 
 /** Checks metadata shape, local references, patterns and timetable invariants.
  * The loader must first verify the manifest hash and byte budget. Source truth,
- * GTFS semantic validation and report authenticity remain producer boundaries. */
-export function decodeScheduleShard(bytes: Uint8Array): ScheduleShard {
+ * GTFS semantic validation and report authenticity remain producer boundaries.
+ * With `routeRefs`, only those routes' trips are kept, with their patterns, frequencies and
+ * blocks, the stations they call at (every stop of each station, so its pathways stay
+ * whole) and the transfer rules and pathways among what is kept: a search along named
+ * lines then holds a fraction of a bus feed. Every check still applies to what is kept. */
+export function decodeScheduleShard(bytes: Uint8Array, routeRefs?: ReadonlySet<string>): ScheduleShard {
   try {
     if (bytes.length < HEADER_BYTES || bytes[0] !== 77 || bytes[1] !== 84 || bytes[2] !== 83 || bytes[3] !== 50) throw new Error();
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const metadataLength = view.getUint32(4, true), rowCount = view.getUint32(8, true);
     const offset = Math.ceil((HEADER_BYTES + metadataLength) / 4) * 4;
     if (view.getUint32(12, true) !== ROW_WORDS || offset + rowCount * ROW_WORDS * 4 !== bytes.length) throw new Error();
-    const metadata = metadataSchema.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(HEADER_BYTES, HEADER_BYTES + metadataLength))));
+    const parsed: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(HEADER_BYTES, HEADER_BYTES + metadataLength)));
+    // Row trip and stop indexes -> kept indexes (-1: dropped).
+    let tripIndex: Int32Array | undefined, stopIndex: Int32Array | undefined;
+    if (routeRefs) {
+      const raw = parsed as { trips?: unknown; patterns?: unknown; frequencies?: unknown; blocks?: unknown; transfers?: unknown };
+      if (!Array.isArray(raw.trips) || !Array.isArray(raw.patterns) || !Array.isArray(raw.frequencies) || !Array.isArray(raw.transfers) || typeof raw.blocks !== 'object' || !raw.blocks) throw new Error();
+      const all = raw.trips as { ref?: unknown; routeRef?: unknown; patternId?: unknown }[], kept = new Set<unknown>(), patternIds = new Set<unknown>();
+      tripIndex = new Int32Array(all.length).fill(-1);
+      raw.trips = all.filter((trip, index) => {
+        if (!routeRefs.has(trip.routeRef as string)) return false;
+        tripIndex![index] = kept.size; kept.add(trip.ref); patternIds.add(trip.patternId);
+        return true;
+      });
+      raw.patterns = (raw.patterns as { id?: unknown }[]).filter(pattern => patternIds.has(pattern.id));
+      raw.frequencies = (raw.frequencies as { tripRef?: unknown }[]).filter(frequency => kept.has(frequency.tripRef));
+      raw.blocks = Object.fromEntries(Object.entries(raw.blocks).filter(([, refs]) => Array.isArray(refs) && refs.every(ref => kept.has(ref))));
+      const rawStops = (parsed as { stops?: unknown }).stops, rawPathways = (parsed as { pathways?: unknown }).pathways;
+      if (!Array.isArray(rawStops) || !Array.isArray(rawPathways)) throw new Error();
+      const called = new Set<unknown>((raw.patterns as { stopRefs?: unknown }[]).flatMap(pattern => Array.isArray(pattern.stopRefs) ? pattern.stopRefs : []));
+      const stations = new Set<unknown>((rawStops as { ref?: unknown; parentStationRef?: unknown }[]).filter(stop => called.has(stop.ref) && stop.parentStationRef !== undefined).map(stop => stop.parentStationRef));
+      const stopsKept = new Set<unknown>((rawStops as { ref?: unknown; parentStationRef?: unknown }[]).filter(stop => called.has(stop.ref) || stations.has(stop.ref) || stations.has(stop.parentStationRef)).map(stop => stop.ref));
+      stopIndex = new Int32Array(rawStops.length).fill(-1);
+      let keptStops = 0;
+      (parsed as { stops: unknown[] }).stops = (rawStops as { ref?: unknown }[]).filter((stop, index) => stopsKept.has(stop.ref) && (stopIndex![index] = keptStops++, true));
+      (parsed as { pathways: unknown[] }).pathways = (rawPathways as { fromStopRef?: unknown; toStopRef?: unknown }[]).filter(path => stopsKept.has(path.fromStopRef) && stopsKept.has(path.toStopRef));
+      // A rule naming a dropped trip or stop applies only to a leg on that trip or at that stop.
+      raw.transfers = (raw.transfers as { fromTripRef?: unknown; toTripRef?: unknown; fromStopRef?: unknown; toStopRef?: unknown }[]).filter(rule =>
+        [rule.fromStopRef, rule.toStopRef].every(ref => ref === undefined || stopsKept.has(ref)) && [rule.fromTripRef, rule.toTripRef].every(ref => ref === undefined || kept.has(ref) ||
+        (parsed as { transferBoundaryTrips?: { ref?: unknown }[] }).transferBoundaryTrips?.some(boundary => boundary.ref === ref)));
+    }
+    const metadata = metadataSchema.parse(parsed);
     const { headsigns, ...rest } = metadata;
     const shard: ScheduleShard = { ...rest, trips: rest.trips.map(trip => ({ ...trip, stopTimes: [] })),
       frequencies: rest.frequencies.map(frequency => {
@@ -172,13 +215,14 @@ export function decodeScheduleShard(bytes: Uint8Array): ScheduleShard {
     let lastTripIndex = -1;
     for (let row = 0; row < rowCount; row++) {
       const word = (column: number) => view.getUint32(offset + (row * ROW_WORDS + column) * 4, true);
-      const trip = shard.trips[word(0)], stop = shard.stops[word(1)], headsign = headsigns[word(8)];
+      if (word(0) < lastTripIndex) throw new Error();
+      lastTripIndex = word(0);
+      if (tripIndex && tripIndex[word(0)] === -1) continue;
+      const trip = shard.trips[tripIndex ? tripIndex[word(0)] ?? -1 : word(0)], stop = shard.stops[stopIndex ? stopIndex[word(1)] ?? -1 : word(1)], headsign = headsigns[word(8)];
       if (!trip || !stop || typeof headsign !== 'string' || word(5) > 3 || word(6) > 3 || word(7) > 1) throw new Error();
       const arrivalSeconds = word(3) === UNKNOWN_TIME ? null : word(3);
       const departureSeconds = word(4) === UNKNOWN_TIME ? null : word(4);
       const previous = trip.stopTimes.at(-1);
-      if (word(0) < lastTripIndex) throw new Error();
-      lastTripIndex = word(0);
       if (previous && previous.sequence >= word(2)) throw new Error();
       if ((arrivalSeconds === null) !== (departureSeconds === null) ||
         (arrivalSeconds !== null && departureSeconds !== null && (departureSeconds < arrivalSeconds || arrivalSeconds < (lastDepartures.get(trip.ref) ?? 0) || departureSeconds > 999 * 3600 + 3599))) throw new Error();

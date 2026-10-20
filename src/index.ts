@@ -14,6 +14,7 @@ import { serializeTelemetry, type TelemetryInput } from './telemetry';
 import type { Env } from './types';
 import { bootstrapRegionalFeedHub } from './transit/gtfs/realtime/bootstrap';
 import { checkStaticSources } from './transit/gtfs/refresh/refresh';
+import { compactSchedules } from './transit/planner/compactor';
 import { canaryDue, recordCanary } from './canary';
 
 // Export MetroMcpAgent so the wrangler.jsonc DO binding can resolve the class.
@@ -115,6 +116,8 @@ export default {
   scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
     ctx.waitUntil(bootstrapRegionalFeedHub(env));
     ctx.waitUntil(checkStaticSources(env, Date.now()));
+    // The network planner's compact timetables, a bounded batch per tick.
+    ctx.waitUntil(compactSchedules(env, Date.now()));
     // Every other day: check production the way an agent uses it.
     if (canaryDue(controller.scheduledTime)) ctx.waitUntil(recordCanary(env, controller.scheduledTime));
   },

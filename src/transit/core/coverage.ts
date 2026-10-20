@@ -20,9 +20,13 @@ export type CoverageWorkerBindings = {
   /** JSON object of known coverage IDs to rollout modes. New coverage defaults off.
    * SFBAY_MODE remains authoritative for SF and its existing ingestion coordinator. */
   TRANSIT_COVERAGE_MODES?: string;
-  /** JSON array of coverage IDs this deployment serves without journey planning: their
-   * departures, alerts and vehicles stay on while plan_trip says PLANNING_UNAVAILABLE. */
+  /** JSON array of coverage IDs whose whole-feed journey search is withheld: their
+   * departures, alerts and vehicles stay on, and plan_trip plans only through the network
+   * planner where TRANSIT_NETWORK_PLANNING enables it, else says PLANNING_UNAVAILABLE. */
   TRANSIT_PLANNING_OFF?: string;
+  /** JSON array of coverage IDs where plan_trip first searches the whole network (buses
+   * included) over compact timetables the cron builds. Unset or malformed: nowhere. */
+  TRANSIT_NETWORK_PLANNING?: string;
 };
 
 /** Whether this deployment withholds journey planning for a coverage. Malformed is off for all. */
@@ -31,6 +35,14 @@ export function planningWithheld(id: string, bindings: CoverageWorkerBindings): 
     const off: unknown = JSON.parse(bindings.TRANSIT_PLANNING_OFF ?? '[]');
     return !Array.isArray(off) || off.includes(id);
   } catch { return true; }
+}
+
+/** Whether plan_trip may use the network planner for a coverage. Malformed is off for all. */
+export function networkPlanning(id: string, bindings: CoverageWorkerBindings): boolean {
+  try {
+    const on: unknown = JSON.parse(bindings.TRANSIT_NETWORK_PLANNING ?? '[]');
+    return Array.isArray(on) && on.includes(id);
+  } catch { return false; }
 }
 
 /** Source support, independent of whether a coverage is publicly enabled. */

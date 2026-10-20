@@ -224,8 +224,9 @@ describe('anonymous deployment configuration', () => {
       SFBAY_MODE: 'on',
       // Preview has no DC/NYC artifacts, so its coverages stay off by omission.
       TRANSIT_COVERAGE_MODES: '{"dc":"on","nyc":"on"}',
-      // SF Bay serves departures, alerts and vehicles; regional planning is not offered yet.
+      // SF Bay plans only through the network planner, never the whole-feed search.
       TRANSIT_PLANNING_OFF: '["sfbay"]',
+      TRANSIT_NETWORK_PLANNING: '["dc","nyc","sfbay"]',
       ENVIRONMENT: 'production',
     });
     expect(wrangler.env.preview.vars).toEqual({

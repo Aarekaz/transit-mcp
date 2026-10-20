@@ -2,7 +2,7 @@ import { formatTripInstanceRef, parseTransitRef, type TransitRef } from '../core
 import type { VerificationReason } from '../core/results';
 import type { NormalizedStopUpdate } from '../gtfs/realtime/decode';
 import type { ScheduleShard, ScheduleStop, ScheduleTransfer, ScheduleTrip } from '../gtfs/static/schema';
-import { canonicalJson } from '../gtfs/static/shards';
+import { canonicalRecord } from '../gtfs/static/shards';
 import { parseGtfsTime } from '../gtfs/static/time';
 import type { LoadedScheduleShard } from './schedule-index';
 import { formatInstant, isServiceActive, parseInstant } from './service-day';
@@ -80,9 +80,9 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
   for (const { shard } of loaded) {
     for (const stop of shard.stops) stops.set(stop.ref, stop);
     // Every time band of a feed repeats the feed's transfer table; keep one copy of each rule.
-    for (const rule of shard.transfers) { const key = canonicalJson(rule); if (!transferKeys.has(key)) { transferKeys.add(key); transfers.push(rule); } }
+    for (const rule of shard.transfers) { const key = canonicalRecord(rule); if (!transferKeys.has(key)) { transferKeys.add(key); transfers.push(rule); } }
     for (const pathway of shard.pathways) {
-      const key = `${shard.feedId}/${shard.source.sha256}/${pathway.id}`, definition = canonicalJson(pathway);
+      const key = `${shard.feedId}/${shard.source.sha256}/${pathway.id}`, definition = canonicalRecord(pathway);
       const previous = pathwayDefinitions.get(key);
       if (previous !== undefined && previous !== definition) throw new Error('Conflicting canonical pathway definitions');
       if (previous === undefined) { pathwayDefinitions.set(key, definition); pathways.push(pathway); }
@@ -186,8 +186,12 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
   for (const stop of stops.values()) if (stop.parentStationRef) join(stop.ref, stop.parentStationRef);
   for (const pathway of pathways) join(pathway.fromStopRef, pathway.toStopRef);
   const controlled = new Set([...pathNodes].map(root));
-  const exteriorAccess = (ref: TransitRef) => !controlled.has(root(ref)) || stops.get(ref)?.locationType === 2;
-  const pathwayControlled = (a: TransitRef, b: TransitRef) => root(a) === root(b) && controlled.has(root(a)) || !exteriorAccess(a) || !exteriorAccess(b);
+  // Complexes are final now: resolve each stop's once, not on every walk considered.
+  const rootOf = new Map<TransitRef, TransitRef>();
+  for (const ref of stops.keys()) rootOf.set(ref, root(ref));
+  const complex = (ref: TransitRef) => rootOf.get(ref) ?? root(ref);
+  const exteriorAccess = (ref: TransitRef) => !controlled.has(complex(ref)) || stops.get(ref)?.locationType === 2;
+  const pathwayControlled = (a: TransitRef, b: TransitRef) => complex(a) === complex(b) && controlled.has(complex(a)) || !exteriorAccess(a) || !exteriorAccess(b);
   // Topological reachability is only used to disclose a limitation. It never
   // creates precise departures or claims that an approximate connection works.
   const reachesDestination = new Set<TransitRef>();
@@ -295,7 +299,10 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     let list = neighbours.get(from);
     if (!list) {
       list = [];
+      // A degree of latitude is at least 110.5 km: stops further north or south are out of reach.
+      const latitude = stops.get(from)?.latitude, reach = maxWalk / 110_000;
       for (const stop of stops.values()) {
+        if (latitude != null && stop.latitude != null && Math.abs(stop.latitude - latitude) > reach) continue;
         if (stop.ref === from || !walkTarget(stop) || pathwayControlled(from, stop.ref)) continue;
         const metres = distance(from, stop.ref, stops);
         if (metres <= maxWalk) list.push({ ref: stop.ref, metres });
@@ -306,6 +313,13 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     }
     return list;
   };
+  // Pathways leaving each stop, in table order (a walk scans only its own stop's).
+  const pathwaysFrom = new Map<TransitRef, ScheduleShard['pathways']>();
+  for (const path of pathways) {
+    for (const end of path.bidirectional && path.toStopRef !== path.fromStopRef ? [path.fromStopRef, path.toStopRef] : [path.fromStopRef]) {
+      const list = pathwaysFrom.get(end); if (list) list.push(path); else pathwaysFrom.set(end, [path]);
+    }
+  }
   function walkClosure(seeds: Label[]): Label[] {
     const queue: Label[] = [], states = new Map<string, Label[]>();
     const stateKey = (label: Label) => `${label.stop}/${label.boardings}/${label.transitKey}/${label.legs.at(-1)?.kind === 'transit' ? 'onboard' : 'walking'}`;
@@ -323,7 +337,7 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
       const label = queue[index]!;
       if (!states.get(stateKey(label))?.includes(label)) continue;
       const edges: WalkLeg[] = [];
-      for (const path of pathways) {
+      for (const path of pathwaysFrom.get(label.stop) ?? []) {
         const to = path.fromStopRef === label.stop ? path.toStopRef : path.bidirectional && path.toStopRef === label.stop ? path.fromStopRef : undefined;
         if (!to) continue;
         const metres = Math.ceil(path.lengthMetres ?? distance(label.stop, to, stops));

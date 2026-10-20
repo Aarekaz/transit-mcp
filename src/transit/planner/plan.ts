@@ -12,6 +12,10 @@ import type { JourneyQuery, JourneyResult } from './types';
  * 14.5 MB, a ratio of 2.2; this keeps headroom over that. Labels, trip instances and
  * realtime rows are charged separately by the router. */
 const DECODED_SHARD_FACTOR = 4;
+/** A search along named lines keeps only their trips and stations; a whole shard is held
+ * only while it is parsed. Metrobus bands keep about half their bytes for two routes
+ * (unfiltered: 2.2x), so this keeps the same twofold headroom. */
+const FILTERED_SHARD_FACTOR = 1;
 
 export async function planJourney(query: JourneyQuery, signal?: AbortSignal): Promise<JourneyResult> {
   return phase('plan', () => planJourneyUntraced(query, signal));
@@ -32,14 +36,15 @@ async function planJourneyUntraced(query: JourneyQuery, signal?: AbortSignal): P
   const reasons = new Set<VerificationReason>();
   const version = await staticVersion(query.manifest); assertNotAborted(signal);
   let bytes = 0;
-  const window = await loadScheduleWindow({ manifest: query.manifest, instant: query.departAt, windowSeconds: query.windowSeconds ?? 7200, agencyRefs: query.agencyRefs, decoded: query.decoded, ...(query.feedIds ? { feedIds: [...query.feedIds] } : {}),
+  const factor = query.routeRefs ? FILTERED_SHARD_FACTOR : DECODED_SHARD_FACTOR;
+  const window = await loadScheduleWindow({ manifest: query.manifest, instant: query.departAt, windowSeconds: query.windowSeconds ?? 7200, agencyRefs: query.agencyRefs, decoded: query.decoded, readConcurrency: query.readConcurrency, ...(query.routeRefs ? { decodeRoutes: query.routeRefs } : {}), ...(query.feedIds ? { feedIds: [...query.feedIds] } : {}),
     readShard: async key => {
       assertNotAborted(signal);
       const descriptor = query.manifest.shards.find(shard => shard.key === key)!;
-      if ((bytes + descriptor.byteLength) * DECODED_SHARD_FACTOR >= 48 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
+      if ((bytes + descriptor.byteLength) * factor >= 48 * 1024 * 1024) throw new Error('Planner working-set budget exceeded; dedicated Durable Object required');
       const result = await query.readShard(key); assertNotAborted(signal); bytes += result.byteLength; return result;
     } });
-  if (window.status === 'unavailable') return { status: 'unavailable', reasons: window.reasons, candidates: [], diagnostics: { rounds: 0, estimatedWorkingSetBytes: bytes * DECODED_SHARD_FACTOR } };
+  if (window.status === 'unavailable') return { status: 'unavailable', reasons: window.reasons, candidates: [], diagnostics: { rounds: 0, estimatedWorkingSetBytes: bytes * factor } };
   const snapshot = query.realtime;
   let realtime = snapshot?.payload ?? [];
   if (snapshot) {
@@ -49,7 +54,7 @@ async function planJourneyUntraced(query: JourneyQuery, signal?: AbortSignal): P
       !Number.isFinite(snapshot.receivedAtSeconds) || snapshot.receivedAtSeconds < stamp || snapshot.receivedAtSeconds > now) { reasons.add('REALTIME_UNAVAILABLE'); realtime = []; }
     else if (now - stamp > (query.realtimeMaxAgeSeconds ?? 90)) { reasons.add('REALTIME_STALE'); realtime = []; }
   }
-  const routed = await routeDepartAt(query, window.shards, version.artifactVersion, realtime, snapshot?.producerTimestampSeconds, bytes * DECODED_SHARD_FACTOR, signal);
+  const routed = await routeDepartAt(query, window.shards, version.artifactVersion, realtime, snapshot?.producerTimestampSeconds, bytes * factor, signal);
   routed.reasons.forEach(reason => reasons.add(reason));
   const candidates: JourneyResult['candidates'] = [];
   const source = { manifest: query.manifest, shards: window.shards.map(item => item.shard), now: query.now,

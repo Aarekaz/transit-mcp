@@ -4,8 +4,9 @@ import { z } from 'zod';
 import { traced } from '../../../transit/trace';
 import type { MetroMcpContext, TransitRequestState } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
-import { getCoverage, planningFeedIds } from '../../../transit/core/coverage';
+import { getCoverage, networkPlanning, planningFeedIds, planningWithheld } from '../../../transit/core/coverage';
 import { parseTransitRef } from '../../../transit/core/refs';
+import { planNetworkJourney } from '../../../transit/planner/network-plan';
 import { planJourney } from '../../../transit/planner/plan';
 import type { JourneyEndpoint } from '../../../transit/planner/types';
 import type { TransitRef } from '../../../transit/core/refs';
@@ -54,7 +55,7 @@ export function verifyPlanChoices(state: z.infer<typeof planState>, inputRespons
 
 export function registerPlanTool(server: McpServer, context: MetroMcpContext, codec: RequestStateCodec<TransitRequestState>): void {
   server.registerTool('plan_trip', {
-    title: 'Plan a transit journey', description: 'Plan an origin-to-destination journey. Returns up to three independently validated itineraries and resolves named endpoints together; departure defaults to now. When no itinerary is possible (planning withheld, as in SF Bay; a search too large; or nothing found, such as a bus trip) it returns routeHints: lines near each end and direct lines serving both. Call again with routes (the lines you would ride, from routeHints or your own knowledge) to plan along only those lines, which works wherever schedules exist. Present only returned itineraries as confirmed. The whole journey must finish within windowSeconds (default two hours): if none is found for a long trip, retry with a larger window. Each transit leg carries a tripInstanceRef; pass it to get_vehicle_status to see where that train is now. For a wheelchair user or anyone avoiding stairs, set accessibility: "step_free": journeys then board, alight and change only at platforms step-free from the street per the agency (partial stations by direction), avoiding stations cut off by a current elevator outage; in-station changes between such platforms are taken as step-free. It refuses with ACCESSIBILITY_UNAVAILABLE when no current elevator report exists and ENDPOINT_NOT_STEP_FREE when an endpoint has no step-free platform now (get_service_status lists the outages). Never present a journey pieced together from get_departures as confirmed; check it here with routes.',
+    title: 'Plan a transit journey', description: 'Plan an origin-to-destination journey. Returns up to three independently validated itineraries (the fastest, then other lines) and resolves named endpoints together; departure defaults to now. The search covers every line of the coverage, buses included. When no itinerary is possible (planning unavailable, a search too large, or nothing found) it returns routeHints: lines near each end and direct lines serving both. Call again with routes (the lines you would ride, from routeHints or your own knowledge) to plan along only those lines, which works wherever schedules exist. Present only returned itineraries as confirmed. The whole journey must finish within windowSeconds (default two hours): if none is found for a long trip, retry with a larger window. Each transit leg carries a tripInstanceRef; pass it to get_vehicle_status to see where that train is now. For a wheelchair user or anyone avoiding stairs, set accessibility: "step_free": journeys then board, alight and change only at platforms step-free from the street per the agency (partial stations by direction), avoiding stations cut off by a current elevator outage; in-station changes between such platforms are taken as step-free. It refuses with ACCESSIBILITY_UNAVAILABLE when no current elevator report exists and ENDPOINT_NOT_STEP_FREE when an endpoint has no step-free platform now (get_service_status lists the outages). Never present a journey pieced together from get_departures as confirmed; check it here with routes.',
     annotations: readOnlyLive('Plan a transit journey'),
     inputSchema: planInput,
     outputSchema: z.strictObject({ ...resultShape, itineraries: z.array(itinerarySchema).max(3), routeHints: routeHintsSchema.optional() }),
@@ -116,6 +117,9 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     const walkMetres = Math.min(800, args.maxWalkMetres ?? 800);
     const hinted = (reasons: VerificationReason[]) => complete({ ...unavailable(coverageId, data, reasons), itineraries: [], routeHints: routeHints(data, resolved.origin!, resolved.destination!, walkMetres) });
     if (!viaRoutes && !effectiveCapabilities(context, data.coverage, false).planning) return hinted(['PLANNING_UNAVAILABLE']);
+    // The network planner searches every feed, buses included; the whole-feed router, only
+    // what fits an isolate, and not at all where it is withheld (SF Bay).
+    const network = !viaRoutes && networkPlanning(coverageId, context.env), wholeFeed = !planningWithheld(coverageId, context.env);
     // Only the published feeds a journey can ride: a bus feed's state says nothing about a rail plan.
     const planning = (viaRoutes ? [...new Set(viaRoutes.map(ref => parseTransitRef(ref)!.feed))] : planningFeedIds(data.coverage)).filter(feedId => data.version.sourceVersions[feedId] !== undefined);
     // Named lines need only their own stops' predictions, not a whole region's feed. A hub
@@ -151,6 +155,8 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       return stop ? sanitizeTransitText(parent?.name ?? stop.name, 200) : null;
     };
     const asked = { origin: askedName(resolved.origin), destination: askedName(resolved.destination) };
+    // The network planner rides every feed, so it plans between the stops as asked.
+    const requested = { ...resolved };
     const servedByRoutes = (ref: string) => [ref, ...allStops.filter(stop => stop.parentStationRef === ref).map(stop => stop.ref)].some(stop => routeStops!.has(stop));
     for (const endpoint of ['origin', 'destination'] as const) {
       const value = resolved[endpoint], parsed = typeof value === 'string' ? parseTransitRef(value) : null;
@@ -160,26 +166,56 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     }
     // One decode per shard: the planner fills this, and leg details read trips from it.
     const decoded = new DecodedShardCache(Number.MAX_SAFE_INTEGER);
+    // Journeys come only from schedule data; observed-only rows cannot form legs.
+    const plannerRealtime = (read: typeof feed) => read.payload !== null && read.version && read.receivedAtSeconds !== undefined
+      ? { ...read, payload: scheduledRealtimeRows(read.payload), version: read.version, receivedAtSeconds: read.receivedAtSeconds } : undefined;
+    const realtimeReads: (typeof feed)[] = [feed];
+    let result: Awaited<ReturnType<typeof planJourney>> | null = null;
+    if (network) {
+      try {
+        result = await planNetworkJourney({ manifest: data.manifest, indexes: data.indexes, readShard: data.readObject, decoded, origin: requested.origin!, destination: requested.destination!,
+          departAt: args.departAt ?? now, now, windowSeconds: args.windowSeconds, maxWalkMetres: args.maxWalkMetres, maxTransfers: args.maxTransfers,
+          realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds, realtime: plannerRealtime(feed), ...(stepFree ? { stepFree } : {}),
+          networkFeedIds: data.manifest.sources.map(source => source.feedId).filter(feedId => data.version.sourceVersions[feedId] !== undefined),
+          readCompact: async key => { const object = await context.env.TRANSIT_ARTIFACTS!.get(key); if (!object) return null; if (object.size > 32 * 1024 * 1024) throw new Error('Compact band too large'); return new Uint8Array(await object.arrayBuffer()); },
+          // The rail read above covers rail lines; a bus line reads its own stops' predictions.
+          realtimeFor: async (routeRefs, feedIds) => {
+            if (feedIds.every(feedId => planning.includes(feedId))) return plannerRealtime(feed);
+            const stops = new Set(data.indexes.flatMap(index => Object.entries(index.stopRoutes).filter(([, refs]) => refs.some(ref => routeRefs.has(ref))).map(([ref]) => ref)));
+            const ids = [...new Set(allStops.filter(stop => stops.has(stop.ref)).map(stop => stop.providerId))];
+            const read = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', Date.parse(now) / 1000, handler.mcpReq.signal, ids.length <= 200 ? ids : [], feedIds);
+            if (read.payload?.some(update => ['DUPLICATED', 'REPLACEMENT'].includes(update.scheduleRelationship ?? ''))) return null;
+            realtimeReads.push(read);
+            return plannerRealtime(read);
+          } }, handler.mcpReq.signal);
+      } catch (error) {
+        if (handler.mcpReq.signal.aborted || error instanceof Error && error.name === 'AbortError') throw error;
+        // Never worse than before: an unexpected failure plans as if the network planner were off.
+        console.warn(JSON.stringify({ event: 'network_plan_failed', coverage: coverageId, error: error instanceof Error ? error.message.slice(0, 200) : 'unknown' }));
+      }
+      if (!result && !wholeFeed) return hinted(['PLANNING_UNAVAILABLE']);
+    }
+    if (!result) {
     const planned = planJourney({ manifest: data.manifest, feedIds: planning, readShard: data.readObject, decoded, origin: resolved.origin!, destination: resolved.destination!, departAt: args.departAt ?? now, now,
       windowSeconds: args.windowSeconds, maxWalkMetres: args.maxWalkMetres, maxTransfers: args.maxTransfers, realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds,
       // Journeys come only from schedule data; observed-only rows cannot form legs.
-      realtime: feed.payload !== null && feed.version && feed.receivedAtSeconds !== undefined ? { ...feed, payload: scheduledRealtimeRows(feed.payload), version: feed.version, receivedAtSeconds: feed.receivedAtSeconds } : undefined,
+      realtime: plannerRealtime(feed),
       ...(stepFree ? { stepFree } : {}),
       // Agency-split schedules (SF Bay) decode only the agencies this journey can use.
       ...(viaRoutes ? { routeRefs: new Set(viaRoutes), agencyRefs: [...new Set(viaRoutes.map(ref => data.indexes.flatMap(index => index.routes).find(route => route.ref === ref)!.agencyRef))] }
         : (() => { const agencyRefs = journeyAgencies(data, [resolved.origin!, resolved.destination!], Math.min(800, args.maxWalkMetres ?? 800)); return agencyRefs ? { agencyRefs } : {}; })()) }, handler.mcpReq.signal);
-    let result: Awaited<typeof planned>;
     // A search too large for this isolate is a scope limit, not missing coverage.
     try { result = await planned; }
     catch (error) {
       if (error instanceof Error && error.message.startsWith('Planner working-set budget exceeded')) return hinted(['SCOPE_LIMIT_EXCEEDED']);
       throw error;
     }
+    }
     const legTrips = new Set(result.candidates.flatMap(candidate => candidate.legs.flatMap(leg => leg.kind === 'transit' ? [leg.tripRef as string] : [])));
     const sequences = new Map<string, number[]>();
     for (const shard of decoded.shards()) for (const trip of shard.trips) if (legTrips.has(trip.ref)) sequences.set(trip.ref, trip.stopTimes.map(call => call.sequence));
     const meta = metadata(coverageId, data, now);
-    if (feed) meta.sources.push(...realtimeSource(data, feed, 'trip_updates', Date.parse(now) / 1000));
+    for (const read of realtimeReads) meta.sources.push(...realtimeSource(data, read, 'trip_updates', Date.parse(now) / 1000));
     meta.sources.push(...accessSources);
     const routes = data.indexes.flatMap(index => index.routes);
     const stopRows = new Map(data.indexes.flatMap(index => index.stops).map(stop => [stop.ref as string, stop]));
@@ -213,7 +249,7 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       if (final?.kind === 'walk' && final.toName === null) final.toName = asked.destination;
       return kept;
     };
-    return complete({ ...meta, status: result.status, reasons: [...new Set([...result.reasons, ...feed.reasons])], itineraries: result.candidates.map(candidate => ({ ...candidate, legs: candidate.legs.map((leg, index) => {
+    return complete({ ...meta, status: result.status, reasons: [...new Set([...result.reasons, ...realtimeReads.flatMap(read => read.reasons)])], itineraries: result.candidates.map(candidate => ({ ...candidate, legs: candidate.legs.map((leg, index) => {
       if (leg.kind === 'walk') return { ...leg, validatorOutcome: 'valid' as const };
       const route = routes.find(route => route.ref === leg.routeRef)!;
       return { ...leg, mode: route.mode, agencyRef: route.agencyRef, intermediateStopCount: (sequences.get(leg.tripRef) ?? []).filter(sequence => sequence > leg.boardSequence && sequence < leg.alightSequence).length,

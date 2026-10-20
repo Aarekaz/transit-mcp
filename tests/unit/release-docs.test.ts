@@ -46,12 +46,13 @@ describe('release operator documentation', () => {
     expect(llmsText).toContain('do not provide a full journey planner');
     expect(llmsText).toContain('minutesAway');
   });
-  it('documents SF Bay departures, alerts and vehicles without claiming SF planning', () => {
+  it('documents SF Bay departures, alerts, vehicles and planning', () => {
     // The landing page and social image keep their in-development copy until they are redesigned.
     expect(landingPage).toMatch(/SF Bay support is in development/i);
     for (const [name, document] of [['README', readme], ['public docs', publicDocs], ['LLM index', llmsText]] as const) {
       expect(document, name).toMatch(/departures, (?:service )?alerts and vehicle(?: location)?s/i);
-      expect(document, name).toMatch(/plan(?:ning|_trip)[^.]{0,80}not offered/i);
+      expect(document, name).toMatch(/plan_trip/);
+      expect(document, name).not.toMatch(/plan(?:ning|_trip)[^.]{0,80}not offered/i);
     }
     expect(llmsText).toContain('PLANNING_UNAVAILABLE');
     // Pages not rewritten for the launch still make no live SF claim.
