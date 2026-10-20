@@ -3,10 +3,12 @@ import type { RealtimeFeedKind, RealtimeFeedSpec } from '../../../regions/types'
 import { allocatePollIntervals } from '../upstream/budget';
 import { decodeRealtimeFeed, type NormalizedAlert, type NormalizedRealtimeFeed } from './decode';
 import { RegionalFeedHubCore } from './hub-core';
-import { ApiKeyQuota, RealtimeSnapshotStore, StaticArtifactStore, readBoundedObject } from './snapshot-store';
-import { loadScheduleWindow } from '../../planner/schedule-index';
+import { ApiKeyQuota, RealtimeSnapshotStore, StaticArtifactStore, readBoundedObject, type StaticVersion } from './snapshot-store';
+import { DecodedShardCache, loadScheduleWindow } from '../../planner/schedule-index';
 import { applyTripUpdates, applyVehiclePositions, matchVehicles, settleStoppedVehicles } from './trip-match';
 import { decodeDiscoveryIndex, sha256 } from '../static/shards';
+import type { DiscoveryIndex } from '../static/schema';
+import { decodeEquipmentOutages } from '../../accessibility/equipment';
 import { feedParts, getRealtimeSource, getRealtimeSources, ingestionActive, publishedKinds, upstreamRequest, type RealtimeSource } from './sources';
 
 const POLLED_PREFIX = 'polled:';
@@ -21,7 +23,7 @@ export function pollAttemptState(kind: RealtimeFeedKind, nowSeconds: number): Re
 
 export function safePollFailureReason(error: unknown): string {
   if (error instanceof Error && error.message === 'upstream_body_too_large') return error.message;
-  if (error instanceof Error && error.message === 'Malformed GTFS-Realtime feed') return 'malformed_feed';
+  if (error instanceof Error && (error.message === 'Malformed GTFS-Realtime feed' || error.message === 'Malformed equipment feed')) return 'malformed_feed';
   if (error instanceof Error && error.message.startsWith('incomplete_feed')) return 'incomplete_feed';
   // Fixed vocabulary only: never echo upstream bodies, URLs or credentials.
   if (error instanceof Error && /^upstream_(status_\d{3}|quota_exhausted|credential_missing|empty_body)$/.test(error.message)) return error.message;
@@ -83,6 +85,9 @@ export class RegionFeedHub implements DurableObject {
   readonly #snapshots?: RealtimeSnapshotStore;
   readonly #artifacts?: StaticArtifactStore;
   readonly #quota?: ApiKeyQuota;
+  // Polls reuse the verified timetable and discovery index while their hashes are unchanged.
+  readonly #shards = new DecodedShardCache(24 * 1024 * 1024);
+  #discovery?: { sha256: string; index: DiscoveryIndex };
 
   constructor(state: DurableObjectState, env: Env) {
     this.#state = state;
@@ -129,7 +134,10 @@ export class RegionFeedHub implements DurableObject {
     const stops = url.searchParams.getAll('stop');
     const snapshot = await this.#snapshots.read(kind, current.version, stops.length && kind === 'trip_updates' ? stops : undefined);
     if (snapshot) core.replace(kind, snapshot);
-    return Response.json(core.read(kind, now));
+    const read = core.read(kind, now);
+    // The reader already holds this exact payload: send only the freshness metadata.
+    if (read.etag && url.searchParams.get('have') === read.etag) return Response.json({ ...read, payload: null, notModified: true });
+    return Response.json(read);
   }
 
   async alarm(): Promise<void> {
@@ -160,17 +168,38 @@ export class RegionFeedHub implements DurableObject {
     await this.#state.storage.setAlarm(Math.max(Date.now() + 1000, next));
   }
 
-  async #fetchPart(source: RealtimeSource, spec: RealtimeFeedSpec, url: URL, nowSeconds: number): Promise<NormalizedRealtimeFeed> {
+  async #fetchBytes(source: RealtimeSource, spec: RealtimeFeedSpec, url: URL, nowSeconds: number): Promise<Uint8Array> {
     if (!await this.#quota!.claim(spec.kind, nowSeconds)) throw new Error('upstream_quota_exhausted');
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), spec.timeoutMs);
     try {
-      const response = await fetch(upstreamRequest(source, url, this.#env), { signal: controller.signal });
+      const response = await fetch(upstreamRequest(source, url, this.#env, spec.accept), { signal: controller.signal });
       if (!response.ok) throw new Error(`upstream_status_${response.status}`);
-      return decodeRealtimeFeed(await readBody(response, spec.maxBytes), { nyct: source.policy.extensions === 'nyct' });
+      return await readBody(response, spec.maxBytes);
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  async #fetchPart(source: RealtimeSource, spec: RealtimeFeedSpec, url: URL, nowSeconds: number): Promise<NormalizedRealtimeFeed> {
+    return decodeRealtimeFeed(await this.#fetchBytes(source, spec, url, nowSeconds), { nyct: source.policy.extensions === 'nyct' });
+  }
+
+  /** Agency equipment reports carry no feed clock: a complete, validated retrieval is the
+   * observation, dated when the last part arrived. All parts or nothing, as for trip feeds. */
+  async #pollEquipment(source: RealtimeSource, spec: RealtimeFeedSpec, nowSeconds: number, version: StaticVersion): Promise<void> {
+    const parts = feedParts(spec);
+    const settled = await Promise.allSettled(parts.map(part => this.#fetchBytes(source, spec, part.url, nowSeconds)));
+    const failed = settled.flatMap((result, index) => result.status === 'rejected' ? [parts[index]!.id] : []);
+    if (failed.length) {
+      if (parts.length === 1) throw (settled[0] as PromiseRejectedResult).reason;
+      await this.#snapshots!.warn(spec.kind, 'incomplete_feed');
+      throw new Error(`incomplete_feed:${failed.join(',')}`);
+    }
+    const observedAt = Math.floor(Date.now() / 1000);
+    const decoded = decodeEquipmentOutages(spec.format!, Object.fromEntries(parts.map((part, index) => [part.id, (settled[index] as PromiseFulfilledResult<Uint8Array>).value])));
+    await this.#snapshots!.publish(spec.kind, { version, producerTimestampSeconds: observedAt, receivedAtSeconds: observedAt, payload: decoded.outages, warnings: decoded.warnings, degraded: false });
+    console.info(JSON.stringify({ event: 'regional_feed_polled', region: source.coverage.id, feed: spec.kind, outages: decoded.outages.length }));
   }
 
   async #poll(source: RealtimeSource, spec: RealtimeFeedSpec, nowSeconds: number): Promise<void> {
@@ -179,6 +208,7 @@ export class RegionFeedHub implements DurableObject {
       const current = await this.#artifacts?.current();
       if (!current || !this.#snapshots || !this.#env.TRANSIT_ARTIFACTS) return;
       await this.#state.storage.put(pollAttemptState(spec.kind, nowSeconds));
+      if (spec.format) return await this.#pollEquipment(source, spec, nowSeconds, current.version);
       const parts = feedParts(spec);
       const timings: Record<string, number> = {}, startedAt = Date.now();
       const lap = (phase: string) => { timings[phase] = Date.now() - startedAt; };
@@ -196,7 +226,7 @@ export class RegionFeedHub implements DurableObject {
       let payload = payloadFor(spec.kind, decoded), warnings = decoded.warnings, degraded = false, vehicles: unknown[] | undefined;
       const readShard = (key: string) => readBoundedObject(this.#env.TRANSIT_ARTIFACTS!, key, 64 * 1024 * 1024);
       const matchWindow = () => loadScheduleWindow({ manifest: current.manifest, instant: new Date(nowSeconds * 1000).toISOString(),
-        windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [policy.feedId] });
+        windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [policy.feedId], decoded: this.#shards });
       const matching = { manifest: current.manifest, version: current.version, feedId: policy.feedId, tripMatching: policy.tripMatching,
         minimumScheduleMatchRate: coverage.thresholds.minimumScheduleMatchRate };
       if (spec.kind === 'trip_updates') {
@@ -205,9 +235,12 @@ export class RegionFeedHub implements DurableObject {
         const descriptors = current.manifest.discoveries.filter(item => item.feedId === policy.feedId);
         if (descriptors.length !== 1) throw new Error('Discovery identity missing or ambiguous');
         const descriptor = descriptors[0]!;
-        const discoveryBytes = await readBoundedObject(this.#env.TRANSIT_ARTIFACTS, descriptor.key, Math.min(descriptor.byteLength, 64 * 1024 * 1024));
-        if (discoveryBytes.length !== descriptor.byteLength || await sha256(discoveryBytes) !== descriptor.sha256) throw new Error('Discovery integrity failure');
-        const discovery = decodeDiscoveryIndex(discoveryBytes);
+        if (this.#discovery?.sha256 !== descriptor.sha256) {
+          const discoveryBytes = await readBoundedObject(this.#env.TRANSIT_ARTIFACTS, descriptor.key, Math.min(descriptor.byteLength, 64 * 1024 * 1024));
+          if (discoveryBytes.length !== descriptor.byteLength || await sha256(discoveryBytes) !== descriptor.sha256) throw new Error('Discovery integrity failure');
+          this.#discovery = { sha256: descriptor.sha256, index: decodeDiscoveryIndex(discoveryBytes) };
+        }
+        const discovery = this.#discovery.index;
         lap('discovery');
         const applied = await applyTripUpdates(decoded, { ...matching, shards: window.shards.map(entry => entry.shard), discoveries: [discovery] });
         lap('matched');

@@ -6,6 +6,8 @@ export interface StaticVersion { artifactVersion: string; sourceVersions: Record
 export interface NormalizedRealtimeSnapshot<T = unknown> {
   version: StaticVersion; producerTimestampSeconds?: number; receivedAtSeconds: number;
   payload: T[] | null; warnings?: string[]; degraded?: boolean;
+  /** Content tag of the complete payload (from its shard hashes); absent for filtered reads. */
+  etag?: string;
 }
 interface ShardDescriptor { key: string; sha256: string; byteLength: number; partition: number }
 interface SnapshotMetadata extends Omit<NormalizedRealtimeSnapshot, 'payload'> { shards: ShardDescriptor[] }
@@ -136,7 +138,14 @@ function indexKey(value: unknown): string {
   return record.stopId ?? record.entityId ?? record.id ?? '';
 }
 
+/** The payload's content identity: its content-addressed shards, in order. */
+const payloadIdentity = (shards: readonly ShardDescriptor[]) => shards.map(shard => shard.sha256).join('.');
+
 export class RealtimeSnapshotStore {
+  /** The last complete payload per kind, kept by the coordinator that published or read it.
+   * A read whose metadata names the same shards serves it without R2, hashing or parsing. */
+  readonly #latest = new Map<RealtimeFeedKind, { identity: string; etag: string; payload: unknown[] }>();
+
   constructor(private readonly storage: DurableObjectStorage, private readonly bucket: R2Bucket, private readonly coverageId = 'sfbay') {
     if (!/^[a-z0-9_]+$/.test(coverageId)) throw new Error('Invalid coverage namespace');
   }
@@ -192,6 +201,8 @@ export class RealtimeSnapshotStore {
     });
     if (expired.length) await this.bucket.delete(expired);
     await this.storage.delete(garbageKey);
+    const identity = payloadIdentity(metadata.shards);
+    this.#latest.set(kind, { identity, etag: await sha256(new TextEncoder().encode(identity)), payload: payload ?? [] });
   }
 
   async read<T>(kind: RealtimeFeedKind, version: StaticVersion, stopIds?: string[]): Promise<NormalizedRealtimeSnapshot<T> | null> {
@@ -200,6 +211,11 @@ export class RealtimeSnapshotStore {
     if (encode(metadata).length > METADATA_BYTES) throw new Error('Realtime metadata budget exceeded');
     const { shards, ...base } = metadata;
     if (!sameStaticVersion(metadata.version, version)) return { ...base, payload: null, degraded: true, warnings: ['SCHEDULE_REALTIME_MISMATCH'] };
+    const identity = payloadIdentity(shards), resident = this.#latest.get(kind);
+    if (resident?.identity === identity) {
+      const wanted = stopIds && new Set(stopIds);
+      return { ...base, payload: (wanted ? resident.payload.filter(record => wanted.has(indexKey(record))) : resident.payload) as T[], ...(wanted ? {} : { etag: resident.etag }) };
+    }
     const selected = stopIds ? new Set(stopIds.map(partition)) : null;
     const chosen = shards.filter(descriptor => !selected || selected.has(descriptor.partition));
     let total = 0;
@@ -214,7 +230,10 @@ export class RealtimeSnapshotStore {
       const records = JSON.parse(new TextDecoder().decode(bytes)) as T[];
       return stopIds ? records.filter(record => stopIds.includes(indexKey(record))) : records;
     });
-    return { ...base, payload: parts.flat() };
+    if (stopIds) return { ...base, payload: parts.flat() };
+    const payload = parts.flat(), etag = await sha256(new TextEncoder().encode(identity));
+    this.#latest.set(kind, { identity, etag, payload });
+    return { ...base, payload, etag };
   }
 
   async warn(kind: RealtimeFeedKind, warning: string): Promise<void> {

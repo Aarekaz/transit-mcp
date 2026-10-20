@@ -5,14 +5,16 @@ import { complete, readOnlyLive } from '../../shared';
 import { getScheduledDeparturePages, type ScheduledDeparture, type ScheduledDepartures } from '../../../transit/planner/departures';
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { formatEntityRef, parseTransitRef } from '../../../transit/core/refs';
-import { decodeScheduleShard } from '../../../transit/gtfs/static/shards';
+import { DecodedShardCache } from '../../../transit/planner/schedule-index';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
+import { stopAccess } from '../../../transit/accessibility/equipment';
 import type { ScheduleTrip } from '../../../transit/gtfs/static/schema';
 import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, candidates, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, sameStation, unavailable, validRef, type TransitData } from './shared';
 import { getCoverage } from '../../../transit/core/coverage';
 
 const departureShape = { tripRef: z.string(), serviceDate: z.string(), routeRef: z.string(), routeName: z.string().describe('Public route name, e.g. "1", "A" or "Red".'),
   agencyRef: z.string(), stopRef: z.string(), stopName: z.string(), stopSequence: z.number().int(),
+  stepFree: z.enum(['accessible', 'not_accessible', 'unknown']).describe('Step-free access to this platform per the agency\'s station data; live elevator outages are in get_service_status.'),
   headsign: z.string(), directionId: z.number().int().nullable(), pickupType: z.number().int(), status: z.enum(['scheduled_only', 'realtime']), feedId: z.string(), scheduleVersion: z.string(), agencyTimezone: z.string() };
 /** `matched` rows are calls of a canonical scheduled trip instance. Observed rows
  * (`unscheduled_call`: a reroute stop; `unmatched_trip`: a train absent from the
@@ -21,7 +23,7 @@ const departureSchema = z.strictObject({ ...departureShape, stopSequence: z.numb
   predictedTime: instantSchema.nullable(), platform: z.string().nullable(), scheduleMatch: z.enum(['matched', 'unscheduled_call', 'unmatched_trip']) });
 const frequencySchema = z.strictObject({ ...departureShape, tripTemplateRef: z.string(), startTime: instantSchema, endTime: instantSchema, overlapStartTime: instantSchema, overlapEndTime: instantSchema,
   headwaySeconds: z.number().int(), exactTimes: z.literal(false) });
-type Unnamed<T> = Omit<T, 'routeName' | 'stopName'>;
+type Unnamed<T> = Omit<T, 'routeName' | 'stopName' | 'stepFree'>;
 
 export function registerDeparturesTool(server: McpServer, context: MetroMcpContext): void {
   server.registerTool('get_departures', {
@@ -59,20 +61,19 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     // A station is the whole complex a rider knows by that name; a platform is just itself.
     const complex = complexStations(data, stopRef!), within = new Set([stopRef!, ...complex]);
     const relevantStops = new Set(data.indexes.flatMap(index => index.stops).filter(stop => within.has(stop.ref) || stop.parentStationRef !== undefined && within.has(stop.parentStationRef)).map(stop => stop.ref));
-    const trips = new Map<string, Pick<ScheduleTrip, 'headsign' | 'directionId' | 'routeRef' | 'stopTimes'>>();
-    const pages = getScheduledDeparturePages({ manifest: data.manifest, readShard: async key => {
-      const bytes = await data.readObject(key), shard = decodeScheduleShard(bytes);
-      for (const trip of shard.trips) {
-        const stopTimes = trip.stopTimes.filter(call => relevantStops.has(call.stopRef));
-        if (stopTimes.length) trips.set(trip.ref, { headsign: trip.headsign, directionId: trip.directionId, routeRef: trip.routeRef, stopTimes });
-      }
-      return bytes;
-    }, readDiscovery: data.readObject, stopRef: asTransitRef(stopRef!), complexStationRefs: complex.map(asTransitRef),
+    // One decode per shard: the scan fills this, and observed rows read trips from it.
+    const decoded = new DecodedShardCache(Number.MAX_SAFE_INTEGER);
+    const pages = getScheduledDeparturePages({ manifest: data.manifest, readShard: data.readObject, decoded, readDiscovery: data.readObject, stopRef: asTransitRef(stopRef!), complexStationRefs: complex.map(asTransitRef),
       instant: args.at ?? now, windowSeconds: args.windowSeconds, selection: args.selection, limit: 100, routeRefs: args.routeRefs?.map(asTransitRef), agencyRefs: args.agencyRefs?.map(asTransitRef) });
     const scheduled: ScheduledDeparture[] = []; let schedule: ScheduledDepartures | undefined;
     // Predictions can reorder any scheduled page. Exhaust the bounded window before ranking.
     for await (const page of pages) { handler.mcpReq.signal.throwIfAborted(); schedule = page; scheduled.push(...page.departures); }
     if (!schedule) throw new Error('Missing departure scan');
+    const trips = new Map<string, Pick<ScheduleTrip, 'headsign' | 'directionId' | 'routeRef' | 'stopTimes'>>();
+    for (const shard of decoded.shards()) for (const trip of shard.trips) {
+      const stopTimes = trip.stopTimes.filter(call => relevantStops.has(call.stopRef));
+      if (stopTimes.length) trips.set(trip.ref, { headsign: trip.headsign, directionId: trip.directionId, routeRef: trip.routeRef, stopTimes });
+    }
     const stopIndex = data.indexes.flatMap(index => index.stops);
     const relevantProviderIds = stopIndex.filter(stop => relevantStops.has(stop.ref)).map(stop => stop.providerId);
     const feed = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', nowSeconds, handler.mcpReq.signal, relevantProviderIds);
@@ -132,7 +133,10 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     // Human-readable names beside the opaque references, so a model can answer directly.
     const routeNames = new Map(data.indexes.flatMap(index => index.routes).map(route => [route.ref as string, routeName(route)]));
     const stopNames = new Map(data.indexes.flatMap(index => index.stops).map(row => [row.ref as string, sanitizeTransitText(row.name, 200)]));
-    const named = <T extends { routeRef: string; stopRef: string }>(row: T) => ({ ...row, routeName: routeNames.get(row.routeRef) ?? '', stopName: stopNames.get(row.stopRef) ?? '' });
+    const stopRows = new Map(data.indexes.flatMap(index => index.stops.map(row => [row.ref as string, { index, row }] as const)));
+    const allStops = new Map([...stopRows].map(([ref, { row }]) => [ref, row]));
+    const access = (ref: string) => { const found = stopRows.get(ref); return found ? stopAccess(found.index, found.row, allStops) : 'unknown' as const; };
+    const named = <T extends { routeRef: string; stopRef: string }>(row: T) => ({ ...row, routeName: routeNames.get(row.routeRef) ?? '', stopName: stopNames.get(row.stopRef) ?? '', stepFree: access(row.stopRef) });
     return complete({ ...meta, sources,
       status: departures.some(row => row.status === 'realtime') ? 'realtime' as const : schedule.status, reasons: [...new Set([...schedule.reasons, ...feed.reasons])],
       departures: departures.map(named), frequencyWindows: schedule.frequencyWindows.map(named) });

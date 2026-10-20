@@ -57,6 +57,17 @@ describe.skipIf(!coverage || !directory)('live provider acceptance', () => {
     expect(plan.itineraries.every((itinerary: Record<string, any>) => itinerary.legs.every((leg: Record<string, any>) => leg.validatorOutcome === 'valid'))).toBe(true);
     const alerts = (await callTool(env, 'get_service_status', { coverage: coverage! })).structuredContent;
     evidence('alerts', { status: alerts.status, reasons: alerts.reasons, alerts: alerts.alerts.length, sample: alerts.alerts.slice(0, 3).map((alert: Record<string, any>) => alert.agencyText.title.slice(0, 70)) });
+    const equipment = alerts.equipment;
+    evidence('equipment', { status: equipment.status, count: equipment.count, blocking: equipment.blockingStepFreeCount,
+      sample: equipment.outages.slice(0, 4).map((outage: Record<string, any>) => `${outage.equipmentId}|${outage.kind}|${outage.stationName}|ada:${outage.accessiblePath}|backup:${outage.hasBackup}|blocks:${outage.blocksStepFree}|${outage.upcoming ? 'upcoming' : 'current'}`) });
+    expect(equipment.status).toBe('current');
+    const pairs = coverage === 'dc' ? [['STN_A03', 'STN_C05'], ['STN_A01_C01', 'STN_B01_F01']] : [['127', 'A32'], ['127', '635']];
+    for (const [from, to] of pairs) {
+      const stepFree = (await callTool(env, 'plan_trip', { origin: { ref: ref('stop', from!) }, destination: { ref: ref('stop', to!) }, accessibility: 'step_free' })).structuredContent;
+      evidence(`step_free:${from}>${to}`, { status: stepFree.status, reasons: stepFree.reasons, itineraries: stepFree.itineraries.length,
+        first: stepFree.itineraries[0]?.legs.map((leg: Record<string, any>) => leg.kind === 'transit' ? `${leg.headsign}:${leg.from.split(':').at(-1)}>${leg.to.split(':').at(-1)}` : `walk:${leg.distanceMetres}m`) });
+      expect(stepFree.itineraries.every((itinerary: Record<string, any>) => itinerary.legs.every((leg: Record<string, any>) => leg.validatorOutcome === 'valid'))).toBe(true);
+    }
     const route = coverage === 'dc' ? 'RED' : 'A';
     const routeAlerts = (await callTool(env, 'get_service_status', { ref: ref('route', route) })).structuredContent;
     evidence(`alerts:${route}`, { status: routeAlerts.status, alerts: routeAlerts.alerts.length });
