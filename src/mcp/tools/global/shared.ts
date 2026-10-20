@@ -1,5 +1,6 @@
 import { ProtocolError, ProtocolErrorCode, type ServerContext } from '@modelcontextprotocol/server';
 import { count, phase } from '../../../transit/trace';
+import { DecodedShardCache } from '../../../transit/planner/schedule-index';
 import { z } from 'zod';
 import type { MetroMcpContext, TransitRequestState } from '../../context';
 import { complete } from '../../shared';
@@ -96,6 +97,12 @@ const discoveryCaches = new WeakMap<R2Bucket, Map<string, DiscoveryIndex>>();
 export async function loadData(context: MetroMcpContext, coverageId: string, signal: AbortSignal, version?: string): Promise<TransitData | null> {
   return phase('loadData', () => loadDataUntraced(context, coverageId, signal, version));
 }
+/** Whole schedule-shard decodes kept across requests in this isolate: without it every
+ * departure board re-decoded the same few megabytes (1.5 s of CPU in NYC). Content-addressed,
+ * verified and never mutated by readers. Counted in shard file bytes; heap is about twice. */
+export const residentShards = new DecodedShardCache(16 * 1024 * 1024);
+/** Discovery indexes each coverage's current manifest names, for cache eviction. */
+const currentDiscoveries = new Map<string, string[]>();
 async function loadDataUntraced(context: MetroMcpContext, coverageId: string, signal: AbortSignal, version?: string): Promise<TransitData | null> {
   const coverage = getCoverage(coverageId);
   if (!coverage || getCoverageMode(coverage.id, context.env) !== 'on' || !context.env.TRANSIT_ARTIFACTS) return null;
@@ -119,8 +126,10 @@ async function loadDataUntraced(context: MetroMcpContext, coverageId: string, si
       count('discoveryDecoded'); count('discoveryBytes', bytes.byteLength);
       // Content-addressed and verified: safe to reuse across requests in this isolate.
       discoveryCache.set(descriptor.sha256, index);
-      // Keep every index this manifest uses (NYC has one per feed); drop only older versions.
-      const inUse = new Set(current.manifest.discoveries.map(item => item.sha256));
+      // Keep every index any coverage's current manifest uses (NYC has one per feed); drop
+      // only older versions. Loading one city must not evict another's.
+      currentDiscoveries.set(`${coverage.id}`, current.manifest.discoveries.map(item => item.sha256));
+      const inUse = new Set([...currentDiscoveries.values()].flat());
       for (const sha of [...discoveryCache.keys()]) if (discoveryCache.size > inUse.size + 4 && !inUse.has(sha)) discoveryCache.delete(sha);
     }
     if (index.coverageId !== coverage.id || index.feedId !== descriptor.feedId || index.sourceSha256 !== current.version.sourceVersions[index.feedId]) throw new Error('Discovery identity');

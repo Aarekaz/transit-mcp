@@ -3,6 +3,7 @@ import { transit_realtime } from 'gtfs-realtime-bindings';
 import { NYC_TRIP_FEEDS } from '../../src/regions/nyc';
 import { formatEntityRef, formatTripInstanceRef, parseTransitRef } from '../../src/transit/core/refs';
 import { RegionFeedHub } from '../../src/transit/gtfs/realtime/region-feed-hub';
+import { residentShards } from '../../src/mcp/tools/global/shared';
 import { memoryStorage } from '../helpers/realtime-fixture';
 import { NOW, NYC_FILES, SERVICE_DATE, bandedArtifact, composeFeed, callTool, civil, feedBytes, liveEnv, nowSeconds, nyctEquipmentDocuments, nyctOutage, nyctTrip, nyctVehicle, upstream, wireHub, wmataIncident, wmataIncidentDocument } from '../helpers/dc-nyc-realtime';
 
@@ -420,6 +421,8 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     quiet();
     const artifact = await bandedArtifact('nyc');
     for (const key of [...artifact.db.objects.keys()].filter(key => key.endsWith('.bin'))) artifact.db.objects.delete(key);
+    // Earlier tests decoded these shards; a fresh isolate holds none.
+    residentShards.clear();
     const env = liveEnv(artifact.db);
     const result = (await callTool(env, 'get_departures', { stopRef: artifact.ref('stop', '129') })).structuredContent;
     expect(result).toMatchObject({ status: 'unavailable', departures: [] });

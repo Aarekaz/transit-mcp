@@ -14,7 +14,7 @@ import type { SourceStatus, VerificationReason } from '../../../transit/core/res
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { canonicalJson, sha256 } from '../../../transit/gtfs/static/shards';
 import { DecodedShardCache } from '../../../transit/planner/schedule-index';
-import { MAX_DISCOVERY_CANDIDATES, TransitToolError, asTransitRef, boundedText, routeHints, routeHintsSchema, routeName, effectiveCapabilities, journeyAgencies, validRef, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, stopMatches, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, residentShards, TransitToolError, asTransitRef, boundedText, routeHints, routeHintsSchema, routeName, effectiveCapabilities, journeyAgencies, validRef, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, stopMatches, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
 
 const journeyEndpoint = z.union([z.string(), coordinatesSchema]);
 const transitLeg = z.strictObject({ kind: z.literal('transit'), from: z.string(), to: z.string(), tripRef: z.string(), tripInstanceRef: z.string(), serviceDate: z.string(), instanceStartSeconds: z.number(),
@@ -177,7 +177,7 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     let result: Awaited<ReturnType<typeof planJourney>> | null = null;
     if (network) {
       try {
-        result = await planNetworkJourney({ manifest: data.manifest, indexes: data.indexes, readShard: data.readObject, decoded, origin: requested.origin!, destination: requested.destination!,
+        result = await planNetworkJourney({ manifest: data.manifest, indexes: data.indexes, readShard: data.readObject, decoded, resident: residentShards, origin: requested.origin!, destination: requested.destination!,
           departAt: args.departAt ?? now, now, windowSeconds: args.windowSeconds, maxWalkMetres: args.maxWalkMetres, maxTransfers: args.maxTransfers,
           realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds, ...(stepFree ? { stepFree } : {}),
           networkFeedIds: data.manifest.sources.map(source => source.feedId).filter(feedId => data.version.sourceVersions[feedId] !== undefined),
@@ -203,7 +203,7 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     const feed = await readPlanning();
     if (duplicated(feed)) return refuseDuplicated(feed);
     realtimeReads.push(feed);
-    const planned = planJourney({ manifest: data.manifest, feedIds: planning, readShard: data.readObject, decoded, origin: resolved.origin!, destination: resolved.destination!, departAt: args.departAt ?? now, now,
+    const planned = planJourney({ manifest: data.manifest, feedIds: planning, readShard: data.readObject, decoded, resident: residentShards, origin: resolved.origin!, destination: resolved.destination!, departAt: args.departAt ?? now, now,
       windowSeconds: args.windowSeconds, maxWalkMetres: args.maxWalkMetres, maxTransfers: args.maxTransfers, realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds,
       // Journeys come only from schedule data; observed-only rows cannot form legs.
       realtime: plannerRealtime(feed),
