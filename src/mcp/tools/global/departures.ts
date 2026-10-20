@@ -173,7 +173,9 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     const allStops = new Map([...stopRows].map(([ref, { row }]) => [ref, row]));
     const access = (ref: string) => { const found = stopRows.get(ref); return found ? stopAccess(found.index, found.row, allStops) : 'unknown' as const; };
     const named = <T extends { routeRef: string; stopRef: string }>(row: T) => ({ ...row, routeName: routeNames.get(row.routeRef) ?? '', stopName: stopNames.get(row.stopRef) ?? '', stepFree: access(row.stopRef) });
-    const withArrival = (row: Unnamed<z.infer<typeof departureSchema>>) => ({ ...named(row), arrival: row.arrival ? { ...row.arrival, stopName: stopNames.get(row.arrival.stopRef) ?? '' } : null });
+    // Riders know where they get off by the station's name, not the platform's.
+    const arrivalStation = (ref: string) => { const row = allStops.get(ref), parent = row?.parentStationRef ? allStops.get(row.parentStationRef) : undefined; return sanitizeTransitText(parent?.name ?? row?.name ?? '', 200); };
+    const withArrival = (row: Unnamed<z.infer<typeof departureSchema>>) => ({ ...named(row), arrival: row.arrival ? { ...row.arrival, stopName: arrivalStation(row.arrival.stopRef) } : null });
     // Frequency templates have no instance times; keep those that serve the destination later.
     const windows = toWithin ? schedule.frequencyWindows.filter(window => trips.get(window.tripRef)?.stopTimes.some(call => call.sequence > window.stopSequence && destinationStops.has(call.stopRef) && call.dropOffType !== 1)) : schedule.frequencyWindows;
     return complete({ ...meta, sources,
