@@ -12,8 +12,9 @@ const wmataKey = { kind: 'header', header: 'api_key', secretEnv: 'WMATA_API_KEY'
  * coverage manifests stay credential-free. */
 const policies: Readonly<Record<string, readonly RealtimeSourcePolicy[]>> = {
   sfbay: [{ namespace: SF511_QUOTA_NAMESPACE, feedId: 'sf511', auth: { kind: 'query_token', secretEnv: SFBAY_REGION.secretEnv },
-    // Predictions reach about an hour ahead; three hours of agency-split shards per group suffice.
-    budget: SFBAY_REGION.realtime.budget, tripMatching: 'exact', matchWindowSeconds: 3 * 3600 }],
+    // 511 omits start_date for BART, Caltrain, Marin, SolTrans and others, and keeps reporting
+    // trips up to an hour past their scheduled end. Predictions reach about an hour ahead.
+    budget: SFBAY_REGION.realtime.budget, tripMatching: 'exact', matchWindowSeconds: 2 * 3600, matchLookbackSeconds: 3600, undatedTrips: 'current_service_day' }],
   // Rail and bus share the legacy tools' key. Together they stay far below WMATA's default
   // allowance (50,000 requests a day): 480 + 320 an hour at most.
   dc: [{ namespace: 'dc:wmata', feedId: 'wmata', auth: wmataKey, budget: { requestsPerHour: 600, safetyFactor: 0.8, reserveForStatic: 0 }, tripMatching: 'exact' },

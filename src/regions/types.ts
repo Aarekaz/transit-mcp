@@ -75,6 +75,12 @@ export interface RealtimeSourcePolicy {
   alertAgencyAliases?: Readonly<Record<string, string>>;
   /** Provider protobuf extensions to read: NYCT train IDs, or the MTA railroads' track. */
   extensions?: 'nyct' | 'mta_railroad';
+  /** Seconds before now the match window starts, so a late or just-finished trip the
+   * provider still reports is found in its timetable. Defaults to none. */
+  matchLookbackSeconds?: number;
+  /** `current_service_day`: the provider omits start_date on unambiguous trips (allowed by
+   * GTFS-Realtime); resolve them only to the one scheduled instance in the match window. */
+  undatedTrips?: 'current_service_day';
   /** Timetable span loaded to match trip updates; defaults to six hours. */
   matchWindowSeconds?: number;
 }

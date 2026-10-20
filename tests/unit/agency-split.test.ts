@@ -6,7 +6,8 @@ import { agencyGrouping, partitionSchedule } from '../../src/transit/gtfs/static
 import { decodeScheduleShard } from '../../src/transit/gtfs/static/shards';
 import type { GtfsScheduleFiles } from '../../src/transit/gtfs/static/schema';
 import { loadScheduleWindow } from '../../src/transit/planner/schedule-index';
-import type { AppliedTripUpdates } from '../../src/transit/gtfs/realtime/trip-match';
+import { matchTripInstance, type AppliedTripUpdates } from '../../src/transit/gtfs/realtime/trip-match';
+import { staticVersion } from '../../src/transit/gtfs/realtime/snapshot-store';
 import { agencyGroups, combineApplied } from '../../src/transit/gtfs/realtime/region-feed-hub';
 
 /** Two bus agencies that never meet, joined by a rail backbone; every trip has a block. */
@@ -83,6 +84,22 @@ describe('agency-split schedules', () => {
       return { ...shard, source: { ...source, sha256: '' } };
     };
     expect(await build(withShapes('S1', '1.5'))).toEqual(await build(withShapes('S2', '999')));
+  });
+
+  it('resolves a trip sent without start_date only to its one instance in the poll window', async () => {
+    const compiled = await compileSchedule({ coverage: getCoverage('sfbay')!, feedId: 'sf511', files: FILES, window: { startDate: '20261019', endDate: '20261020' },
+      source: { url: 'https://api.511.org/transit/datafeeds', retrievedAt: '2026-10-20T01:30:33Z' }, ignoredFields: ['trips.txt:block_id'] });
+    const context = (startSeconds?: number, endSeconds?: number) => ({ manifest: compiled.manifest, shards: [compiled.shard], version: undefined as never, feedId: 'sf511', tripMatching: 'exact' as const,
+      ...(startSeconds !== undefined ? { undatedWindow: { startSeconds, endSeconds: endSeconds! } } : {}) });
+    const version = await staticVersion(compiled.manifest);
+    const at = (iso: string) => Date.parse(iso) / 1000;
+    const update = { entityId: 'e', tripId: 'ba-0900', scheduleRelationship: 'SCHEDULED' as const, rawScheduleRelationship: 0, stops: [] };
+    // 09:00-11:00 on the 20th holds exactly the 20th's 09:30 train.
+    expect(matchTripInstance(update, { ...context(at('2026-10-20T09:00:00-07:00'), at('2026-10-20T11:00:00-07:00')), version })?.serviceDate).toBe('20261020');
+    // A window spanning both days' trains is ambiguous; no window, or one missing the trip, matches nothing.
+    expect(matchTripInstance(update, { ...context(at('2026-10-19T09:00:00-07:00'), at('2026-10-20T11:00:00-07:00')), version })).toBeNull();
+    expect(matchTripInstance(update, { ...context(), version })).toBeNull();
+    expect(matchTripInstance(update, { ...context(at('2026-10-20T12:00:00-07:00'), at('2026-10-20T14:00:00-07:00')), version })).toBeNull();
   });
 
   it('judges schedule identity over all groups, never one small group', () => {

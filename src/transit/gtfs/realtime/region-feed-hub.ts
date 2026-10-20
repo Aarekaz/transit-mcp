@@ -5,7 +5,7 @@ import { decodeRealtimeFeed, type NormalizedAlert, type NormalizedRealtimeFeed }
 import { RegionalFeedHubCore } from './hub-core';
 import { ApiKeyQuota, RealtimeSnapshotStore, StaticArtifactStore, readBoundedObject, type StaticVersion } from './snapshot-store';
 import { DecodedShardCache, loadScheduleWindow } from '../../planner/schedule-index';
-import { MIN_ELIGIBLE_FOR_MATCH_RATE, applyTripUpdates, applyVehiclePositions, matchVehicles, settleStoppedVehicles, type AppliedTripUpdates } from './trip-match';
+import { MIN_ELIGIBLE_FOR_MATCH_RATE, applyTripUpdates, applyVehiclePositions, matchVehicles, recordVerifiedShards, settleStoppedVehicles, type AppliedTripUpdates } from './trip-match';
 import { decodeDiscoveryIndex, sha256 } from '../static/shards';
 import type { ArtifactManifestV2, DiscoveryIndex } from '../static/schema';
 import type { TransitRef } from '../../core/refs';
@@ -291,10 +291,13 @@ export class RegionFeedHub implements DurableObject {
       lap('fetched');
       let payload = payloadFor(spec.kind, decoded), warnings = decoded.warnings, degraded = false, vehicles: unknown[] | undefined;
       const readShard = (key: string) => readBoundedObject(this.#env.TRANSIT_ARTIFACTS!, key, 64 * 1024 * 1024);
-      const matchWindow = (feedId: string) => loadScheduleWindow({ manifest: current.manifest, instant: new Date(nowSeconds * 1000).toISOString(),
-        windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [feedId], decoded: this.#shards });
+      // A window starting before now (lookback) still finds a late or just-finished trip the
+      // provider keeps reporting.
+      const lookback = policy.matchLookbackSeconds ?? 0, windowStart = new Date((nowSeconds - lookback) * 1000).toISOString(), windowSeconds = lookback + (policy.matchWindowSeconds ?? 6 * 3600);
+      const matchWindow = (feedId: string) => loadScheduleWindow({ manifest: current.manifest, instant: windowStart, windowSeconds, readShard, feedIds: [feedId], decoded: this.#shards });
       const matching = (feedId: string) => ({ manifest: current.manifest, version: current.version, feedId, tripMatching: policy.tripMatching,
-        minimumScheduleMatchRate: coverage.thresholds.minimumScheduleMatchRate, horizonEndSeconds: nowSeconds + (policy.matchWindowSeconds ?? 6 * 3600) });
+        minimumScheduleMatchRate: coverage.thresholds.minimumScheduleMatchRate, horizonEndSeconds: nowSeconds + (policy.matchWindowSeconds ?? 6 * 3600),
+        ...(policy.undatedTrips ? { undatedWindow: { startSeconds: nowSeconds - lookback, endSeconds: nowSeconds + (policy.matchWindowSeconds ?? 6 * 3600) } } : {}) });
       const discoveryOf = async (feedId: string) => {
         const descriptors = current.manifest.discoveries.filter(item => item.feedId === feedId);
         if (descriptors.length !== 1) throw new Error('Discovery identity missing or ambiguous');
@@ -328,7 +331,9 @@ export class RegionFeedHub implements DurableObject {
             const sub = group === undefined ? part : { ...part, trips: part.trips.filter(trip => inGroup(trip.routeId)), vehicles: part.vehicles.filter(vehicle => inGroup(vehicle.routeId)) };
             if (group !== undefined && !sub.trips.length && !sub.vehicles.length) continue;
             const window = group === undefined ? await matchWindow(feedId) : group === null ? null : await loadScheduleWindow({ manifest: current.manifest,
-              instant: new Date(nowSeconds * 1000).toISOString(), windowSeconds: policy.matchWindowSeconds ?? 6 * 3600, readShard, feedIds: [feedId], agencyRefs: [...group] as TransitRef[] });
+              instant: windowStart, windowSeconds, readShard, feedIds: [feedId], agencyRefs: [...group] as TransitRef[] });
+            // Read through the manifest-verified loader: matching need not re-prove these bytes.
+            if (window) recordVerifiedShards(window.shards, current.manifest);
             const shards = window?.shards.map(entry => entry.shard) ?? [];
             if (window) { unavailable ||= window.status === 'unavailable'; windowReasons = [...new Set([...windowReasons, ...window.reasons])]; }
             if (spec.kind === 'vehicle_positions') { matchedVehicles.push(...await applyVehiclePositions(sub.vehicles, { ...matching(feedId), shards })); continue; }

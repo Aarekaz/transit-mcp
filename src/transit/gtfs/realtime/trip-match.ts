@@ -1,7 +1,7 @@
 import { SFBAY_COVERAGE } from '../../../regions/sfbay';
 import type { RealtimeSourcePolicy } from '../../../regions/types';
 import { formatTripInstanceRef, parseTransitRef } from '../../core/refs';
-import { isServiceActive, serviceDayOrigin, shiftServiceDate } from '../../planner/service-day';
+import { isServiceActive, serviceDateAtInstant, serviceDayOrigin, shiftServiceDate } from '../../planner/service-day';
 import type { ArtifactManifestV2, DiscoveryIndex, ScheduleShard, ScheduleTrip } from '../static/schema';
 import { canonicalJson, decodeDiscoveryIndex, encodeScheduleShard, sha256 } from '../static/shards';
 import { parseGtfsTime, parseServiceDate } from '../static/time';
@@ -17,6 +17,10 @@ export interface TripMatchContext {
    * scope for this poll (providers publish predictions hours ahead): neither matched nor
    * judged, and counted as `beyondWindow`. */
   horizonEndSeconds?: number;
+  /** For providers that omit start_date on unambiguous trips (GTFS-Realtime allows it):
+   * the epoch span a trip instance must overlap to be resolved from today's or yesterday's
+   * service day. Only an exactly-one instance matches; absent, undated trips never match. */
+  undatedWindow?: { startSeconds: number; endSeconds: number };
 }
 /** Below this many eligible trips a match rate is not evidence about the schedule. */
 export const MIN_ELIGIBLE_FOR_MATCH_RATE = 20;
@@ -65,7 +69,17 @@ async function assertShardInManifest(shard: ScheduleShard, manifest: ArtifactMan
   if (!manifest.shards.some(descriptor => descriptor.feedId === shard.feedId && descriptor.sha256 === proven.sha256 && descriptor.byteLength === proven.byteLength)) throw new Error('Realtime schedule integrity failure');
 }
 
-/** Date is never inferred from wall time. An ambiguous/missing frequency start is not a match. */
+/** Shards the window loader just read are already checked byte-for-byte against their
+ * manifest descriptor; record that, so matching does not re-encode them to prove it again. */
+export function recordVerifiedShards(entries: readonly { shard: ScheduleShard; key: string }[], manifest: ArtifactManifestV2): void {
+  for (const { shard, key } of entries) {
+    const descriptor = manifest.shards.find(item => item.key === key);
+    if (descriptor && !verified.has(shard)) verified.set(shard, { sha256: descriptor.sha256, byteLength: descriptor.byteLength });
+  }
+}
+
+/** Date is never inferred from wall time, except under undatedWindow (see there). An
+ * ambiguous or missing frequency start is not a match. */
 export function matchTripInstance(update: NormalizedTripUpdate, context: TripMatchContext): MatchedTripInstance | null {
   assertIdentity(context);
   return matchIndexedTrip(update, context, tripIndex(context));
@@ -137,6 +151,7 @@ function tripIndex(context: TripMatchContext): Map<string, { shard: ScheduleShar
 }
 
 function matchIndexedTrip(update: NormalizedTripUpdate, context: TripMatchContext, index: ReturnType<typeof tripIndex>): MatchedTripInstance | null {
+  if (update.tripId && !update.startDate && update.scheduleRelationship !== 'UNKNOWN' && context.undatedWindow && context.tripMatching === 'exact') return undatedMatch(update, context, index);
   if (!update.tripId || !update.startDate || update.scheduleRelationship === 'UNKNOWN') return null;
   try { parseServiceDate(update.startDate); } catch { return null; }
   if (context.tripMatching === 'train_number') return trainNumberMatch(update, context, index);
@@ -153,6 +168,19 @@ function matchIndexedTrip(update: NormalizedTripUpdate, context: TripMatchContex
   if (!previous) return null;
   const day = shiftServiceDate(update.startDate, -1), shifted = tripCandidates(update, previous, day, context, index);
   const candidates = shifted.length ? shifted : short(previous, day);
+  return candidates.length === 1 ? candidates[0]! : null;
+}
+
+/** An undated trip is the one instance of its trip ID, on today's or yesterday's service
+ * day (overnight service), whose scheduled span overlaps the poll's window. */
+function undatedMatch(update: NormalizedTripUpdate, context: TripMatchContext, index: ReturnType<typeof tripIndex>): MatchedTripInstance | null {
+  const window = context.undatedWindow!, timezones = new Set(context.shards.flatMap(shard => Object.values(shard.agencyTimezones)));
+  if (timezones.size !== 1) return null;
+  const today = serviceDateAtInstant(window.endSeconds * 1000, [...timezones][0]!);
+  const candidates = [shiftServiceDate(today, -1), today].flatMap(date => tripCandidates(update, update.tripId!, date, context, index)).filter(candidate => {
+    const last = candidate.trip.stopTimes.at(-1)!, end = last.arrivalSeconds ?? last.departureSeconds;
+    return end !== null && candidate.originSeconds + candidate.startSeconds <= window.endSeconds && candidate.originSeconds + end + candidate.shiftSeconds >= window.startSeconds;
+  });
   return candidates.length === 1 ? candidates[0]! : null;
 }
 
