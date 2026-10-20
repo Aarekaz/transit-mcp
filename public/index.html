@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Transit MCP · Live US transit data for AI</title>
-  <meta name="description" content="Free MCP server for DC Metro and the NYC Subway: trip planning, live departures, service alerts and train positions. SF Bay support is in development. No login required.">
+  <title>Transit MCP · Transit data for your AI</title>
+  <meta name="description" content="A free MCP server for New York, Washington DC and the SF Bay Area: trip planning, departures, service alerts, elevator outages and where the trains and buses are. No login.">
   <link rel="canonical" href="https://transitmcp.com/">
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
 
@@ -13,14 +13,14 @@
   <meta property="og:site_name" content="Transit MCP">
   <meta property="og:url" content="https://transitmcp.com/">
   <meta property="og:title" content="Transit MCP · Plug your LLM into transit">
-  <meta property="og:description" content="Trip planning and live DC Metro and NYC Subway data through one free, anonymous MCP server. SF Bay support is in development.">
+  <meta property="og:description" content="Trips, departures, alerts and vehicles for NYC, DC and the SF Bay Area, through one free, anonymous MCP server.">
   <meta property="og:image" content="https://transitmcp.com/og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Transit MCP: live DC and NYC transit data">
+  <meta property="og:image:alt" content="Transit MCP: transit data for NYC, DC and the SF Bay Area">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Transit MCP · Plug your LLM into transit">
-  <meta name="twitter:description" content="Trip planning and live DC Metro and NYC Subway data through one free, anonymous MCP server. SF Bay support is in development.">
+  <meta name="twitter:description" content="Trips, departures, alerts and vehicles for NYC, DC and the SF Bay Area, through one free, anonymous MCP server.">
   <meta name="twitter:image" content="https://transitmcp.com/og-image.png">
   <script type="application/ld+json">
   {
@@ -30,9 +30,9 @@
     "name": "Transit MCP",
     "alternateName": "Metro MCP",
     "url": "https://transitmcp.com/",
-    "description": "Anonymous, read-only MCP server for DC Metro and NYC Subway trip planning, live departures, service alerts, stations, routes, and vehicles.",
+    "description": "Anonymous, read-only MCP server for New York, Washington DC and SF Bay Area transit: trip planning, departures, service alerts, elevator outages, stations and vehicles.",
     "applicationCategory": "DeveloperApplication",
-    "areaServed": ["Washington, DC", "New York City"],
+    "areaServed": ["New York City", "Washington, DC", "San Francisco Bay Area"],
     "operatingSystem": "Any",
     "image": "https://transitmcp.com/og-image.png",
     "installUrl": "https://chatgpt.com/plugins/plugin_asdk_app_6a9078f4d6dc8191be735cc1c2ff45b5",
@@ -43,9 +43,12 @@
       "priceCurrency": "USD"
     },
     "featureList": [
-      "Real-time DC Metro and NYC Subway arrivals",
-      "Service incidents and elevator outages",
-      "Station search and route detail",
+      "NYC subway, LIRR, Metro-North and buses",
+      "DC Metrorail and Metrobus",
+      "Every SF Bay Area operator in 511, including BART, Muni and Caltrain",
+      "Trip planning and next-train-to answers",
+      "Departures, service alerts and elevator outages",
+      "Where trains and buses are, by line, trip or station",
       "Anonymous access with no login, token, or OAuth flow",
       "Available as a ChatGPT plugin"
     ],
@@ -69,7 +72,7 @@
     "name": "Transit MCP",
     "alternateName": "Metro MCP",
     "url": "https://transitmcp.com/",
-    "description": "Docs and connection details for Transit MCP, a free MCP server for live DC and NYC transit data.",
+    "description": "Docs and connection details for Transit MCP, a free MCP server for NYC, DC and SF Bay Area transit.",
     "inLanguage": "en",
     "publisher": {
       "@type": "Person",
@@ -1731,7 +1734,7 @@
           <span class="stat">~<strong>77K</strong> requests served weekly</span>
         </p>
         <h1 class="rise" style="--i:1">Plug your LLM into <span class="accent">transit</span>.</h1>
-        <p class="subtitle rise" style="--i:2">Plan trips, see live departures and check service alerts on DC Metro and the NYC Subway, right inside your AI. SF Bay support is in development.</p>
+        <p class="subtitle rise" style="--i:2">Plan trips, catch the next train and check what&rsquo;s broken today, right inside your AI. Covers New York, DC and the SF Bay Area.</p>
         <div class="cta-stack rise" style="--i:3">
           <div class="cta-row">
             <button type="button" class="url-pill" data-copy-url="https://transitmcp.com/mcp" aria-label="Copy MCP server URL">
@@ -1779,7 +1782,7 @@
             <span class="infra-mark mta-mark" aria-hidden="true">MTA</span>
             MTA feeds
           </a>
-          <a class="infra-chip" href="https://511.org/open-data" target="_blank" rel="noreferrer" aria-label="Open 511 SF Bay data resources">511 SF Bay · development</a>
+          <a class="infra-chip" href="https://511.org/open-data" target="_blank" rel="noreferrer" aria-label="Open 511 SF Bay data resources">511 SF Bay</a>
         </div>
       </div>
     </section>
@@ -1827,10 +1830,10 @@
           <div class="chat-dots" role="tablist">
             <button type="button" class="chat-dot active" data-scene="0" aria-label="Demo 1: on-time check"></button>
             <button type="button" class="chat-dot" data-scene="1" aria-label="Demo 2: delays"></button>
-            <button type="button" class="chat-dot" data-scene="2" aria-label="Demo 3: weekend service"></button>
+            <button type="button" class="chat-dot" data-scene="2" aria-label="Demo 3: SF Bay trip"></button>
             <button type="button" class="chat-dot" data-scene="3" aria-label="Demo 4: accessibility"></button>
             <button type="button" class="chat-dot" data-scene="4" aria-label="Demo 5: train arrivals"></button>
-            <button type="button" class="chat-dot" data-scene="5" aria-label="Demo 6: bus tracking"></button>
+            <button type="button" class="chat-dot" data-scene="5" aria-label="Demo 6: where the trains are"></button>
           </div>
         </div>
       </section>
@@ -2094,26 +2097,32 @@
               '</dl>' +
             '</div>'
         },
-        // 3 — Friday afternoon: "any weekend service changes?"
+        // 3 — SF Bay: guided along the lines the agent picks (no open search there yet)
         {
-          user: 'Any service changes on the L train this weekend?',
+          user: "I just landed at SFO. How do I get to Union Square?",
           tool: {
-            name: 'get_incidents',
-            args: '{ <span class="json-key">"city"</span>: <span class="json-str">"nyc"</span> }',
-            ms: 210
+            name: 'plan_trip',
+            args: '{ <span class="json-key">"coverage"</span>: <span class="json-str">"sfbay"</span>, <span class="json-key">"origin"</span>: { <span class="json-key">"query"</span>: <span class="json-str">"SFO"</span> }, <span class="json-key">"destination"</span>: { <span class="json-key">"query"</span>: <span class="json-str">"Union Square"</span> }, <span class="json-key">"routes"</span>: [<span class="json-str">"tr:sfbay:sf511:route:…"</span>] }',
+            ms: 940
           },
           response:
-            '<p class="verdict rv">Yes. The ' + nyc('L', '#A7A9AC', '#0a2540') + ' runs less often all weekend.</p>' +
-            '<div class="card alert rv" style="--d:1;--tone:var(--ink);--tone-text:var(--ink-2)">' +
-              '<div class="alert-main">' +
-                '<div class="alert-kind">' + CAL + 'Service change &middot; This weekend</div>' +
-                '<div class="alert-title">8 Av to Bedford Av</div>' +
+            '<p class="verdict rv">Take BART. About 40 min door to door.</p>' +
+            '<div class="card trip rv" style="--d:1;--c:#FFE800">' +
+              '<span class="g start"><i></i></span>' +
+              '<div>' +
+                '<div class="trip-name">SFO International Terminal</div>' +
+                '<div class="trip-sub"><span class="bullets">' +
+                  dc('YL', '#FFE800', '#0a2540') +
+                '</span>To Antioch</div>' +
               '</div>' +
-              '<dl class="facts">' +
-                '<div><dt>Trains</dt><dd>Every <b>8 min</b> <span style="color:var(--ink-3)">(usually 5)</span></dd></div>' +
-                '<div><dt>Canarsie</dt><dd>Limited service</dd></div>' +
-              '</dl>' +
-            '</div>'
+              '<div class="when"><span class="count">' + RT + '6<small>min</small></span><span class="then">then 21 min</span></div>' +
+              '<span class="g mid"></span>' +
+              '<div class="trip-ride">Ride <b>about 30 min</b> to Powell St</div>' +
+              '<span class="g end"><i></i></span>' +
+              '<div class="trip-name">Union Square</div>' +
+              '<div class="when arrive">Then walk<b>6 min</b></div>' +
+            '</div>' +
+            '<p class="note rv" style="--d:2">Get off at Powell St and walk up to the square.</p>'
         },
         // 4 — Accessibility: "are the elevators working?"
         {
@@ -2157,25 +2166,32 @@
               '</div>' +
             '</div>'
         },
-        // 6 — API-feeling: "where are the 30N buses?"
+        // 6 — Where are the trains? NYC places them by station and carries train IDs.
         {
-          user: 'Where are the 30N buses right now?',
+          user: 'Which trains are at Times Square right now?',
           tool: {
-            name: 'get_bus_positions',
-            args: '{ <span class="json-key">"routeId"</span>: <span class="json-str">"30N"</span> }',
-            ms: 310
+            name: 'get_vehicle_status',
+            args: '{ <span class="json-key">"stop"</span>: <span class="json-str">"Times Sq-42 St"</span>, <span class="json-key">"coverage"</span>: <span class="json-str">"nyc"</span> }',
+            ms: 610
           },
           response:
-            '<p class="verdict rv">Checked the ' + dc('30N', '#0a2540') + ' vehicle feed.</p>' +
+            '<p class="verdict rv">Two in the station, one pulling in.</p>' +
             '<div class="card rv" style="--d:1">' +
-              '<div class="card-head">Metrobus 30N<span class="meta">Vehicle positions</span></div>' +
-              '<dl class="facts" style="padding-top:8px">' +
-                '<div><dt>Shows</dt><dd>Active buses, as WMATA reports them</dd></div>' +
-                '<div><dt>Per bus</dt><dd>Vehicle ID and coordinates</dd></div>' +
-                '<div><dt>Filter</dt><dd>Route ID <b>30N</b></dd></div>' +
-              '</dl>' +
+              '<div class="card-head">Times Sq &middot; 42 St<span class="meta">Trains here</span></div>' +
+              '<div class="dep">' + nyc('1', '#EE352E') +
+                '<div class="dep-dest"><b>South Ferry</b><span>Train 01 1412 242/SFT</span></div>' +
+                '<div class="when"><span class="count">' + RT + '<small>In station</small></span></div>' +
+              '</div>' +
+              '<div class="dep">' + nyc('N', '#FCCC0A', '#0a2540') +
+                '<div class="dep-dest"><b>Coney Island</b><span>Train 1N 1405 DIT/STL</span></div>' +
+                '<div class="when"><span class="count">' + RT + '<small>In station</small></span></div>' +
+              '</div>' +
+              '<div class="dep quiet">' + nyc('7', '#B933AD') +
+                '<div class="dep-dest"><b>34 St-Hudson Yards</b><span>From 5 Av</span></div>' +
+                '<div class="when"><span class="count"><small>Arriving</small></span></div>' +
+              '</div>' +
             '</div>' +
-            '<p class="note rv" style="--d:2">For stop-specific ETAs, use <code>get_bus_predictions</code>.</p>'
+            '<p class="note rv" style="--d:2">NYC trains are placed by station, not GPS. DC trains have coordinates.</p>'
         }
       ];
 
