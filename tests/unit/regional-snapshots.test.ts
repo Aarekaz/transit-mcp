@@ -38,12 +38,53 @@ async function publishTrip(f: Awaited<ReturnType<typeof setup>>, ...tripUpdates:
 }
 
 describe('regional v2 snapshot service', () => {
+  it('judges a cold stop read by the last full poll, not by its own skewed sample of routes', async () => {
+    // Route B: thirty trips the timetable has, all live. Route R through S: one known trip and
+    // twenty it does not have. The whole feed is healthy (31/51); the slice through S is not (1/21).
+    const bTrips = Array.from({ length: 30 }, (_, index) => `B${index}`);
+    const files = { 'routes.txt': 'route_id,agency_id,route_short_name,route_long_name,route_type\nR,A,N,Judah,0\nB,A,B,Bay,0\n',
+      'trips.txt': `route_id,service_id,trip_id\nR,D,T\n${bTrips.map(id => `B,D,${id}\n`).join('')}`,
+      'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,08:00:00,08:00:00,S,1\nT,08:05:00,08:05:00,P,2\nT,08:10:00,08:10:00,S,3\nT,08:15:00,08:15:00,Q,4\n' +
+        bTrips.map(id => `${id},08:01:00,08:01:00,P,1\n${id},08:06:00,08:06:00,Q,2\n`).join('') };
+    const entities = [{ id: 'e', tripUpdate: { trip: { tripId: 'T', routeId: 'R', startDate: '20261019' }, stopTimeUpdate: [{ stopSequence: 1, arrival: { delay: 60 } }] } },
+      ...bTrips.map(id => ({ id, tripUpdate: { trip: { tripId: id, routeId: 'B', startDate: '20261019' }, stopTimeUpdate: [{ stopSequence: 1, arrival: { delay: 30 } }] } })),
+      ...Array.from({ length: 20 }, (_, index) => ({ id: `u${index}`, tripUpdate: { trip: { tripId: `U${index}`, routeId: 'R', startDate: '20261019' }, stopTimeUpdate: [{ stopId: 'S', arrival: { time: NOW + 300 } }] } }))];
+    const bytes = transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: NOW }, entity: entities }).finish();
+    const read = async (verdict: number | null) => {
+      const f = await setup(await realtimeFixture('', files)); vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
+      // The whole snapshot never lands, so the focused answer is what is served; a preset verdict stands.
+      if (verdict !== null) f.db.values.set('stats:trip_updates', { artifactVersion: f.version.artifactVersion, eligible: 100, matched: verdict * 100, rate: verdict });
+      const put = f.db.storage.put.bind(f.db.storage);
+      vi.spyOn(f.db.storage, 'put').mockImplementation((async (key: string | Record<string, unknown>, value?: unknown) => {
+        const names = typeof key === 'string' ? [key] : Object.keys(key);
+        if (names.some(name => name.startsWith('snapshot:') || verdict !== null && name.startsWith('stats:'))) throw new Error('storage full');
+        return put(key as never, value as never);
+      }) as never);
+      const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async request => new URL((request as Request).url).pathname.endsWith('tripupdates') ? new Response(bytes) : new Response(null, { status: 503 }));
+      const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try { return await (await f.hub.fetch(new Request(`https://hub/trip_updates?now=${NOW}&artifact=${f.version.artifactVersion}&stop=S`))).json<{ status: string; warnings: string[] }>(); }
+      finally { upstream.mockRestore(); warning.mockRestore(); vi.useRealTimers(); }
+    };
+    // The slice's skew does not condemn it while the whole feed is healthy.
+    expect(await read(null)).toMatchObject({ status: 'realtime' });
+    expect(await read(0.9)).toMatchObject({ status: 'realtime' });
+    // The whole feed said wrong timetable: the focused answer is refused too.
+    expect((await read(0.1)).warnings).toContain('SCHEDULE_REALTIME_MISMATCH');
+  });
+
   it('keeps a cold stop read live when a regional feed carries many route-less trips elsewhere', async () => {
-    const f = await setup(); vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
-    // Twenty trips from other agencies name no route and never call at S; they cannot match.
+    // A healthy regional feed (thirty matched Bay trips) with twenty route-less trips from other
+    // agencies that never call at S and cannot match.
+    const bTrips = Array.from({ length: 30 }, (_, index) => `B${index}`);
+    const f = await setup(await realtimeFixture('', { 'routes.txt': 'route_id,agency_id,route_short_name,route_long_name,route_type\nR,A,N,Judah,0\nB,A,B,Bay,0\n',
+      'trips.txt': `route_id,service_id,trip_id\nR,D,T\n${bTrips.map(id => `B,D,${id}\n`).join('')}`,
+      'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\nT,08:00:00,08:00:00,S,1\nT,08:05:00,08:05:00,P,2\nT,08:10:00,08:10:00,S,3\nT,08:15:00,08:15:00,Q,4\n' +
+        bTrips.map(id => `${id},08:01:00,08:01:00,P,1\n${id},08:06:00,08:06:00,Q,2\n`).join('') }));
+    vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
     const strays = Array.from({ length: 20 }, (_, index) => ({ id: `x${index}`, tripUpdate: { trip: { tripId: `X${index}`, startDate: '20261019' }, stopTimeUpdate: [{ stopId: 'ELSEWHERE', arrival: { time: NOW + 300 } }] } }));
     const bytes = transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: NOW },
-      entity: [{ id: 'e', tripUpdate: { trip: { tripId: 'T', routeId: 'R', startDate: '20261019' }, stopTimeUpdate: [{ stopSequence: 1, arrival: { delay: 60 } }] } }, ...strays] }).finish();
+      entity: [{ id: 'e', tripUpdate: { trip: { tripId: 'T', routeId: 'R', startDate: '20261019' }, stopTimeUpdate: [{ stopSequence: 1, arrival: { delay: 60 } }] } },
+        ...bTrips.map(id => ({ id, tripUpdate: { trip: { tripId: id, routeId: 'B', startDate: '20261019' }, stopTimeUpdate: [{ stopSequence: 1, arrival: { delay: 30 } }] } })), ...strays] }).finish();
     const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async request => new URL((request as Request).url).pathname.endsWith('tripupdates') ? new Response(bytes) : new Response(null, { status: 503 }));
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {

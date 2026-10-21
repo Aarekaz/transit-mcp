@@ -575,7 +575,17 @@ export class RegionFeedHub implements DurableObject {
           degraded = combined.degraded || unavailable; warnings = [...combined.warnings, ...windowReasons];
           if (spec.alsoPublishes?.includes('vehicle_positions')) vehicles = matchedVehicles;
           Object.assign(timings, { rows: payload.length });
-          if (focus) return { version: current.version, producerTimestampSeconds: decoded.producerTimestampSeconds, receivedAtSeconds: Math.floor(Date.now() / 1000), payload, warnings, degraded };
+          if (focus) {
+            // Whether this is the right timetable is the whole feed's call: routes through one
+            // stop are a biased sample (late-night Muni Metro alone read as the wrong schedule).
+            // Take the last full poll's verdict for this timetable; still refuse invalid calls.
+            const verdict = await this.#state.storage.get<{ artifactVersion: string; eligible: number; matched: number; rate: number }>('stats:trip_updates');
+            const wrongTimetable = verdict?.artifactVersion === current.version.artifactVersion &&
+              (verdict.eligible >= MIN_ELIGIBLE_FOR_MATCH_RATE ? verdict.rate < coverage.thresholds.minimumScheduleMatchRate : verdict.eligible > 0 && verdict.matched === 0);
+            const invalid = combined.excluded.invalidExtras > 0 || wrongTimetable || unavailable;
+            return { version: current.version, producerTimestampSeconds: decoded.producerTimestampSeconds, receivedAtSeconds: Math.floor(Date.now() / 1000), payload, degraded: invalid,
+              warnings: [...warnings.filter(warning => warning !== 'SCHEDULE_REALTIME_MISMATCH'), ...(invalid ? ['SCHEDULE_REALTIME_MISMATCH'] : [])] };
+          }
           console.info(JSON.stringify({ event: 'regional_trip_match', region: coverage.id, feed: policy.feedId, ...combined.match, ...combined.excluded }));
           // The schedule refresh compares this before and after publishing a new artifact.
           await this.#state.storage.put('stats:trip_updates', { artifactVersion: current.version.artifactVersion, ...combined.match, atSeconds: nowSeconds });

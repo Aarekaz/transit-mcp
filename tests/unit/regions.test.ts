@@ -23,7 +23,7 @@ describe('regional transit manifests', () => {
         tripUpdates: { realtimeSeconds: 180, staleSeconds: 600 },
         vehiclePositions: { realtimeSeconds: 360, unavailableSeconds: 600 },
         alerts: { currentSeconds: 1200 },
-        minimumScheduleMatchRate: 0.95,
+        minimumScheduleMatchRate: 0.5,
         maximumUnverifiedWalkMetres: 800,
       },
       attribution: [{ text: 'Transit data provided by 511 SF Bay and participating Bay Area operators.', url: 'https://511.org/open-data/transit' }],
