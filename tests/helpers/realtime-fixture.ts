@@ -24,11 +24,13 @@ export function memoryStorage() {
   const objects = new Map<string, Uint8Array>(), uploaded = new Map<string, Date>();
   const reads: string[] = [];
   const storage = {
-    get: async (key: string) => structuredClone(values.get(key)),
+    // Like Durable Object storage: a list of keys reads a Map of those present.
+    get: async (key: string | string[]) => typeof key === 'string' ? structuredClone(values.get(key))
+      : new Map(key.filter(name => values.has(name)).map(name => [name, structuredClone(values.get(name))])),
     put: async (key: string | Record<string, unknown>, value?: unknown) => {
       for (const [name, item] of typeof key === 'string' ? [[key, value]] : Object.entries(key)) values.set(name as string, structuredClone(item));
     },
-    delete: async (key: string) => values.delete(key),
+    delete: async (key: string | string[]) => typeof key === 'string' ? values.delete(key) : key.filter(name => values.delete(name)).length,
     transaction: async <T>(callback: (txn: unknown) => Promise<T>) => callback(storage),
     getAlarm: async () => 1, setAlarm: async () => {},
   };

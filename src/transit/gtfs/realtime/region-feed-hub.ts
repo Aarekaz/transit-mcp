@@ -223,10 +223,10 @@ export class RegionFeedHub implements DurableObject {
 
   /** A feed is due at its interval, or sooner when this coordinator holds none of it (a
    * restart empties memory, whatever the stored poll time says), never within 30 s of a try. */
-  #due(source: RealtimeSource, spec: RealtimeFeedSpec, sinceAttempt: number): boolean {
+  async #due(source: RealtimeSource, spec: RealtimeFeedSpec, sinceAttempt: number): Promise<boolean> {
     if (sinceAttempt >= this.#intervals[spec.kind]!) return true;
-    const missing = publishedKinds(source).has(spec.kind) && !this.#snapshots?.holds(spec.kind);
-    return missing && sinceAttempt >= RETRY_EMPTY_SECONDS;
+    if (sinceAttempt < RETRY_EMPTY_SECONDS || !publishedKinds(source).has(spec.kind)) return false;
+    return !await this.#snapshots?.holds(spec.kind);
   }
 
   #pollOnce(source: RealtimeSource, spec: RealtimeFeedSpec, nowSeconds: number): Promise<void> {
@@ -241,7 +241,7 @@ export class RegionFeedHub implements DurableObject {
     const spec = source.feeds.find(feed => feed.kind === kind) ?? source.feeds.find(feed => feed.alsoPublishes?.includes(kind));
     if (!spec || !ingestionActive(source, this.#env)) return;
     const nowSeconds = Math.floor(Date.now() / 1000), last = await this.#state.storage.get<number>(polledKey(spec.kind)) ?? 0;
-    if (!this.#due(source, spec, nowSeconds - last)) return;
+    if (!await this.#due(source, spec, nowSeconds - last)) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([this.#pollOnce(source, spec, nowSeconds), new Promise<void>(resolve => { timer = setTimeout(resolve, FIRST_READ_WAIT_MS); })]);
     if (timer !== undefined) clearTimeout(timer);
@@ -311,7 +311,7 @@ export class RegionFeedHub implements DurableObject {
       for (const feed of source.feeds) {
         const lastPolled = await this.#state.storage.get<number>(polledKey(feed.kind)) ?? 0;
         const attemptSeconds = Math.floor(Date.now() / 1000);
-        if (this.#due(source, feed, attemptSeconds - lastPolled)) {
+        if (await this.#due(source, feed, attemptSeconds - lastPolled)) {
           await this.#pollOnce(source, feed, attemptSeconds);
         }
       }
