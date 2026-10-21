@@ -329,11 +329,13 @@ export class RegionFeedHub implements DurableObject {
     if (url.searchParams.get('artifact') !== current.version.artifactVersion) {
       return Response.json({ ...core.read(kind, now), version: current.version, degraded: true, warnings: ['SCHEDULE_REALTIME_MISMATCH'] });
     }
-    // A cold stop read's own answer, until the whole snapshot is published.
+    // A cold stop read's own answer, unless the whole snapshot published meanwhile is as new:
+    // an evicted coordinator also reloads its last stored snapshot, which may be long stale.
     const wanted = new Set(stops);
-    const snapshot = focused && sameStaticVersion(focused.version, current.version) && !await this.#snapshots.holds(kind)
+    const held = await this.#snapshots.read(kind, current.version, stops.length && kind === 'trip_updates' ? stops : undefined);
+    const snapshot = focused && sameStaticVersion(focused.version, current.version) && (focused.producerTimestampSeconds ?? 0) > (held?.producerTimestampSeconds ?? -1)
       ? { ...focused, payload: focused.payload?.filter((row: unknown) => wanted.has((row as { stopId?: string }).stopId ?? '')) ?? null }
-      : await this.#snapshots.read(kind, current.version, stops.length && kind === 'trip_updates' ? stops : undefined);
+      : held;
     if (snapshot) core.replace(kind, snapshot);
     const read = core.read(kind, now);
     // The reader already holds this exact payload: send only the freshness metadata.
