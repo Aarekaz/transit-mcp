@@ -7,22 +7,11 @@ export interface StaticVersion { artifactVersion: string; sourceVersions: Record
 export interface NormalizedRealtimeSnapshot<T = unknown> {
   version: StaticVersion; producerTimestampSeconds?: number; receivedAtSeconds: number;
   payload: T[] | null; warnings?: string[]; degraded?: boolean;
-  /** Content tag of the complete payload (from its shard hashes); absent for filtered reads. */
+  /** Tag of the complete payload, new with every publish; absent for filtered reads. */
   etag?: string;
 }
-interface ShardDescriptor { key: string; sha256: string; byteLength: number; partition: number }
-interface SnapshotMetadata extends Omit<NormalizedRealtimeSnapshot, 'payload'> { shards: ShardDescriptor[] }
 const encode = (value: unknown) => new TextEncoder().encode(`${canonicalJson(value)}\n`);
-const PARTITIONS = 64;
-const SHARD_BYTES = 256 * 1024;
-const PAYLOAD_BYTES = 32 * 1024 * 1024;
-/** Payloads up to this many rows stay decoded in memory; larger ones are served from bytes. */
-const RESIDENT_ROWS = 40_000;
-/** Shard bytes a coordinator holds across reads (about one large snapshot and the last). */
-const RESIDENT_SHARD_BYTES = 40 * 1024 * 1024;
-// Current/previous indexes and garbage journals for three feeds (<120 KiB each)
-// plus quota/poll timestamps stay below 2 MiB.
-// Each value also stays below the Durable Object's per-value limit.
+/** Bound on a snapshot's freshness metadata (warnings included). */
 const METADATA_BYTES = 120 * 1024;
 export const SF511_QUOTA_NAMESPACE = 'sfbay:511';
 
@@ -139,190 +128,50 @@ export class StaticArtifactStore {
   }
 }
 
-/** R2 round trips from a Durable Object are slow; overlap a bounded number at a time
- * so one poll finishes well inside its interval. Results keep input order. */
-const R2_CONCURRENCY = 16;
-async function bounded<T, R>(items: readonly T[], operation: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(R2_CONCURRENCY, items.length) }, async () => {
-    while (next < items.length) { const index = next++; results[index] = await operation(items[index]!); }
-  }));
-  return results;
-}
-
-/** A shard is a record array, or `{ columns, rows }` with null for an absent field. */
-function expandShard(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value;
-  const { columns, rows } = value as { columns?: unknown; rows?: unknown };
-  if (!Array.isArray(columns) || !Array.isArray(rows) || !columns.every(column => typeof column === 'string')) throw new Error('Realtime shard integrity failure');
-  return rows.map(row => {
-    if (!Array.isArray(row) || row.length !== columns.length) throw new Error('Realtime shard integrity failure');
-    const record: Record<string, unknown> = {};
-    columns.forEach((column, index) => { if (row[index] !== null) record[column] = row[index]; });
-    return record;
-  });
-}
-
-function partition(key: string): number {
-  let hash = 2166136261;
-  for (let i = 0; i < key.length; i++) hash = Math.imul(hash ^ key.charCodeAt(i), 16777619);
-  return (hash >>> 0) % PARTITIONS;
-}
 function indexKey(value: unknown): string {
   const record = value as { stopId?: string; entityId?: string; id?: string };
   return record.stopId ?? record.entityId ?? record.id ?? '';
 }
 
-/** The payload's content identity: its content-addressed shards, in order. */
-const payloadIdentity = (shards: readonly ShardDescriptor[]) => shards.map(shard => shard.sha256).join('.');
-
+/** The coordinator's latest snapshot per kind, in memory only. Realtime is derived from the
+ * agency feed and stale within minutes, so it is never written to R2 or storage: that cost
+ * some 1.5 million R2 writes a day. A restarted coordinator serves nothing until its next poll. */
+type HeldSnapshot = { snapshot: Omit<NormalizedRealtimeSnapshot, 'payload'>; payload: unknown[] | null; byKey?: Map<string, unknown[]>; etag: string };
+/** Held per coordinator (keyed by its storage), so it lives exactly as long as the object. */
+const held = new WeakMap<DurableObjectStorage, Map<RealtimeFeedKind, HeldSnapshot>>();
+let published = 0;
 export class RealtimeSnapshotStore {
-  /** The last complete payload per kind, kept by the coordinator that published or read it.
-   * A read whose metadata names the same shards serves it without R2, hashing or parsing. */
-  readonly #latest = new Map<RealtimeFeedKind, { identity: string; etag: string; payload: unknown[] }>();
-  /** Latest metadata per kind. This coordinator is its storage's only writer, so reads need
-   * not wait on storage (they queued behind a poll's writes for seconds). */
-  readonly #metadata = new Map<RealtimeFeedKind, SnapshotMetadata>();
-  /** Verified shard bytes by key, least recently used first out. A stop-filtered read
-   * parses only its partitions from these; a snapshot too large to hold decoded (SF Bay's
-   * 90,000 rows) stays cheap to serve. */
-  readonly #bytes = new Map<string, Uint8Array>();
-  #heldBytes = 0;
-  private readonly prefix: string;
-  /** `feedId` scopes a coverage's non-primary feeds: every coordinator collects only the
-   * objects it wrote. The primary feed keeps the coverage-level prefix. */
-  constructor(private readonly storage: DurableObjectStorage, private readonly bucket: R2Bucket, coverageId = 'sfbay', feedId?: string) {
-    if (!/^[a-z0-9_]+$/.test(coverageId) || feedId !== undefined && !/^[a-z0-9_]+$/.test(feedId)) throw new Error('Invalid coverage namespace');
-    this.prefix = feedId === undefined ? `realtime/${coverageId}` : `realtime/${coverageId}/feeds/${feedId}`;
+  readonly #latest: Map<RealtimeFeedKind, HeldSnapshot>;
+  constructor(storage: DurableObjectStorage) {
+    let latest = held.get(storage);
+    if (!latest) { latest = new Map(); held.set(storage, latest); }
+    this.#latest = latest;
   }
 
   async publish<T>(kind: RealtimeFeedKind, snapshot: NormalizedRealtimeSnapshot<T>): Promise<void> {
-    const { payload, ...base } = snapshot;
+    const { payload, etag: _etag, ...base } = snapshot;
     if (encode(base).length > METADATA_BYTES) throw new Error('Realtime metadata budget exceeded');
-    const partitions = new Map<number, Record<string, unknown>[]>();
-    for (const record of payload ?? []) {
-      const key = partition(indexKey(record)), records = partitions.get(key) ?? [];
-      records.push(record as Record<string, unknown>); partitions.set(key, records);
-    }
-    // Each shard is either a plain array of records or, when no record holds a top-level null,
-    // columns named once and rows of values (absent = null): field names are about half of a
-    // trip-update row, and a city's buses publish some 80,000 rows.
-    const groups = new Map<number, { header: string; rows: string[] }>(); let total = 0;
-    for (const [part, records] of partitions) {
-      const columns = [...new Set(records.flatMap(record => Object.keys(record).filter(key => record[key] !== undefined)))].sort();
-      const columnar = columns.length <= 64 && !records.some(record => Object.values(record).some(value => value === null));
-      const rows = records.map(record => columnar ? canonicalJson(columns.map(column => record[column] ?? null)) : canonicalJson(record));
-      for (const row of rows) {
-        const bytes = new TextEncoder().encode(row).length + 1;
-        total += bytes;
-        if (bytes > SHARD_BYTES - 1024 || total > PAYLOAD_BYTES) throw new Error('Realtime payload byte budget exceeded');
-      }
-      groups.set(part, { header: columnar ? `{"columns":${canonicalJson(columns)},"rows":[` : '[', rows });
-    }
-    const objects: { descriptor: ShardDescriptor; bytes: Uint8Array }[] = [];
-    for (const [part, { header, rows: records }] of groups) {
-      let batch: string[] = [], size = header.length + 2;
-      const flush = async () => {
-        if (!batch.length) return;
-        const bytes = new TextEncoder().encode(`${header}${batch.join(',')}${header === '[' ? ']' : ']}'}`), hash = await sha256(bytes);
-        objects.push({ bytes, descriptor: { partition: part, byteLength: bytes.length, sha256: hash,
-          key: `${this.prefix}/${snapshot.version.artifactVersion}/${kind}/${hash}.json` } });
-        batch = []; size = header.length + 2;
-      };
-      for (const record of records) {
-        const length = new TextEncoder().encode(record).length + 1;
-        if (size + length > SHARD_BYTES) await flush();
-        batch.push(record); size += length;
-      }
-      await flush();
-    }
-    const metadata: SnapshotMetadata = { ...base, shards: objects.map(o => o.descriptor) };
-    if (encode(metadata).length > METADATA_BYTES) throw new Error('Realtime metadata budget exceeded');
-    const garbageKey = `realtime:${kind}:garbage`;
-    const pending = await this.storage.get<string[]>(garbageKey) ?? [];
-    if (pending.length) await this.bucket.delete(pending);
-    const current = await this.storage.get<SnapshotMetadata>(`realtime:${kind}`);
-    const previous = await this.storage.get<SnapshotMetadata>(`realtime:${kind}:previous`);
-    const retainedBefore = new Set([...(current?.shards ?? []), ...(previous?.shards ?? [])].map(shard => shard.key));
-    // Journal provisional keys before uploading. A crash/failed put can be cleaned
-    // on restoration, while current/previous objects are never provisional garbage.
-    await this.storage.put(garbageKey, objects.map(object => object.descriptor.key).filter(key => !retainedBefore.has(key)));
-    // Immutable payload first; a failed write never publishes a partial snapshot.
-    await bounded(objects, object => this.bucket.put(object.descriptor.key, object.bytes));
-    const expired = await this.storage.transaction(async txn => {
-      const current = await txn.get<SnapshotMetadata>(`realtime:${kind}`);
-      const previous = await txn.get<SnapshotMetadata>(`realtime:${kind}:previous`);
-      const retained = new Set([...metadata.shards, ...(current?.shards ?? [])].map(shard => shard.key));
-      const expired = (previous?.shards ?? []).filter(shard => !retained.has(shard.key)).map(shard => shard.key);
-      await txn.put({ [`realtime:${kind}`]: metadata, ...(current ? { [`realtime:${kind}:previous`]: current } : {}), [garbageKey]: expired });
-      this.#metadata.set(kind, metadata);
-      return expired;
-    });
-    if (expired.length) await this.bucket.delete(expired);
-    await this.storage.delete(garbageKey);
-    for (const object of objects) this.#hold(object.descriptor.key, object.bytes);
-    const identity = payloadIdentity(metadata.shards);
-    if ((payload ?? []).length <= RESIDENT_ROWS) this.#latest.set(kind, { identity, etag: await sha256(new TextEncoder().encode(identity)), payload: payload ?? [] });
-    else this.#latest.delete(kind);
+    // Any tag unique to this publish lets a reader holding the payload skip it.
+    this.#latest.set(kind, { snapshot: base, payload: payload ?? null, etag: `${base.receivedAtSeconds}.${++published}.${Math.random().toString(36).slice(2, 10)}` });
   }
 
   async read<T>(kind: RealtimeFeedKind, version: StaticVersion, stopIds?: string[]): Promise<NormalizedRealtimeSnapshot<T> | null> {
-    let metadata = this.#metadata.get(kind);
-    if (!metadata) {
-      metadata = await this.storage.get<SnapshotMetadata>(`realtime:${kind}`);
-      if (!metadata) return null;
-      this.#metadata.set(kind, metadata);
+    const latest = this.#latest.get(kind);
+    if (!latest) return null;
+    const base = latest.snapshot;
+    if (!sameStaticVersion(base.version, version)) return { ...base, payload: null, degraded: true, warnings: ['SCHEDULE_REALTIME_MISMATCH'] };
+    if (!stopIds || latest.payload === null) return { ...base, payload: latest.payload as T[] | null, ...(latest.payload ? { etag: latest.etag } : {}) };
+    // Index by stop on the first filtered read: a plan asks for ~200 of SF Bay's 90,000 rows.
+    if (!latest.byKey) {
+      latest.byKey = new Map();
+      for (const record of latest.payload) { const key = indexKey(record), rows = latest.byKey.get(key); if (rows) rows.push(record); else latest.byKey.set(key, [record]); }
     }
-    if (encode(metadata).length > METADATA_BYTES) throw new Error('Realtime metadata budget exceeded');
-    const { shards, ...base } = metadata;
-    if (!sameStaticVersion(metadata.version, version)) return { ...base, payload: null, degraded: true, warnings: ['SCHEDULE_REALTIME_MISMATCH'] };
-    const identity = payloadIdentity(shards), resident = this.#latest.get(kind);
-    if (resident?.identity === identity) {
-      const wanted = stopIds && new Set(stopIds);
-      return { ...base, payload: (wanted ? resident.payload.filter(record => wanted.has(indexKey(record))) : resident.payload) as T[], ...(wanted ? {} : { etag: resident.etag }) };
-    }
-    const selected = stopIds ? new Set(stopIds.map(partition)) : null, wanted = stopIds && new Set(stopIds);
-    const chosen = shards.filter(descriptor => !selected || selected.has(descriptor.partition));
-    let total = 0;
-    for (const descriptor of chosen) {
-      total += descriptor.byteLength;
-      if (descriptor.byteLength > SHARD_BYTES || total > PAYLOAD_BYTES) throw new Error('Realtime payload byte budget exceeded');
-    }
-    // Shard order is preserved; only the fetches overlap.
-    const parts = await bounded(chosen, async descriptor => {
-      let bytes = this.#bytes.get(descriptor.key);
-      if (!bytes) {
-        bytes = await readBoundedObject(this.bucket, descriptor.key, SHARD_BYTES);
-        if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Realtime shard integrity failure');
-        this.#hold(descriptor.key, bytes);
-      }
-      const records = expandShard(JSON.parse(new TextDecoder().decode(bytes))) as T[];
-      return wanted ? records.filter(record => wanted.has(indexKey(record))) : records;
-    });
-    if (wanted) return { ...base, payload: parts.flat() };
-    const payload = parts.flat(), etag = await sha256(new TextEncoder().encode(identity));
-    if (payload.length <= RESIDENT_ROWS) this.#latest.set(kind, { identity, etag, payload });
-    return { ...base, payload, etag };
-  }
-
-  #hold(key: string, bytes: Uint8Array): void {
-    const previous = this.#bytes.get(key);
-    if (previous) { this.#bytes.delete(key); this.#heldBytes -= previous.length; }
-    this.#bytes.set(key, bytes); this.#heldBytes += bytes.length;
-    for (const [old, held] of this.#bytes) {
-      if (this.#heldBytes <= RESIDENT_SHARD_BYTES) break;
-      this.#bytes.delete(old); this.#heldBytes -= held.length;
-    }
+    return { ...base, payload: [...new Set(stopIds)].flatMap(stop => latest.byKey!.get(stop) ?? []) as T[] };
   }
 
   async warn(kind: RealtimeFeedKind, warning: string): Promise<void> {
-    const metadata = await this.storage.get<SnapshotMetadata>(`realtime:${kind}`);
-    if (!metadata) return;
-    metadata.warnings = [...new Set([...(metadata.warnings ?? []), warning])].slice(0, 32);
-    if (encode(metadata).length > METADATA_BYTES) throw new Error('Realtime metadata budget exceeded');
-    await this.storage.put(`realtime:${kind}`, metadata);
-    this.#metadata.set(kind, metadata);
+    const latest = this.#latest.get(kind);
+    if (latest) latest.snapshot = { ...latest.snapshot, warnings: [...new Set([...(latest.snapshot.warnings ?? []), warning])].slice(0, 32) };
   }
 }
 

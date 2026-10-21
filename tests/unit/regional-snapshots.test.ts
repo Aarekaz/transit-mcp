@@ -22,7 +22,7 @@ async function setup(fixture?: Awaited<ReturnType<typeof realtimeFixture>>) {
   const namespaces = getRealtimeSources().map(source => source.policy.namespace);
   expect(namespaces).toContain(SF511_QUOTA_NAMESPACE);
   env.REGION_FEED_HUB = { idFromName: (name: string) => { expect(namespaces).toContain(name); return { toString: () => name }; }, get: () => ({ fetch: (request: string | Request) => hub.fetch(typeof request === 'string' ? new Request(request) : request) }) } as unknown as DurableObjectNamespace;
-  const store = new RealtimeSnapshotStore(db.storage, db.bucket);
+  const store = new RealtimeSnapshotStore(db.storage);
   return { db, f, env, hub, store, version, artifacts, service: createRegionalTransitService(env) };
 }
 
