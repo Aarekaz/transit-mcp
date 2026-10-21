@@ -594,7 +594,8 @@ async function readOwnedFeed<T>(context: MetroMcpContext, data: TransitData, sou
     const freshness = classifyManifestFreshness(producerTimestampSeconds, judgedAt(now, producerTimestampSeconds), threshold, expiry);
     const mismatch = !!feed.version && (!sameStaticVersion(feed.version, data.version) || !data.version.sourceVersions[feedId]);
     if (mismatch || feed.warnings?.includes('SCHEDULE_REALTIME_MISMATCH')) console.warn(JSON.stringify({ event: 'realtime_version_mismatch', coverage: data.coverage.id, source: source.policy.namespace, kind,
-      worker: data.version.artifactVersion.slice(0, 12), snapshot: feed.version?.artifactVersion.slice(0, 12) ?? null, byWarning: !mismatch }));
+      worker: data.version.artifactVersion.slice(0, 12), snapshot: feed.version?.artifactVersion.slice(0, 12) ?? null, byWarning: !mismatch,
+      warnings: feed.warnings?.slice(0, 8), degraded: feed.degraded ?? null, received: feed.receivedAtSeconds ?? null, produced: feed.producerTimestampSeconds ?? null, rows: Array.isArray(feed.payload) ? feed.payload.length : null }));
     const reasons: VerificationReason[] = mismatch || feed.warnings?.includes('SCHEDULE_REALTIME_MISMATCH') ? ['SCHEDULE_REALTIME_MISMATCH'] :
       feed.degraded || !feed.version || freshness === 'expired' || freshness === 'unavailable' || receivedAtSeconds === undefined || receivedAtSeconds < (producerTimestampSeconds ?? Infinity) || !Array.isArray(feed.payload) ? ['REALTIME_UNAVAILABLE'] :
       freshness === 'stale' ? ['REALTIME_STALE'] : [];
