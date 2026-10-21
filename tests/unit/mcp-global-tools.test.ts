@@ -406,6 +406,21 @@ describe('global transit MCP boundary', () => {
     const other = (await call(f.env, 'get_vehicle_status', { ref: 'tr:sfbay:other:route:Ug' })).result.structuredContent;
     expect(other).toMatchObject({ status: 'unavailable', vehicles: [] });
   });
+  it('finds stations the way riders type them: abbreviations, word order, filler words and misspellings', async () => {
+    const input = plannerInput();
+    input.files['stops.txt'] += ['TS,Times Sq-42 St', 'KS,King St-Old Town', 'KM,King St & Marlee Wy', 'W4,W 4 St-Wash Sq', 'LE,L\'Enfant Plaza', 'PM,Powell St & Market St',
+      'CC,Crystal City', 'US,Union Station', 'UQ,14 St-Union Sq', 'FB,Fort Totten', 'MC,Metro Center'].map(row => `${row},37.01,-122.01\n`).join('');
+    const f = await fixture(false, input);
+    const first = async (query: string) => (await call(f.env, 'find_transit', { query, coverage: 'sfbay', limit: 5 })).result.structuredContent.candidates[0]?.name ?? null;
+    for (const [query, expected] of [
+      ['Times Square station', 'Times Sq-42 St'], ['42nd Street Times Square', 'Times Sq-42 St'], ['times sq 42', 'Times Sq-42 St'], ['Tims Sqare', 'Times Sq-42 St'],
+      ['King Street', 'King St-Old Town'], ['West 4th Street', 'W 4 St-Wash Sq'], ['L’Enfant', 'L\'Enfant Plaza'], ['lenfant plaza', 'L\'Enfant Plaza'],
+      ['Powell and Market', 'Powell St & Market St'], ['Crystl Cty', 'Crystal City'], ['the metro at crystal city', 'Crystal City'],
+      ['Union Station', 'Union Station'], ['union square', '14 St-Union Sq'], ['Ft Totten', 'Fort Totten'], ['metro center', 'Metro Center'],
+    ] as const) expect(await first(query), query).toBe(expected);
+    // Folding and typo tolerance must not invent matches.
+    for (const query of ['Brooklyn Bridge', 'Penn Station', 'zzz']) expect(await first(query), query).toBeNull();
+  });
   it('preserves exact public route-number alternatives even when provider IDs and long names differ', async () => {
     const input = plannerInput(); input.files['routes.txt'] = 'route_id,agency_id,route_short_name,route_long_name,route_type\nR,A,91,Night Service,3\n';
     const f = await fixture(false, input), other = plannerInput();
@@ -443,7 +458,8 @@ describe('global transit MCP boundary', () => {
   it('advertises selector exclusivity and strict keys in the JSON schemas clients receive', async () => {
     const { result } = await wire(createMockEnv(), 'tools/list', {}), validator = new AjvJsonSchemaValidator();
     for (const [name, valid, invalid] of [
-      ['find_transit', [{ query: '91' }, { ref: ref('stop', 'A') }, { latitude: 37, longitude: -122 }], [{}, { ref: 'x', query: '91' }, { latitude: 37 }, { query: '91', extra: true }]],
+      // No selector lists the regions served.
+      ['find_transit', [{}, { coverage: 'dc' }, { query: '91' }, { ref: ref('stop', 'A') }, { latitude: 37, longitude: -122 }], [{ ref: 'x', query: '91' }, { latitude: 37 }, { query: '91', extra: true }]],
       ['get_service_status', [{ ref: ref('route', 'R') }, { coverage: 'sfbay' }], [{}, { ref: 'x', coverage: 'sfbay' }, { coverage: 'sfbay', extra: true }]],
     ] as const) {
       const check = validator.getValidator(result.tools.find((tool: any) => tool.name === name).inputSchema);
