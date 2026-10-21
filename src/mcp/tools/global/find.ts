@@ -5,7 +5,7 @@ import type { MetroMcpContext } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
 import { getCoverage, getCoverages } from '../../../transit/core/coverage';
 import { getCoverageMode } from '../../../regions/manifest';
-import { MAX_DISCOVERY_CANDIDATES, compareRanks, rankedCandidates, ambiguityCandidate, describeCandidate, boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, effectiveCapabilities, entities, guarded, trainCandidates, inferCoverage, loadData, metadata, resultShape, unavailable, validRef } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, closestStops, compareRanks, rankedCandidates, ambiguityCandidate, describeCandidate, boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, effectiveCapabilities, entities, guarded, trainCandidates, inferCoverage, loadData, metadata, resultShape, unavailable, validRef } from './shared';
 
 export const entitySchema = candidateSchema.extend({ scheduleVersion: z.string(), resourceUri: z.string(), coordinates: coordinatesSchema.nullable(), routeRefs: z.array(z.string()),
   agencyRef: z.string().nullable(), mode: z.string().nullable(), patterns: z.array(z.strictObject({ id: z.string(), directionId: z.number().int().nullable(), stopRefs: z.array(z.string()) })),
@@ -13,7 +13,8 @@ export const entitySchema = candidateSchema.extend({ scheduleVersion: z.string()
   stepFree: z.enum(['accessible', 'partial', 'not_accessible', 'unknown']).nullable().describe('Step-free access from the street per the agency\'s station data (stops only; partial = some platforms, e.g. one direction). Live elevator outages are in get_service_status.') });
 export const findOutput = z.strictObject({ ...resultShape, coverages: z.array(z.strictObject({ id: z.string(), displayName: z.string(), aliases: z.array(z.string()), supportedModes: z.array(z.string()),
   available: z.boolean(), capabilities: z.strictObject({ schedules: z.boolean(), realtimeDepartures: z.boolean(), alerts: z.boolean(), vehicles: z.boolean(), planning: z.boolean(), accessibility: z.boolean() }) })),
-  candidates: z.array(candidateSchema), entities: z.array(entitySchema), clientCoordinates: coordinatesSchema.nullable() });
+  candidates: z.array(candidateSchema), entities: z.array(entitySchema), clientCoordinates: coordinatesSchema.nullable(),
+  suggestions: z.array(candidateSchema).optional().describe('When no name matches: the closest stop names, not matches. Confirm one with the rider, or retry with the official station name.') });
 export async function findEntityResult(context: MetroMcpContext, ref: string, signal: AbortSignal, version?: string) {
   const parsed = validRef(ref, ['agency', 'route', 'stop', 'trip']);
   const data = await loadData(context, parsed.coverage, signal, version);
@@ -24,7 +25,7 @@ export function registerFindTool(server: McpServer, context: MetroMcpContext): v
   const common = { coverage: coverageSchema.optional(), context: z.strictObject({ coverage: coverageSchema.optional(), feed: boundedText.optional(), serviceDate: z.string().regex(/^\d{8}$/).optional() }).optional(), limit: z.number().int().min(1).max(50).default(20) };
   const absent = { ref: z.never().optional(), query: z.never().optional(), latitude: z.never().optional(), longitude: z.never().optional() };
   server.registerTool('find_transit', {
-    title: 'Find transit entities', description: 'Call with no arguments (or only `coverage`) to list the regions served and what each supports. Without a coverage, a name is searched in every region. Resolve a coverage, agency, route, station, stop, or a currently observed train number (where vehicle data exists); inspect an exact reference or nearby coordinates. Context ranks candidates without selecting identity. Candidates come best first (exact names and well-known place names such as SFO, then stations, then rail before bus), and each stop says what it is: stopType (station, platform or street stop), modes and the lines serving it, so you can pick the one the rider means. No general address geocoding. Use plan_trip for journeys.',
+    title: 'Find transit entities', description: 'Call with no arguments (or only `coverage`) to list the regions served and what each supports. Without a coverage, a name is searched in every region. If nothing matches, suggestions lists the closest names (not matches). Resolve a coverage, agency, route, station, stop, or a currently observed train number (where vehicle data exists); inspect an exact reference or nearby coordinates. Context ranks candidates without selecting identity. Candidates come best first (exact names and well-known place names such as SFO, then stations, then rail before bus), and each stop says what it is: stopType (station, platform or street stop), modes and the lines serving it, so you can pick the one the rider means. No general address geocoding. Use plan_trip for journeys.',
     annotations: readOnlyLive('Find transit entities'),
     inputSchema: z.union([z.strictObject({ ...common, ...absent, ref: boundedText }), z.strictObject({ ...common, ...absent, query: boundedText }),
       z.strictObject({ ...common, ...absent, latitude: coordinatesSchema.shape.latitude, longitude: coordinatesSchema.shape.longitude }),
@@ -51,6 +52,10 @@ export function registerFindTool(server: McpServer, context: MetroMcpContext): v
         const ranked = loaded.flatMap(({ data }) => rankedCandidates(data!, args.query!))
           .sort((a, b) => compareRanks(a.rank, b.rank) || a.entity.ref.localeCompare(b.entity.ref));
         const used = loaded.filter(({ id }) => ranked.some(item => item.entity.coverage === id));
+        // Nothing anywhere: the closest names in every region, so the model can recover.
+        if (!used.length && loaded.length) return complete({ asOf: new Date().toISOString(), status: 'scheduled_only' as const, reasons: [], sources: loaded.flatMap(({ id, data }) => metadata(id, data!).sources),
+          attribution: loaded.flatMap(({ id }) => metadata(id).attribution), coverages: [], candidates: [], entities: [], clientCoordinates: null,
+          suggestions: loaded.flatMap(({ data }) => closestStops(data!, args.query!, 3)).slice(0, 6) });
         if (used.length <= 1) unscoped = used[0]?.id ?? loaded[0]?.id;
         else return complete({ asOf: new Date().toISOString(), status: (loaded.length ? 'scheduled_only' : 'unavailable') as 'scheduled_only' | 'unavailable', reasons: loaded.length ? [] : ['COVERAGE_UNAVAILABLE' as const],
           sources: used.flatMap(({ id, data }) => metadata(id, data!).sources), attribution: used.flatMap(({ id }) => metadata(id).attribution),
@@ -82,7 +87,8 @@ export function registerFindTool(server: McpServer, context: MetroMcpContext): v
       const ambiguous = args.query && data ? found.filter(candidate => ambiguityCandidate(data, candidate, args.query!)) : [];
       if (ambiguous.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...base, status: 'unavailable' as const, reasons: ['SCOPE_LIMIT_EXCEEDED' as const], candidates: [] });
       // Preserve material alternatives in their existing rank, including named place stops.
-      return complete({ ...base, candidates: ambiguous.length > 1 ? ambiguous : found.slice(0, args.limit) });
+      const chosen = ambiguous.length > 1 ? ambiguous : found.slice(0, args.limit);
+      return complete({ ...base, candidates: chosen, ...(!chosen.length && args.query && data ? { suggestions: closestStops(data, args.query) } : {}) });
     }), () => complete({ ...unavailable(resolvedCoverage), coverages: [], candidates: [], entities: [], clientCoordinates: null }));
   });
 }

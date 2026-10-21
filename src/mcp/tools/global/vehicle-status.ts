@@ -7,7 +7,7 @@ import { formatEntityRef, parseTransitRef } from '../../../transit/core/refs';
 import { getCoverage } from '../../../transit/core/coverage';
 import type { NormalizedVehicle } from '../../../transit/gtfs/realtime/decode';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
-import { MAX_DISCOVERY_CANDIDATES, judgedAt, localTime, coverageTimezone, TransitToolError, boundedText, checkState, complexStations, coordinatesSchema, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, routeName, stopMatches, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, closestStops, judgedAt, localTime, coverageTimezone, TransitToolError, boundedText, checkState, complexStations, coordinatesSchema, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, routeName, stopMatches, unavailable, validRef, type TransitData } from './shared';
 
 const STOP_STATUS = { STOPPED_AT: 'stopped_at', INCOMING_AT: 'incoming_at', IN_TRANSIT_TO: 'in_transit_to' } as const;
 
@@ -41,7 +41,7 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
       data = await loadData(context, coverageId, handler.mcpReq.signal);
       if (!data) return complete({ ...unavailable(coverageId), vehicles: [] });
       const matches = stopMatches(data, args.stop);
-      if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND');
+      if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND', closestStops(data, args.stop));
       if (matches.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...unavailable(coverageId, data, ['SCOPE_LIMIT_EXCEEDED']), vehicles: [] });
       if (matches.length > 1) throw new TransitToolError('ENTITY_AMBIGUOUS', matches);
       ref = matches[0]!.ref;

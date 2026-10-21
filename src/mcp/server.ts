@@ -44,6 +44,7 @@ export const SERVER_IDENTITY = Object.freeze({
 /** Model-facing orientation; keep every claim true of the registered tools. */
 export const SERVER_INSTRUCTIONS = [
   'Resolve ambiguous transit entities with find_transit; context may rank candidates but never silently establishes identity. Coverage availability is runtime data.',
+  'Riders use everyday names ("Chinatown", "the Times Square station"). If a name finds nothing, use your own knowledge to retry with the official station name or a nearby landmark, or pass coordinates; suggestions (and a not-found error\'s candidates) are the closest names, not matches, so confirm one before relying on it.',
   'Use find_transit to inspect coverage first. To get from A to B call plan_trip. If it returns no itinerary it returns routeHints (lines near each end, and direct lines serving both): choose the lines you would ride, using your own knowledge of the network too, and call plan_trip again with routes. That plans along only those lines, and works where open search is unavailable and for buses.',
   'For the next train or bus from A to B, call get_departures with toStop: rows list only trips that stop there, with arrival times. Present only itineraries returned by plan_trip as confirmed journeys; never present one pieced together from departures or predictions as confirmed.',
   'Use get_service_status for disruptions or rechecking a chosen journey, and get_vehicle_status for observed vehicles on a route, a dated trip or at a station.',
