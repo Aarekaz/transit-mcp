@@ -18,10 +18,10 @@ export const PAST_CALL_SECONDS = 600;
 
 /** Coordinators poll only while someone reads them: a read keeps one polling this long. */
 export const READER_IDLE_SECONDS = 600;
-/** A read that finds its feed out of date waits this long for the poll it starts. */
-const FIRST_READ_WAIT_MS = 20_000;
-/** A cold stop read waits this long for the provider's document before falling back. */
-const FOCUSED_FETCH_WAIT_MS = 10_000;
+/** A read that finds its feed out of date may spend this long, in all, on the poll it starts
+ * (fetching, and for named stops a focused match) before answering with what it holds. Below
+ * the Worker's 30 s read deadline; one budget, so a slow step can borrow from a fast one. */
+const COLD_READ_BUDGET_MS = 25_000;
 const READ_AT_KEY = 'readAt';
 /** An empty coordinator retries a feed no sooner than this after its last attempt. */
 const RETRY_EMPTY_SECONDS = 30;
@@ -275,13 +275,13 @@ export class RegionFeedHub implements DurableObject {
     if (!spec || !ingestionActive(source, this.#env)) return undefined;
     const nowSeconds = Math.floor(Date.now() / 1000), last = await this.#state.storage.get<number>(polledKey(spec.kind)) ?? 0;
     if (!await this.#due(source, spec, nowSeconds - last)) return undefined;
-    const poll = this.#pollOnce(source, spec, nowSeconds);
+    const poll = this.#pollOnce(source, spec, nowSeconds), deadline = Date.now() + COLD_READ_BUDGET_MS, left = () => Math.max(0, deadline - Date.now());
     if (kind === 'trip_updates' && spec.kind === 'trip_updates' && stops.length) {
-      const decoded = await bounded(this.#fetched.get(spec.kind)?.promise ?? Promise.resolve(null), FOCUSED_FETCH_WAIT_MS);
-      const focused = decoded ? await bounded(this.#poll(source, spec, nowSeconds, { decoded, stops: new Set(stops) }).catch(() => undefined), FOCUSED_FETCH_WAIT_MS) : undefined;
+      const decoded = await bounded(this.#fetched.get(spec.kind)?.promise ?? Promise.resolve(null), left());
+      const focused = decoded ? await bounded(this.#poll(source, spec, nowSeconds, { decoded, stops: new Set(stops) }).catch(() => undefined), left()) : undefined;
       if (focused) return focused;
     }
-    await bounded(poll, FIRST_READ_WAIT_MS);
+    await bounded(poll, left());
     return undefined;
   }
 
