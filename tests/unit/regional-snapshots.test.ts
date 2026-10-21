@@ -38,6 +38,25 @@ async function publishTrip(f: Awaited<ReturnType<typeof setup>>, ...tripUpdates:
 }
 
 describe('regional v2 snapshot service', () => {
+  it('answers a cold stop read live from one provider request, then publishes the whole snapshot from it', async () => {
+    const f = await setup(); vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
+    const bytes = transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: NOW },
+      entity: [{ id: 'e', tripUpdate: { trip: { tripId: 'T', startDate: '20261019' }, stopTimeUpdate: [{ stopSequence: 1, arrival: { delay: 60 } }] } }] }).finish();
+    const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async request => new URL((request as Request).url).pathname.endsWith('tripupdates') ? new Response(bytes) : new Response(null, { status: 503 }));
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const response = await f.hub.fetch(new Request(`https://hub/trip_updates?now=${NOW}&artifact=${f.version.artifactVersion}&stop=S`));
+      const read = await response.json<{ freshness: string; payload: { stopId: string; arrivalTimeSeconds: number }[] }>();
+      expect(read.freshness).toBe('fresh');
+      // The trip calls at S twice; the delay carries forward to the call the feed does not list.
+      expect(read.payload.map(row => row.arrivalTimeSeconds)).toEqual([NOW + 60, NOW + 660]);
+      // The whole snapshot is published from the same document, with the same rows for S.
+      await vi.waitFor(async () => expect(await f.store.holds('trip_updates')).toBe(true));
+      expect((await f.store.read('trip_updates', f.version, ['S']))?.payload).toEqual(read.payload);
+      expect(upstream.mock.calls.filter(([request]) => new URL((request as Request).url).pathname.endsWith('tripupdates'))).toHaveLength(1);
+    } finally { upstream.mockRestore(); warning.mockRestore(); vi.useRealTimers(); }
+  });
+
   it('polls on read after a restart empties memory, but not within 30 s of the last attempt', async () => {
     const f = await setup(); vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
     const bytes = transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: NOW }, entity: [] }).finish();

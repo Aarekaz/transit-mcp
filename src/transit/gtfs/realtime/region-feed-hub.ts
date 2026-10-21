@@ -3,7 +3,7 @@ import type { RealtimeFeedKind, RealtimeFeedSpec } from '../../../regions/types'
 import { allocatePollIntervals } from '../upstream/budget';
 import { decodeRealtimeFeed, type NormalizedAlert, type NormalizedRealtimeFeed, type NormalizedVehicle } from './decode';
 import { RegionalFeedHubCore } from './hub-core';
-import { ApiKeyQuota, RealtimeSnapshotStore, StaticArtifactStore, readBoundedObject, type StaticVersion } from './snapshot-store';
+import { ApiKeyQuota, RealtimeSnapshotStore, StaticArtifactStore, readBoundedObject, sameStaticVersion, type NormalizedRealtimeSnapshot, type StaticVersion } from './snapshot-store';
 import { DecodedShardCache, loadScheduleWindow } from '../../planner/schedule-index';
 import { MIN_ELIGIBLE_FOR_MATCH_RATE, applyTripUpdates, applyVehiclePositions, matchVehicles, recordVerifiedDiscovery, recordVerifiedShards, settleStoppedVehicles, type AppliedTripUpdates } from './trip-match';
 import { decodeDiscoveryIndex, sha256 } from '../static/shards';
@@ -19,10 +19,31 @@ export const PAST_CALL_SECONDS = 600;
 /** Coordinators poll only while someone reads them: a read keeps one polling this long. */
 export const READER_IDLE_SECONDS = 600;
 /** A read that finds its feed out of date waits this long for the poll it starts. */
-const FIRST_READ_WAIT_MS = 15_000;
+const FIRST_READ_WAIT_MS = 25_000;
+/** A cold stop read waits this long for the provider's document before falling back. */
+const FOCUSED_FETCH_WAIT_MS = 10_000;
 const READ_AT_KEY = 'readAt';
 /** An empty coordinator retries a feed no sooner than this after its last attempt. */
 const RETRY_EMPTY_SECONDS = 30;
+
+/** Provider IDs of the routes through these provider stop IDs (a station's platforms too). */
+function focusRoutes(discoveries: readonly DiscoveryIndex[], stops: ReadonlySet<string>): Set<string> {
+  const routes = new Set<string>();
+  for (const index of discoveries) {
+    const refs = new Set(index.stops.filter(stop => stops.has(stop.providerId)).map(stop => stop.ref as string));
+    for (const stop of index.stops) if (stop.parentStationRef && refs.has(stop.parentStationRef)) refs.add(stop.ref);
+    const routeRefs = new Set([...refs].flatMap(ref => index.stopRoutes[ref as TransitRef] ?? []));
+    for (const route of index.routes) if (routeRefs.has(route.ref)) routes.add(route.providerId);
+  }
+  return routes;
+}
+
+/** Resolves with `work`, or undefined after `ms`. */
+async function bounded<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try { return await Promise.race([work, new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), ms); })]); }
+  finally { if (timer !== undefined) clearTimeout(timer); }
+}
 
 function polledKey(kind: RealtimeFeedKind): string {
   return `${POLLED_PREFIX}${kind}`;
@@ -187,7 +208,10 @@ export class RegionFeedHub implements DurableObject {
   #readAt = 0;
   #storedReadAt = 0;
   /** Polls in flight by feed kind, shared by the alarm and reads waiting on fresh data. */
-  readonly #inflight = new Map<RealtimeFeedKind, Promise<void>>();
+  readonly #inflight = new Map<RealtimeFeedKind, Promise<unknown>>();
+  /** Each in-flight poll's provider document, once fetched: a cold stop read answers from it
+   * without a second request (SF Bay's key allows a few an hour). Null when the poll fetched none. */
+  readonly #fetched = new Map<RealtimeFeedKind, { promise: Promise<NormalizedRealtimeFeed | null>; resolve: (feed: NormalizedRealtimeFeed | null) => void }>();
   async #artifact(): Promise<{ version: StaticVersion; manifest: ArtifactManifestV2 } | undefined> {
     return this.#current = await this.#artifacts?.current() ?? undefined;
   }
@@ -229,22 +253,36 @@ export class RegionFeedHub implements DurableObject {
     return !await this.#snapshots?.holds(spec.kind);
   }
 
-  #pollOnce(source: RealtimeSource, spec: RealtimeFeedSpec, nowSeconds: number): Promise<void> {
+  #pollOnce(source: RealtimeSource, spec: RealtimeFeedSpec, nowSeconds: number): Promise<unknown> {
     let poll = this.#inflight.get(spec.kind);
-    if (!poll) { poll = this.#poll(source, spec, nowSeconds).finally(() => this.#inflight.delete(spec.kind)); this.#inflight.set(spec.kind, poll); }
+    if (!poll) {
+      let resolve!: (feed: NormalizedRealtimeFeed | null) => void;
+      const fetched = { promise: new Promise<NormalizedRealtimeFeed | null>(done => { resolve = done; }), resolve: (feed: NormalizedRealtimeFeed | null) => resolve(feed) };
+      this.#fetched.set(spec.kind, fetched);
+      poll = this.#poll(source, spec, nowSeconds).finally(() => { fetched.resolve(null); this.#inflight.delete(spec.kind); this.#fetched.delete(spec.kind); });
+      this.#inflight.set(spec.kind, poll);
+    }
     return poll;
   }
 
-  /** The first read after a quiet spell polls now rather than serve nothing, waiting a bounded time. */
-  async #fresh(kind: RealtimeFeedKind): Promise<void> {
+  /** The first read after a quiet spell polls now rather than serve nothing. A read for named
+   * stops answers as soon as the provider's document arrives, matching only the trips on routes
+   * through those stops, like a direct provider call; the whole snapshot follows from the same
+   * document. Other reads wait a bounded time for the poll. */
+  async #fresh(kind: RealtimeFeedKind, stops: string[] = []): Promise<NormalizedRealtimeSnapshot | undefined> {
     const source = this.#source!;
     const spec = source.feeds.find(feed => feed.kind === kind) ?? source.feeds.find(feed => feed.alsoPublishes?.includes(kind));
-    if (!spec || !ingestionActive(source, this.#env)) return;
+    if (!spec || !ingestionActive(source, this.#env)) return undefined;
     const nowSeconds = Math.floor(Date.now() / 1000), last = await this.#state.storage.get<number>(polledKey(spec.kind)) ?? 0;
-    if (!await this.#due(source, spec, nowSeconds - last)) return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([this.#pollOnce(source, spec, nowSeconds), new Promise<void>(resolve => { timer = setTimeout(resolve, FIRST_READ_WAIT_MS); })]);
-    if (timer !== undefined) clearTimeout(timer);
+    if (!await this.#due(source, spec, nowSeconds - last)) return undefined;
+    const poll = this.#pollOnce(source, spec, nowSeconds);
+    if (kind === 'trip_updates' && spec.kind === 'trip_updates' && stops.length) {
+      const decoded = await bounded(this.#fetched.get(spec.kind)?.promise ?? Promise.resolve(null), FOCUSED_FETCH_WAIT_MS);
+      const focused = decoded ? await this.#poll(source, spec, nowSeconds, { decoded, stops: new Set(stops) }).catch(() => undefined) : undefined;
+      if (focused) return focused;
+    }
+    await bounded(poll, FIRST_READ_WAIT_MS);
+    return undefined;
   }
 
   /** A relay consumer's poll keeps the relay awake and its bytes current. */
@@ -281,7 +319,8 @@ export class RegionFeedHub implements DurableObject {
       return Response.json({ error: 'not_found' }, { status: 404 });
     }
     await this.#wake();
-    await this.#fresh(kind);
+    const stops = url.searchParams.getAll('stop');
+    const focused = await this.#fresh(kind, kind === 'trip_updates' ? stops : []);
     const now = Number(url.searchParams.get('now')) || Math.floor(Date.now() / 1_000);
     const core = new RegionalFeedHubCore(source.coverage.thresholds);
     // A request for another version (a refresh or rollback just happened) rereads the pointer.
@@ -290,8 +329,11 @@ export class RegionFeedHub implements DurableObject {
     if (url.searchParams.get('artifact') !== current.version.artifactVersion) {
       return Response.json({ ...core.read(kind, now), version: current.version, degraded: true, warnings: ['SCHEDULE_REALTIME_MISMATCH'] });
     }
-    const stops = url.searchParams.getAll('stop');
-    const snapshot = await this.#snapshots.read(kind, current.version, stops.length && kind === 'trip_updates' ? stops : undefined);
+    // A cold stop read's own answer, until the whole snapshot is published.
+    const wanted = new Set(stops);
+    const snapshot = focused && sameStaticVersion(focused.version, current.version) && !await this.#snapshots.holds(kind)
+      ? { ...focused, payload: focused.payload?.filter((row: unknown) => wanted.has((row as { stopId?: string }).stopId ?? '')) ?? null }
+      : await this.#snapshots.read(kind, current.version, stops.length && kind === 'trip_updates' ? stops : undefined);
     if (snapshot) core.replace(kind, snapshot);
     const read = core.read(kind, now);
     // The reader already holds this exact payload: send only the freshness metadata.
@@ -380,7 +422,9 @@ export class RegionFeedHub implements DurableObject {
     console.info(JSON.stringify({ event: 'regional_feed_polled', region: source.coverage.id, feed: spec.kind, outages: decoded.outages.length }));
   }
 
-  async #poll(source: RealtimeSource, spec: RealtimeFeedSpec, nowSeconds: number): Promise<void> {
+  /** Fetches, matches and publishes one feed. With `focus`, it matches an already fetched
+   * document's trips on routes through those stops only, and returns that snapshot unpublished. */
+  async #poll(source: RealtimeSource, spec: RealtimeFeedSpec, nowSeconds: number, focus?: { decoded: NormalizedRealtimeFeed; stops: ReadonlySet<string> }): Promise<NormalizedRealtimeSnapshot | undefined> {
     const { coverage, policy } = source;
     try {
       const current = await this.#artifact();
@@ -388,23 +432,27 @@ export class RegionFeedHub implements DurableObject {
       // A feed whose schedule is not published yet has nothing to match: spend no request.
       const feedIds = sourceFeedIds(policy).filter(feedId => current.manifest.sources.some(item => item.feedId === feedId));
       if (!feedIds.length) return;
-      await this.#state.storage.put(pollAttemptState(spec.kind, nowSeconds));
-      if (spec.format) return await this.#pollEquipment(source, spec, nowSeconds, current.version);
-      if (policy.relayTo?.kinds.includes(spec.kind)) return await this.#relay(source, spec, nowSeconds);
+      if (!focus) await this.#state.storage.put(pollAttemptState(spec.kind, nowSeconds));
+      if (spec.format) { await this.#pollEquipment(source, spec, nowSeconds, current.version); return; }
+      if (policy.relayTo?.kinds.includes(spec.kind)) { await this.#relay(source, spec, nowSeconds); return; }
       const parts = feedParts(spec);
       const timings: Record<string, number> = {}, startedAt = Date.now();
       const lap = (phase: string) => { timings[phase] = Date.now() - startedAt; };
-      if (policy.relayFrom) await this.#touchRelay(source, spec.kind);
-      const settled = await Promise.allSettled(parts.map(part => policy.relayFrom ? this.#readRelay(source, spec) : this.#fetchPart(source, spec, part.url, nowSeconds)));
-      const failed = settled.flatMap((result, index) => result.status === 'rejected' ? [parts[index]!.id] : []);
-      if (failed.length) {
-        if (parts.length === 1) throw (settled[0] as PromiseRejectedResult).reason;
-        // Never publish a partial merge. The last complete snapshot ages into
-        // stale/expired by its own producer clock.
-        await this.#snapshots.warn(spec.kind, 'incomplete_feed');
-        throw new Error(`incomplete_feed:${failed.join(',')}`);
+      let decoded = focus?.decoded;
+      if (!decoded) {
+        if (policy.relayFrom) await this.#touchRelay(source, spec.kind);
+        const settled = await Promise.allSettled(parts.map(part => policy.relayFrom ? this.#readRelay(source, spec) : this.#fetchPart(source, spec, part.url, nowSeconds)));
+        const failed = settled.flatMap((result, index) => result.status === 'rejected' ? [parts[index]!.id] : []);
+        if (failed.length) {
+          if (parts.length === 1) throw (settled[0] as PromiseRejectedResult).reason;
+          // Never publish a partial merge. The last complete snapshot ages into
+          // stale/expired by its own producer clock.
+          await this.#snapshots.warn(spec.kind, 'incomplete_feed');
+          throw new Error(`incomplete_feed:${failed.join(',')}`);
+        }
+        decoded = mergeRealtimeParts(settled.map(result => (result as PromiseFulfilledResult<NormalizedRealtimeFeed>).value));
+        this.#fetched.get(spec.kind)?.resolve(decoded);
       }
-      const decoded = mergeRealtimeParts(settled.map(result => (result as PromiseFulfilledResult<NormalizedRealtimeFeed>).value));
       lap('fetched');
       let payload = payloadFor(spec.kind, decoded), warnings = decoded.warnings, degraded = false, vehicles: unknown[] | undefined;
       const readShard = (key: string) => readBoundedObject(this.#env.TRANSIT_ARTIFACTS!, key, 64 * 1024 * 1024);
@@ -435,8 +483,15 @@ export class RegionFeedHub implements DurableObject {
         // A borough reading the relay keeps only its own timetable's trips; a trip in none is
         // not this coordinator's to match.
         const own = (tripId: string | undefined) => tripId !== undefined && listed(discoveries[0]!.tripProviderIds, tripId);
-        const mine = policy.relayFrom ? { ...decoded, trips: decoded.trips.filter(trip => own(trip.tripId)),
-          tripUpdates: decoded.tripUpdates.filter(update => own(update.tripId)), vehicles: decoded.vehicles.filter(vehicle => own(vehicle.tripId)) } : decoded;
+        // A focused read keeps trips on routes through its stops (or naming no route): a feed
+        // lists only a trip's next stops, so the stops alone would miss propagated delays.
+        const through = focus && focusRoutes(discoveries, focus.stops);
+        // Stops this timetable does not route: no focused answer, rather than an empty "live" one.
+        if (through && !through.size) return undefined;
+        const keep = (tripId: string | undefined, routeId?: string) => (!policy.relayFrom || own(tripId)) && (!through || routeId === undefined || through.has(routeId));
+        const routeOf = new Map(decoded.trips.map(trip => [trip.tripId, trip.routeId]));
+        const mine = policy.relayFrom || through ? { ...decoded, trips: decoded.trips.filter(trip => keep(trip.tripId, trip.routeId)),
+          tripUpdates: decoded.tripUpdates.filter(update => keep(update.tripId, routeOf.get(update.tripId))), vehicles: focus ? [] : decoded.vehicles.filter(vehicle => keep(vehicle.tripId, vehicle.routeId)) } : decoded;
         const routed = feedIds.length === 1 ? [mine] : routeByTimetable(mine, discoveries);
         const applied: AppliedTripUpdates[] = [], matchedVehicles: unknown[] = [];
         let unavailable = false, windowReasons: string[] = [];
@@ -479,17 +534,17 @@ export class RegionFeedHub implements DurableObject {
             // Same documents, same verified shards: no second fetch or integrity pass.
             if (spec.alsoPublishes?.includes('vehicle_positions')) matchedVehicles.push(...matchVehicles(settleStoppedVehicles(sub.vehicles, sub.trips), { ...matching(feedId), shards }));
           }
-          if (groups && spec.kind === 'trip_updates') {
+          if (groups && spec.kind === 'trip_updates' && !focus) {
             const matches: TripMatches = { artifactVersion: current.version.artifactVersion, atSeconds: nowSeconds, trips: tripMatchRows };
             this.#tripMatches.set(feedId, matches);
             await this.#state.storage.put(`matches:trip_updates:${feedId}`, matches);
           }
-          if (feedResults.length) {
+          if (feedResults.length && !focus) {
             const feedMatch = feedResults.length === 1 ? feedResults[0]!.match : combineApplied(feedResults, coverage.thresholds.minimumScheduleMatchRate, current.version).match;
             await this.#state.storage.put(`stats:trip_updates:${feedId}`, { artifactVersion: current.version.artifactVersion, ...feedMatch, atSeconds: nowSeconds });
           }
         }
-        if (groupStats.length) console.info(JSON.stringify({ event: 'regional_trip_match_groups', region: coverage.id, feed: policy.feedId, groups: groupStats }));
+        if (groupStats.length && !focus) console.info(JSON.stringify({ event: 'regional_trip_match_groups', region: coverage.id, feed: policy.feedId, groups: groupStats }));
         lap('matched');
         if (spec.kind === 'vehicle_positions') payload = matchedVehicles;
         else {
@@ -505,6 +560,7 @@ export class RegionFeedHub implements DurableObject {
           degraded = combined.degraded || unavailable; warnings = [...combined.warnings, ...windowReasons];
           if (spec.alsoPublishes?.includes('vehicle_positions')) vehicles = matchedVehicles;
           Object.assign(timings, { rows: payload.length });
+          if (focus) return { version: current.version, producerTimestampSeconds: decoded.producerTimestampSeconds, receivedAtSeconds: Math.floor(Date.now() / 1000), payload, warnings, degraded };
           console.info(JSON.stringify({ event: 'regional_trip_match', region: coverage.id, feed: policy.feedId, ...combined.match, ...combined.excluded }));
           // The schedule refresh compares this before and after publishing a new artifact.
           await this.#state.storage.put('stats:trip_updates', { artifactVersion: current.version.artifactVersion, ...combined.match, atSeconds: nowSeconds });
@@ -524,11 +580,14 @@ export class RegionFeedHub implements DurableObject {
       }
       lap('published');
       console.info(JSON.stringify({ event: 'regional_feed_polled', region: coverage.id, source: policy.feedId, feed: spec.kind, ...timings }));
+      return undefined;
     } catch (error) {
+      if (focus) throw error;
       const reason = safePollFailureReason(error);
       if (reason === 'malformed_feed') await this.#snapshots?.warn(spec.kind, reason);
       console.warn(JSON.stringify({ event: 'regional_feed_poll_failed', region: coverage.id, feed: spec.kind, reason,
         ...(error instanceof Error && error.message.startsWith('incomplete_feed:') ? { parts: error.message.slice('incomplete_feed:'.length).split(',') } : {}) }));
+      return undefined;
     }
   }
 }
