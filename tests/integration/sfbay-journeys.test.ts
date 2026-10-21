@@ -1,4 +1,5 @@
 import { createMcpHandler } from '@modelcontextprotocol/server';
+import { formatInstant } from '../../src/transit/planner/service-day';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMetroMcpServer } from '../../src/mcp/server';
 import { itinerarySchema } from '../../src/mcp/tools/global/plan';
@@ -126,7 +127,7 @@ describe('SF Bay synthetic acceptance corpus through global MCP tools', () => {
     if (scenario !== 'canceled') {
       const expected = scenario === 'delayed' ? query.predictedTime : query.scheduledTime;
       expect(result.structuredContent.departures[0]).toMatchObject({ tripRef: corpusRef('trip', query.trip),
-        predictedTime: scenario === 'delayed' ? query.predictedTime : null,
+        predictedTime: scenario === 'delayed' ? formatInstant(Date.parse(query.predictedTime!), 'America/Los_Angeles') : null,
         status: scenario === 'delayed' ? 'realtime' : 'scheduled_only' });
       expect(new Date(result.structuredContent.departures[0].scheduledTime).toISOString()).toBe(query.scheduledTime);
       expect(regional.payload![0]!.departureTimeSeconds).toBe(Date.parse(expected) / 1000);

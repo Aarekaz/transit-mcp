@@ -10,7 +10,7 @@ import { DecodedShardCache } from '../../../transit/planner/schedule-index';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import { stopAccess } from '../../../transit/accessibility/equipment';
 import type { ScheduleTrip } from '../../../transit/gtfs/static/schema';
-import { MAX_DISCOVERY_CANDIDATES, residentShards, TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, stopMatches, stationAgencies, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, localTime, residentShards, TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, stopMatches, stationAgencies, unavailable, validRef, type TransitData } from './shared';
 import { getCoverage } from '../../../transit/core/coverage';
 
 const departureShape = { tripRef: z.string(), serviceDate: z.string(), routeRef: z.string(), routeName: z.string().describe('Public route name, e.g. "1", "A" or "Red".'),
@@ -175,7 +175,8 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     const named = <T extends { routeRef: string; stopRef: string }>(row: T) => ({ ...row, routeName: routeNames.get(row.routeRef) ?? '', stopName: stopNames.get(row.stopRef) ?? '', stepFree: access(row.stopRef) });
     // Riders know where they get off by the station's name, not the platform's.
     const arrivalStation = (ref: string) => { const row = allStops.get(ref), parent = row?.parentStationRef ? allStops.get(row.parentStationRef) : undefined; return sanitizeTransitText(parent?.name ?? row?.name ?? '', 200); };
-    const withArrival = (row: Unnamed<z.infer<typeof departureSchema>>) => ({ ...named(row), arrival: row.arrival ? { ...row.arrival, stopName: arrivalStation(row.arrival.stopRef) } : null });
+    const withArrival = (row: Unnamed<z.infer<typeof departureSchema>>) => ({ ...named(row), scheduledTime: localTime(row.scheduledTime, row.agencyTimezone), predictedTime: localTime(row.predictedTime, row.agencyTimezone),
+      arrival: row.arrival ? { ...row.arrival, scheduledTime: localTime(row.arrival.scheduledTime, row.agencyTimezone), predictedTime: localTime(row.arrival.predictedTime, row.agencyTimezone), stopName: arrivalStation(row.arrival.stopRef) } : null });
     // Frequency templates have no instance times; keep those that serve the destination later.
     const windows = toWithin ? schedule.frequencyWindows.filter(window => trips.get(window.tripRef)?.stopTimes.some(call => call.sequence > window.stopSequence && destinationStops.has(call.stopRef) && call.dropOffType !== 1)) : schedule.frequencyWindows;
     return complete({ ...meta, sources,

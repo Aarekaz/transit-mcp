@@ -1,6 +1,7 @@
 import { ProtocolError, ProtocolErrorCode, type ServerContext } from '@modelcontextprotocol/server';
 import { count, phase } from '../../../transit/trace';
 import { DecodedShardCache } from '../../../transit/planner/schedule-index';
+import { formatInstant } from '../../../transit/planner/service-day';
 import { z } from 'zod';
 import type { MetroMcpContext, TransitRequestState } from '../../context';
 import { complete } from '../../shared';
@@ -682,3 +683,10 @@ export function inferCoverage(endpoint: z.infer<typeof endpointSchema>): string 
   return undefined;
 }
 export const asTransitRef = (ref: string) => ref as TransitRef;
+/** Rider-facing times read in the agency's own clock, with its offset ("18:32-04:00"), so a
+ * model never quotes UTC as local time. Provenance (asOf, ingestedAt) stays UTC. */
+export function localTime<T extends string | null>(instant: T, timezone: string | undefined): T {
+  return (instant === null || !timezone ? instant : formatInstant(Date.parse(instant), timezone)) as T;
+}
+/** The coverage's clock when no single agency applies (its first agency's zone). */
+export const coverageTimezone = (data: TransitData) => Object.values(data.manifest.agencyTimezones)[0];
