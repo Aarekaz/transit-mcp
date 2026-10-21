@@ -5,6 +5,7 @@ import { registerStationTools } from '../../src/mcp/tools/stations';
 import { registerIncidentTools } from '../../src/mcp/tools/incidents';
 import type { MetroRequestState } from '../../src/mcp/context';
 import { WMATAClient } from '../../src/transit/wmata-client';
+import { WMATAError, handleWMATAError } from '../../src/error-handler';
 import { createMockEnv } from '../setup';
 import { nycAlertFeed, nycFeed, nycRerouteFeed, redLinePath, redLineStations, REPLAY_NOW, wmataPath, wmataPredictions, wmataStations } from '../fixtures/legacy-transit';
 
@@ -185,6 +186,16 @@ describe('legacy provider correctness through real tool normalization', () => {
 
   it('keeps WMATA upstream bodies out of tool errors', async () => {
     vi.stubGlobal('fetch', async () => new Response('secret upstream', { status: 503 }));
-    await expect(tools()('get_station_predictions', { city: 'dc', stationName: 'A03' })).rejects.toThrow('Transit API Error [DC] (503): WMATA API request failed');
+    await expect(tools()('get_station_predictions', { city: 'dc', stationName: 'A03' })).rejects.toThrow('Transit API Error [DC] (503): WMATA API request failed. The agency\'s service is failing right now');
+  });
+});
+
+describe('agency errors', () => {
+  it('tell the caller what to do, not just the agency\'s status code', () => {
+    expect(handleWMATAError(new WMATAError('WMATA API request failed', 400))).toMatch(/did not recognise that ID.*find_transit/);
+    expect(handleWMATAError(new WMATAError('WMATA API request failed', 404))).toMatch(/did not recognise/);
+    expect(handleWMATAError(new WMATAError('WMATA API request failed', 429))).toMatch(/try again in a minute/);
+    expect(handleWMATAError(new WMATAError('WMATA API request failed', 401))).toMatch(/nothing the caller can change/);
+    expect(handleWMATAError(new WMATAError('WMATA API request failed', 502))).toMatch(/failing right now/);
   });
 });
