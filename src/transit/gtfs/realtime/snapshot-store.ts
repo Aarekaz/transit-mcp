@@ -169,6 +169,9 @@ export class RealtimeSnapshotStore {
     return { ...base, payload: [...new Set(stopIds)].flatMap(stop => latest.byKey!.get(stop) ?? []) as T[] };
   }
 
+  /** Whether this coordinator holds a snapshot of `kind` (none after a restart). */
+  holds(kind: RealtimeFeedKind): boolean { return this.#latest.has(kind); }
+
   async warn(kind: RealtimeFeedKind, warning: string): Promise<void> {
     const latest = this.#latest.get(kind);
     if (latest) latest.snapshot = { ...latest.snapshot, warnings: [...new Set([...(latest.snapshot.warnings ?? []), warning])].slice(0, 32) };

@@ -21,6 +21,8 @@ export const READER_IDLE_SECONDS = 600;
 /** A read that finds its feed out of date waits this long for the poll it starts. */
 const FIRST_READ_WAIT_MS = 15_000;
 const READ_AT_KEY = 'readAt';
+/** An empty coordinator retries a feed no sooner than this after its last attempt. */
+const RETRY_EMPTY_SECONDS = 30;
 
 function polledKey(kind: RealtimeFeedKind): string {
   return `${POLLED_PREFIX}${kind}`;
@@ -219,6 +221,14 @@ export class RegionFeedHub implements DurableObject {
     if (await this.#state.storage.getAlarm() == null) await this.#state.storage.setAlarm(now + 1_000);
   }
 
+  /** A feed is due at its interval, or sooner when this coordinator holds none of it (a
+   * restart empties memory, whatever the stored poll time says), never within 30 s of a try. */
+  #due(source: RealtimeSource, spec: RealtimeFeedSpec, sinceAttempt: number): boolean {
+    if (sinceAttempt >= this.#intervals[spec.kind]!) return true;
+    const missing = publishedKinds(source).has(spec.kind) && !this.#snapshots?.holds(spec.kind);
+    return missing && sinceAttempt >= RETRY_EMPTY_SECONDS;
+  }
+
   #pollOnce(source: RealtimeSource, spec: RealtimeFeedSpec, nowSeconds: number): Promise<void> {
     let poll = this.#inflight.get(spec.kind);
     if (!poll) { poll = this.#poll(source, spec, nowSeconds).finally(() => this.#inflight.delete(spec.kind)); this.#inflight.set(spec.kind, poll); }
@@ -231,7 +241,7 @@ export class RegionFeedHub implements DurableObject {
     const spec = source.feeds.find(feed => feed.kind === kind) ?? source.feeds.find(feed => feed.alsoPublishes?.includes(kind));
     if (!spec || !ingestionActive(source, this.#env)) return;
     const nowSeconds = Math.floor(Date.now() / 1000), last = await this.#state.storage.get<number>(polledKey(spec.kind)) ?? 0;
-    if (nowSeconds - last < this.#intervals[spec.kind]!) return;
+    if (!this.#due(source, spec, nowSeconds - last)) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([this.#pollOnce(source, spec, nowSeconds), new Promise<void>(resolve => { timer = setTimeout(resolve, FIRST_READ_WAIT_MS); })]);
     if (timer !== undefined) clearTimeout(timer);
@@ -301,7 +311,7 @@ export class RegionFeedHub implements DurableObject {
       for (const feed of source.feeds) {
         const lastPolled = await this.#state.storage.get<number>(polledKey(feed.kind)) ?? 0;
         const attemptSeconds = Math.floor(Date.now() / 1000);
-        if (attemptSeconds - lastPolled >= this.#intervals[feed.kind]!) {
+        if (this.#due(source, feed, attemptSeconds - lastPolled)) {
           await this.#pollOnce(source, feed, attemptSeconds);
         }
       }
