@@ -41,18 +41,19 @@ async function equipmentReport(context: MetroMcpContext, data: TransitData, stat
   const feed = await readFeed<EquipmentOutage>(context, data, 'equipment_outages', nowSeconds, signal);
   const sources = realtimeSource(data, feed, 'equipment_outages', nowSeconds);
   if (!feed.payload) return { report: { status: 'unavailable' as const, count: 0, blockingStepFreeCount: 0, outages: [] }, sources };
-  const rows = data.indexes.flatMap(index => {
-    const blocked = blockedStations(feed.payload!, index, nowSeconds);
-    return feed.payload!.flatMap(outage => {
-      const current = currentOutage(outage, nowSeconds);
-      if (!current && !(outage.upcoming && outage.sinceSeconds !== null && outage.sinceSeconds <= nowSeconds + UPCOMING_HORIZON_SECONDS)) return [];
-      const refs = outageStations(outage, index);
-      if (stations !== 'all' && !refs.some(ref => stations.has(ref))) return [];
-      const blocksStepFree = current && outage.kind === 'elevator' && outage.accessiblePath && refs.some(ref => blocked.has(ref));
-      return [{ equipmentId: outage.id, kind: outage.kind, stationRefs: refs.slice(0, 8), stationName: outage.stationName, location: outage.location, accessiblePath: outage.accessiblePath,
-        hasBackup: outage.redundant, blocksStepFree, reason: outage.reason, since: outage.sinceSeconds === null ? null : localTime(new Date(outage.sinceSeconds * 1000).toISOString(), coverageTimezone(data)),
-        estimatedReturn: outage.estimatedReturnSeconds === null ? null : localTime(new Date(outage.estimatedReturnSeconds * 1000).toISOString(), coverageTimezone(data)), upcoming: !current, alternativeRoute: outage.alternativeRoute }];
-    });
+  // One row per outage. A coverage has a timetable index per feed (DC: Metrorail and Metrobus;
+  // NYC: nine), and walking outages once per index counted each of them that many times.
+  const blocked = data.indexes.map(index => ({ index, stations: blockedStations(feed.payload!, index, nowSeconds) }));
+  const rows = feed.payload.flatMap(outage => {
+    const current = currentOutage(outage, nowSeconds);
+    if (!current && !(outage.upcoming && outage.sinceSeconds !== null && outage.sinceSeconds <= nowSeconds + UPCOMING_HORIZON_SECONDS)) return [];
+    const byIndex = blocked.map(({ index, stations: blockedHere }) => ({ refs: outageStations(outage, index), blockedHere }));
+    const refs = [...new Set(byIndex.flatMap(entry => entry.refs))];
+    if (stations !== 'all' && !refs.some(ref => stations.has(ref))) return [];
+    const blocksStepFree = current && outage.kind === 'elevator' && outage.accessiblePath && byIndex.some(entry => entry.refs.some(ref => entry.blockedHere.has(ref)));
+    return [{ equipmentId: outage.id, kind: outage.kind, stationRefs: refs.slice(0, 8), stationName: outage.stationName, location: outage.location, accessiblePath: outage.accessiblePath,
+      hasBackup: outage.redundant, blocksStepFree, reason: outage.reason, since: outage.sinceSeconds === null ? null : localTime(new Date(outage.sinceSeconds * 1000).toISOString(), coverageTimezone(data)),
+      estimatedReturn: outage.estimatedReturnSeconds === null ? null : localTime(new Date(outage.estimatedReturnSeconds * 1000).toISOString(), coverageTimezone(data)), upcoming: !current, alternativeRoute: outage.alternativeRoute }];
   }).sort((a, b) => Number(b.blocksStepFree) - Number(a.blocksStepFree) || Number(b.accessiblePath) - Number(a.accessiblePath) || Number(a.upcoming) - Number(b.upcoming) ||
     (a.since ?? '').localeCompare(b.since ?? '') || a.equipmentId.localeCompare(b.equipmentId));
   return { report: { status: feed.freshness === 'fresh' ? 'current' as const : 'stale' as const, count: rows.length, blockingStepFreeCount: rows.filter(row => row.blocksStepFree).length,
