@@ -24,7 +24,7 @@ export function registerBusTools(
       annotations: readOnlyLive('Bus arrival predictions'),
       _meta: TRANSIT_BOARD_TOOL_META,
       inputSchema: z.object({
-        stopId: z.string().describe(
+        stopId: z.string().regex(/^\d{7}$/, 'A WMATA bus stop ID is 7 digits, e.g. "1001195"; find one with find_transit.').describe(
           'DC Metro 7-digit regional bus stop ID (e.g., "1001195")',
         ),
       }),

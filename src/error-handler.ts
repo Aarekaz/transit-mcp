@@ -36,7 +36,13 @@ export class WMATAError extends TransitError {
 export function handleWMATAError(error: unknown): string {
   if (error instanceof TransitError) {
     const cityContext = error.city ? ` [${error.city.toUpperCase()}]` : '';
-    return `Transit API Error${cityContext} (${error.statusCode}): ${error.message}`;
+    // What the caller can do about it, not just the agency's status code.
+    const status = error.statusCode, advice = status === undefined ? ''
+      : status === 400 || status === 404 ? ' The agency did not recognise that ID or input: check it, or look it up with find_transit.'
+      : status === 429 ? ' The agency is rate-limiting requests: try again in a minute.'
+      : status === 401 || status === 403 ? ' This server could not authenticate with the agency; nothing the caller can change.'
+      : status >= 500 ? ' The agency\'s service is failing right now: try again shortly, or use the global tools (get_departures) for timetable data.' : '';
+    return `Transit API Error${cityContext} (${status ?? 'unknown'}): ${error.message}.${advice}`;
   }
 
   if (error instanceof Error) {
