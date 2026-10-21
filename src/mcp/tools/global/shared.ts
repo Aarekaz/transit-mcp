@@ -9,7 +9,7 @@ import { getCoverageMode } from '../../../regions/manifest';
 import { formatEntityRef, parseTransitRef, type TransitRef } from '../../../transit/core/refs';
 import { BACKBONE_MODES } from '../../../transit/gtfs/static/partition';
 import { VERIFICATION_REASONS, type SourceStatus, type VerificationReason } from '../../../transit/core/results';
-import { StaticArtifactStore, readBoundedObject, sameStaticVersion, type StaticVersion } from '../../../transit/gtfs/realtime/snapshot-store';
+import { CLOCK_TOLERANCE_SECONDS, StaticArtifactStore, judgedAt, readBoundedObject, sameStaticVersion, type StaticVersion } from '../../../transit/gtfs/realtime/snapshot-store';
 import { credential, getRealtimeSources, publishedKinds, sourceFeedIds, type RealtimeSource } from '../../../transit/gtfs/realtime/sources';
 import type { CoverageCapability } from '../../../transit/core/coverage';
 import { decodeDiscoveryIndex, decodeScheduleShard, sha256 } from '../../../transit/gtfs/static/shards';
@@ -587,10 +587,10 @@ async function readOwnedFeed<T>(context: MetroMcpContext, data: TransitData, sou
     else if (feed.etag && Array.isArray(feed.payload) && !(kind === 'trip_updates' && stopIds.length)) heldPayloads.set(heldKey, { etag: feed.etag, payload: feed.payload });
     const policy = data.coverage.thresholds;
     const { fresh: threshold, expired: expiry } = kindThresholds(policy, kind);
-    const validStamp = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= now;
+    const validStamp = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= now + CLOCK_TOLERANCE_SECONDS;
     const producerTimestampSeconds = validStamp(feed.producerTimestampSeconds) ? feed.producerTimestampSeconds : undefined;
     const receivedAtSeconds = validStamp(feed.receivedAtSeconds) ? feed.receivedAtSeconds : undefined;
-    const freshness = classifyManifestFreshness(producerTimestampSeconds, now, threshold, expiry);
+    const freshness = classifyManifestFreshness(producerTimestampSeconds, judgedAt(now, producerTimestampSeconds), threshold, expiry);
     const mismatch = !!feed.version && (!sameStaticVersion(feed.version, data.version) || !data.version.sourceVersions[feedId]);
     const reasons: VerificationReason[] = mismatch || feed.warnings?.includes('SCHEDULE_REALTIME_MISMATCH') ? ['SCHEDULE_REALTIME_MISMATCH'] :
       feed.degraded || !feed.version || freshness === 'expired' || freshness === 'unavailable' || receivedAtSeconds === undefined || receivedAtSeconds < (producerTimestampSeconds ?? Infinity) || !Array.isArray(feed.payload) ? ['REALTIME_UNAVAILABLE'] :
@@ -681,4 +681,5 @@ export function inferCoverage(endpoint: z.infer<typeof endpointSchema>): string 
   }
   return undefined;
 }
+export { judgedAt };
 export const asTransitRef = (ref: string) => ref as TransitRef;

@@ -3,7 +3,7 @@ import type { RealtimeFeedKind, RealtimeFeedSpec } from '../../../regions/types'
 import { allocatePollIntervals } from '../upstream/budget';
 import { decodeRealtimeFeed, type NormalizedAlert, type NormalizedRealtimeFeed, type NormalizedVehicle } from './decode';
 import { RegionalFeedHubCore } from './hub-core';
-import { ApiKeyQuota, RealtimeSnapshotStore, StaticArtifactStore, readBoundedObject, sameStaticVersion, type NormalizedRealtimeSnapshot, type StaticVersion } from './snapshot-store';
+import { ApiKeyQuota, RealtimeSnapshotStore, StaticArtifactStore, judgedAt, readBoundedObject, sameStaticVersion, type NormalizedRealtimeSnapshot, type StaticVersion } from './snapshot-store';
 import { DecodedShardCache, loadScheduleWindow } from '../../planner/schedule-index';
 import { MIN_ELIGIBLE_FOR_MATCH_RATE, applyTripUpdates, applyVehiclePositions, matchVehicles, recordVerifiedDiscovery, recordVerifiedShards, settleStoppedVehicles, type AppliedTripUpdates } from './trip-match';
 import { decodeDiscoveryIndex, sha256 } from '../static/shards';
@@ -340,7 +340,8 @@ export class RegionFeedHub implements DurableObject {
       ? { ...focused, payload: focused.payload?.filter((row: unknown) => wanted.has((row as { stopId?: string }).stopId ?? '')) ?? null }
       : held;
     if (snapshot) core.replace(kind, snapshot);
-    const read = core.read(kind, now);
+    // A cold read's poll may finish after the request's own clock: judge it as brand new.
+    const read = core.read(kind, judgedAt(now, snapshot?.producerTimestampSeconds));
     // Where a slow read spent its time (Durable Object clocks advance only across I/O).
     if (Date.now() - startedAt > 3000) console.info(JSON.stringify({ event: 'hub_read_slow', region: source.coverage.id, source: source.policy.feedId, kind, focused: Boolean(focused),
       wakeMs: woken - startedAt, freshMs: freshened - woken, readMs: Date.now() - freshened, freshness: read.freshness }));

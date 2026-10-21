@@ -33,6 +33,16 @@ async function computeStaticVersion(manifest: ArtifactManifestV2): Promise<Stati
   return { artifactVersion: await sha256(encode(manifest)), sourceVersions: Object.fromEntries(manifest.sources.map(s => [s.feedId, s.sha256])) };
 }
 
+/** How far ahead of a reader's clock a provider timestamp still counts. Realtime fetched
+ * while the request waited (a cold coordinator's first poll) is newer than the request, and
+ * provider clocks drift; past this a timestamp is bogus. */
+export const CLOCK_TOLERANCE_SECONDS = 120;
+/** The clock to judge `stamp` by: the reader's, unless the stamp is plausibly just ahead of
+ * it, in which case the data is brand new (age zero), not invalid. */
+export function judgedAt(now: number, stamp: number | undefined): number {
+  return stamp !== undefined && stamp > now && stamp <= now + CLOCK_TOLERANCE_SECONDS ? stamp : now;
+}
+
 export function sameStaticVersion(left: StaticVersion, right: StaticVersion): boolean {
   return left.artifactVersion === right.artifactVersion && canonicalJson(left.sourceVersions) === canonicalJson(right.sourceVersions);
 }

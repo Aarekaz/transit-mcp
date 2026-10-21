@@ -48,6 +48,38 @@ async function nyc(documents = nycDocuments(), files = NYC_FILES) {
 }
 
 describe('NYC subway through the global tools with every MTA feed', () => {
+  it('answers the first departures question live when the coordinator holds only a stale snapshot', async () => {
+    quiet();
+    const artifact = await bandedArtifact('nyc');
+    const env = liveEnv(artifact.db);
+    wireHub(env, artifact.db, 'nyc:mta');
+    const stamp = nowSeconds();
+    await new RealtimeSnapshotStore(artifact.db.storage).publish('trip_updates', { version: artifact.version, producerTimestampSeconds: stamp - 3600, receivedAtSeconds: stamp - 3600, payload: [] });
+    await artifact.db.storage.put('polled:trip_updates', stamp - 3600);
+    // The provider answers 8 s after the question arrives: the live data is newer than the request.
+    const network = upstream(nycDocuments(stamp + 8));
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(stamp * 1000);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async request => { vi.setSystemTime((stamp + 8) * 1000); return network.fetcher(request as Request); });
+    const result = (await callTool(env, 'get_departures', { stopRef: artifact.ref('stop', '127'), windowSeconds: 3600 })).structuredContent;
+    vi.useRealTimers();
+    expect(result).toMatchObject({ status: 'realtime' });
+    expect(result.departures.some((row: { status: string }) => row.status === 'realtime')).toBe(true);
+  });
+
+  it('plans the first trip with live data when the provider answers after the question arrived', async () => {
+    quiet();
+    const artifact = await bandedArtifact('nyc');
+    const env = liveEnv(artifact.db);
+    wireHub(env, artifact.db, 'nyc:mta');
+    const stamp = nowSeconds(), network = upstream(nycDocuments(stamp + 8));
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(stamp * 1000);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async request => { vi.setSystemTime((stamp + 8) * 1000); return network.fetcher(request as Request); });
+    const plan = (await callTool(env, 'plan_trip', { origin: { ref: artifact.ref('stop', '127') }, destination: { ref: artifact.ref('stop', '132') }, maxWalkMetres: 0 })).structuredContent;
+    vi.useRealTimers();
+    expect(plan.reasons).not.toContain('REALTIME_UNAVAILABLE');
+    expect(plan.itineraries.length).toBeGreaterThan(0);
+  });
+
   it('reports truthful NYC capabilities: live departures, alerts and train locations', async () => {
     const f = await nyc();
     const found = (await callTool(f.env, 'find_transit', { query: 'nyc' })).structuredContent;

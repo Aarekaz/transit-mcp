@@ -1,7 +1,7 @@
 import { parseTransitRef } from '../core/refs';
 import { phase } from '../trace';
 import type { VerificationReason } from '../core/results';
-import { sameStaticVersion, staticVersion } from '../gtfs/realtime/snapshot-store';
+import { CLOCK_TOLERANCE_SECONDS, judgedAt, sameStaticVersion, staticVersion } from '../gtfs/realtime/snapshot-store';
 import { loadScheduleWindow } from './schedule-index';
 import { parseInstant } from './service-day';
 import { assertNotAborted, routeDepartAt } from './raptor';
@@ -48,11 +48,11 @@ async function planJourneyUntraced(query: JourneyQuery, signal?: AbortSignal): P
   const snapshot = query.realtime;
   let realtime = snapshot?.payload ?? [];
   if (snapshot) {
-    const stamp = snapshot.producerTimestampSeconds;
+    const stamp = snapshot.producerTimestampSeconds, observed = judgedAt(now, stamp);
     if (!sameStaticVersion(snapshot.version, version)) { reasons.add('SCHEDULE_REALTIME_MISMATCH'); realtime = []; }
-    else if (snapshot.degraded || snapshot.payload === null || stamp === undefined || !Number.isFinite(stamp) || stamp <= 0 || stamp > now ||
-      !Number.isFinite(snapshot.receivedAtSeconds) || snapshot.receivedAtSeconds < stamp || snapshot.receivedAtSeconds > now) { reasons.add('REALTIME_UNAVAILABLE'); realtime = []; }
-    else if (now - stamp > (query.realtimeMaxAgeSeconds ?? 90)) { reasons.add('REALTIME_STALE'); realtime = []; }
+    else if (snapshot.degraded || snapshot.payload === null || stamp === undefined || !Number.isFinite(stamp) || stamp <= 0 || stamp > observed ||
+      !Number.isFinite(snapshot.receivedAtSeconds) || snapshot.receivedAtSeconds < stamp || snapshot.receivedAtSeconds > now + CLOCK_TOLERANCE_SECONDS) { reasons.add('REALTIME_UNAVAILABLE'); realtime = []; }
+    else if (observed - stamp > (query.realtimeMaxAgeSeconds ?? 90)) { reasons.add('REALTIME_STALE'); realtime = []; }
   }
   const routed = await routeDepartAt(query, window.shards, version.artifactVersion, realtime, snapshot?.producerTimestampSeconds, bytes * factor, signal);
   routed.reasons.forEach(reason => reasons.add(reason));
