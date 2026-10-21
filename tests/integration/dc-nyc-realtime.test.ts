@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { formatInstant } from '../../src/transit/planner/service-day';
 import { transit_realtime } from 'gtfs-realtime-bindings';
 import { NYC_TRIP_FEEDS } from '../../src/regions/nyc';
 import { formatEntityRef, formatTripInstanceRef, parseTransitRef } from '../../src/transit/core/refs';
@@ -141,7 +142,7 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     expect((await stepFree(down, '132')).structuredContent).toMatchObject({ status: 'unavailable', reasons: ['ENDPOINT_NOT_STEP_FREE'] });
     const status = (await callTool(down.env, 'get_service_status', { ref: down.ref('stop', '132S') })).structuredContent;
     expect(status.equipment).toMatchObject({ status: 'current', count: 1, blockingStepFreeCount: 1, outages: [{ equipmentId: 'EL132A', kind: 'elevator', accessiblePath: true, hasBackup: false,
-      blocksStepFree: true, upcoming: false, stationName: '14 St', alternativeRoute: 'Take a downtown 1 to Christopher St and an M8 bus back.', since: '2026-10-19T10:00:00.000Z' }] });
+      blocksStepFree: true, upcoming: false, stationName: '14 St', alternativeRoute: 'Take a downtown 1 to Christopher St and an M8 bus back.', since: '2026-10-19T06:00:00-04:00' }] });
     // A station covers its complex: Times Sq by its 7 station lists the escalator, which does not block step-free travel.
     expect((await callTool(down.env, 'get_service_status', { ref: down.ref('stop', '725') })).structuredContent.equipment.outages)
       .toMatchObject([{ equipmentId: 'ES127C', kind: 'escalator', accessiblePath: false, blocksStepFree: false }]);
@@ -219,7 +220,7 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     expect(to14.every(row => row.arrival.stopName === '14 St' && Date.parse(row.arrival.scheduledTime!) > Date.parse(row.scheduledTime))).toBe(true);
     // The 1 skipping 23 and 18 St still reaches 14 St, predicted at 09:20.
     const local = to14.find(row => tripId(row as never) === 'AFA25GEN-1092-Weekday-00_054800_1..S03R')!;
-    expect(local.arrival).toMatchObject({ scheduledTime: new Date(civil('09:18:00') * 1000).toISOString(), predictedTime: new Date(civil('09:20:00') * 1000).toISOString() });
+    expect(local.arrival).toMatchObject({ scheduledTime: formatInstant(civil('09:18:00') * 1000, 'America/New_York'), predictedTime: formatInstant(civil('09:20:00') * 1000, 'America/New_York') });
     // The 2 express is not scheduled to stop at 28 St: it is not a way there.
     const to28 = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '127'), toStop: '28 St', coverage: 'nyc', windowSeconds: 3600 })).structuredContent.departures as Row[];
     expect(to28.length).toBeGreaterThan(0);
@@ -330,7 +331,7 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     const f = await nyc(documents);
     const result = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '129'), windowSeconds: 1800 })).structuredContent;
     expect(result.departures).toEqual([expect.objectContaining({ serviceDate: SERVICE_DATE, scheduleMatch: 'matched', status: 'realtime',
-      scheduledTime: '2026-10-20T00:28:00-04:00', predictedTime: '2026-10-20T04:29:00.000Z' })]);
+      scheduledTime: '2026-10-20T00:28:00-04:00', predictedTime: '2026-10-20T00:29:00-04:00' })]);
   });
 
   it.each([
@@ -346,7 +347,7 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     const result = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '129'), windowSeconds: 1800 })).structuredContent;
     expect(result.departures).toEqual([expect.objectContaining({ serviceDate: SERVICE_DATE, scheduleMatch: 'matched', status: 'realtime',
       tripInstanceRef: formatTripInstanceRef({ coverage: 'nyc', feed: 'mta_subway', id: 'AFA25GEN-1092-Weekday-00_146400_1..S03R', serviceDate: SERVICE_DATE, startTime: '24:24:00' }),
-      predictedTime: '2026-10-20T04:29:30.000Z' })]);
+      predictedTime: '2026-10-20T00:29:30-04:00' })]);
   });
 
   it('resolves MTA alert agency aliases and parent-station selectors for route and stop scopes', async () => {
@@ -476,7 +477,7 @@ describe('Washington Metrorail through the global tools', () => {
     const status = (await callTool(down.f.env, 'get_service_status', { ref: down.f.ref('stop', 'STN_A01') })).structuredContent.equipment;
     // WMATA omits the station name sometimes; the outage still lands on the station by code.
     expect(status).toMatchObject({ status: 'current', count: 2, blockingStepFreeCount: 1, outages: [
-      { equipmentId: 'A01X01', kind: 'elevator', accessiblePath: true, hasBackup: null, blocksStepFree: true, stationRefs: [down.f.ref('stop', 'STN_A01')], since: '2026-10-19T10:00:00.000Z' },
+      { equipmentId: 'A01X01', kind: 'elevator', accessiblePath: true, hasBackup: null, blocksStepFree: true, stationRefs: [down.f.ref('stop', 'STN_A01')], since: '2026-10-19T06:00:00-04:00' },
       { equipmentId: 'A01X02', kind: 'escalator', accessiblePath: false, blocksStepFree: false }] });
     // A garage elevator does not reach the platforms.
     const garage = await stepFree([wmataIncident('A01X03', 'A01', 'ELEVATOR', 'Garage elevator')]);
@@ -488,7 +489,7 @@ describe('Washington Metrorail through the global tools', () => {
     const result = (await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', 'STN_A02'), windowSeconds: 1800 })).structuredContent;
     expect(result).toMatchObject({ status: 'realtime', reasons: [] });
     expect(result.departures.map((row: Row) => [tripId(row), row.status, row.predictedTime])).toEqual([
-      ['14362694_20741', 'realtime', '2026-10-19T13:06:00.000Z'],
+      ['14362694_20741', 'realtime', '2026-10-19T09:06:00-04:00'],
       // No update for this trip: its scheduled call stays, marked scheduled_only.
       ['14362719_20741', 'scheduled_only', null],
     ]);
@@ -510,7 +511,7 @@ describe('Washington Metrorail through the global tools', () => {
     // The question itself wakes the coordinator and is answered from what it fetches now.
     const result = (await callTool(env, 'get_departures', { stopRef: artifact.ref('stop', 'STN_A02'), windowSeconds: 1800 })).structuredContent;
     expect(result).toMatchObject({ status: 'realtime', reasons: [] });
-    expect(result.departures[0]).toMatchObject({ status: 'realtime', predictedTime: '2026-10-19T13:06:00.000Z' });
+    expect(result.departures[0]).toMatchObject({ status: 'realtime', predictedTime: '2026-10-19T09:06:00-04:00' });
   });
 
   it('judges schedule identity by match rate only with enough trips, never by one late-night stray', async () => {
@@ -604,9 +605,9 @@ describe('NYC buses: one Bus Time relay, one coordinator per borough timetable',
     expect(network.requests.every(request => new URL(request.url).searchParams.get('key') === 'test-bus-key')).toBe(true);
     const busStop = (feed: string, id: string) => formatEntityRef({ coverage: 'nyc', feed, kind: 'stop', id });
     const m15 = (await callTool(env, 'get_departures', { stopRef: busStop('mta_bus_m', '401'), windowSeconds: 3600 })).structuredContent;
-    expect(m15).toMatchObject({ status: 'realtime', departures: [{ routeName: 'M15', status: 'realtime', predictedTime: new Date(civil('09:07:00') * 1000).toISOString() }] });
+    expect(m15).toMatchObject({ status: 'realtime', departures: [{ routeName: 'M15', status: 'realtime', predictedTime: formatInstant(civil('09:07:00') * 1000, 'America/New_York') }] });
     const bx12 = (await callTool(env, 'get_departures', { stopRef: busStop('mta_bus_bx', '101'), windowSeconds: 3600 })).structuredContent;
-    expect(bx12).toMatchObject({ status: 'realtime', departures: [{ routeName: 'BX12', status: 'realtime', predictedTime: new Date(civil('09:06:00') * 1000).toISOString() }] });
+    expect(bx12).toMatchObject({ status: 'realtime', departures: [{ routeName: 'BX12', status: 'realtime', predictedTime: formatInstant(civil('09:06:00') * 1000, 'America/New_York') }] });
   });
 });
 

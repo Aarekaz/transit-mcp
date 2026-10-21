@@ -7,7 +7,7 @@ import { formatEntityRef, parseTransitRef } from '../../../transit/core/refs';
 import { getCoverage } from '../../../transit/core/coverage';
 import type { NormalizedVehicle } from '../../../transit/gtfs/realtime/decode';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
-import { MAX_DISCOVERY_CANDIDATES, TransitToolError, boundedText, checkState, complexStations, coordinatesSchema, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, routeName, stopMatches, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, localTime, coverageTimezone, TransitToolError, boundedText, checkState, complexStations, coordinatesSchema, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, routeName, stopMatches, unavailable, validRef, type TransitData } from './shared';
 
 const STOP_STATUS = { STOPPED_AT: 'stopped_at', INCOMING_AT: 'incoming_at', IN_TRANSIT_TO: 'in_transit_to' } as const;
 
@@ -82,7 +82,7 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
           stopStatus: at !== null && vehicle.currentStatus ? STOP_STATUS[vehicle.currentStatus] : null, stopRef: at, stopName: stopName(at),
           previousStopRef: previous, previousStopName: stopName(previous), ...coordinates,
           bearing: vehicle.bearing ?? null, speedMetersPerSecond: vehicle.speedMetersPerSecond ?? null,
-          observedAt: new Date(vehicle.timestampSeconds! * 1000).toISOString(), ageSeconds: now - vehicle.timestampSeconds! };
+          observedAt: localTime(new Date(vehicle.timestampSeconds! * 1000).toISOString(), coverageTimezone(data)), ageSeconds: now - vehicle.timestampSeconds! };
       });
     const meta = metadata(parsed.coverage, data, new Date(now * 1000).toISOString());
     const available = fresh && (parsed.kind !== 'trip' || vehicles.length > 0);

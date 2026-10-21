@@ -1,4 +1,5 @@
 import { CLIENT_CAPABILITIES_META_KEY, PROTOCOL_VERSION_META_KEY, createMcpHandler } from '@modelcontextprotocol/server';
+import { formatInstant } from '../../src/transit/planner/service-day';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/server/validators/ajv';
 import { transit_realtime } from 'gtfs-realtime-bindings';
 import { decodeRealtimeFeed } from '../../src/transit/gtfs/realtime/decode';
@@ -62,7 +63,7 @@ describe('global transit MCP boundary', () => {
     const result = (await call(f.env, 'get_departures', { stopRef: ref('stop', 'A') })).result.structuredContent;
     expect(result.status).toBe(status); expect(result.departures[0].status).toBe(status);
     expect(result.reasons).toEqual(reason ? [reason] : []);
-    expect(result.departures[0].predictedTime).toBe(age <= 180 ? '2026-10-19T16:01:00.000Z' : null);
+    expect(result.departures[0].predictedTime).toBe(age <= 180 ? '2026-10-19T09:01:00-07:00' : null);
   });
 
   it('does not downgrade realtime transit authority for an access walking leg', async () => {
@@ -120,7 +121,7 @@ describe('global transit MCP boundary', () => {
       producerTimestampSeconds: now, receivedAtSeconds: now, warnings: [], payload: url.includes('service_alerts') ? payload : [] }) }) } as unknown as DurableObjectNamespace;
     const general = (await call(f.env, 'get_service_status', { coverage: 'sfbay' })).result.structuredContent;
     expect(general.alerts.map((alert: any) => alert.id)).toEqual(['current', 'future', 'open-start', 'open-end', 'multiple']);
-    expect(general.alerts.find((alert: any) => alert.id === 'future').activePeriods).toEqual([{ start: new Date((now + 3600) * 1000).toISOString(), end: new Date((now + 7200) * 1000).toISOString() }]);
+    expect(general.alerts.find((alert: any) => alert.id === 'future').activePeriods).toEqual([{ start: formatInstant((now + 3600) * 1000, 'America/Los_Angeles'), end: formatInstant((now + 7200) * 1000, 'America/Los_Angeles') }]);
     expect(general.alerts.find((alert: any) => alert.id === 'open-start').activePeriods[0].start).toBeNull();
     const itinerary = (await call(f.env, 'plan_trip', { origin: { ref: ref('stop', 'A') }, destination: { ref: ref('stop', 'C') }, maxWalkMetres: 0 })).result.structuredContent.itineraries[0];
     const recheck = (await call(f.env, 'get_service_status', { itinerary })).result.structuredContent;
@@ -182,7 +183,7 @@ describe('global transit MCP boundary', () => {
     const added = result.departures.find((row: Record<string, unknown>) => row.scheduleMatch === 'unmatched_trip');
     // Identity comes from the observed first call when start_time is absent.
     expect(added).toMatchObject({ tripInstanceRef: 'tr:sfbay:sf511:trip:ZXh0cmE:20261019:MDk6MDU6MDA', scheduledTime: null, stopSequence: null, status: 'realtime',
-      predictedTime: new Date(at('09:05:00')).toISOString(), headsign: 'Destination' });
+      predictedTime: formatInstant(new Date(at('09:05:00')).getTime(), 'America/Los_Angeles'), headsign: 'Destination' });
     expect(result.departures.some((row: Record<string, unknown>) => row.scheduleMatch === 'matched')).toBe(true);
     // Planning never uses the observed-only train.
     const plan = (await call(f.env, 'plan_trip', { origin: { ref: ref('stop', 'A') }, destination: { ref: ref('stop', 'C') }, maxWalkMetres: 0 })).result.structuredContent;
@@ -663,6 +664,6 @@ describe('global transit MCP boundary', () => {
         tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDA6MDA', scheduledDepartureTimeSeconds: Date.parse(at('09:00:00')) / 1000,
         departureTimeSeconds: Date.parse(at('09:02:00')) / 1000, status: 'realtime' }] }) }) } as unknown as DurableObjectNamespace;
     const result = (await call(env, 'get_departures', { stopRef: ref('stop', 'A'), limit: 1 })).result.structuredContent;
-    expect(result).toMatchObject({ status: 'realtime', departures: [{ tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDA6MDA', predictedTime: '2026-10-19T16:02:00.000Z' }] });
+    expect(result).toMatchObject({ status: 'realtime', departures: [{ tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDk6MDA6MDA', predictedTime: '2026-10-19T09:02:00-07:00' }] });
   });
 });

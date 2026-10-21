@@ -17,7 +17,7 @@ import type { ScheduleShard } from '../../../transit/gtfs/static/schema';
 import { AlertScopeLimitError, expandAlertScopes, matchesAlertSelector, resolveAlertSelector, type AlertScope } from '../../../transit/gtfs/realtime/alert-match';
 import { itinerarySchema } from './plan';
 import { blockedStations, currentOutage, outageStations, stationOf, type EquipmentOutage } from '../../../transit/accessibility/equipment';
-import { MAX_DISCOVERY_CANDIDATES, residentShards, TransitToolError, stopMatches, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, localTime, coverageTimezone, residentShards, TransitToolError, stopMatches, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
 
 /** Per-alert detail bound: a city-wide status call stays readable for a model. */
 export const ALERT_DETAIL_LIMIT = 20;
@@ -50,8 +50,8 @@ async function equipmentReport(context: MetroMcpContext, data: TransitData, stat
       if (stations !== 'all' && !refs.some(ref => stations.has(ref))) return [];
       const blocksStepFree = current && outage.kind === 'elevator' && outage.accessiblePath && refs.some(ref => blocked.has(ref));
       return [{ equipmentId: outage.id, kind: outage.kind, stationRefs: refs.slice(0, 8), stationName: outage.stationName, location: outage.location, accessiblePath: outage.accessiblePath,
-        hasBackup: outage.redundant, blocksStepFree, reason: outage.reason, since: outage.sinceSeconds === null ? null : new Date(outage.sinceSeconds * 1000).toISOString(),
-        estimatedReturn: outage.estimatedReturnSeconds === null ? null : new Date(outage.estimatedReturnSeconds * 1000).toISOString(), upcoming: !current, alternativeRoute: outage.alternativeRoute }];
+        hasBackup: outage.redundant, blocksStepFree, reason: outage.reason, since: outage.sinceSeconds === null ? null : localTime(new Date(outage.sinceSeconds * 1000).toISOString(), coverageTimezone(data)),
+        estimatedReturn: outage.estimatedReturnSeconds === null ? null : localTime(new Date(outage.estimatedReturnSeconds * 1000).toISOString(), coverageTimezone(data)), upcoming: !current, alternativeRoute: outage.alternativeRoute }];
     });
   }).sort((a, b) => Number(b.blocksStepFree) - Number(a.blocksStepFree) || Number(b.accessiblePath) - Number(a.accessiblePath) || Number(a.upcoming) - Number(b.upcoming) ||
     (a.since ?? '').localeCompare(b.since ?? '') || a.equipmentId.localeCompare(b.equipmentId));
@@ -232,7 +232,7 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
         selectors: selectors.slice(0, ALERT_DETAIL_LIMIT), selectorCount: selectors.length,
         routeIds: [...new Set(selectors.flatMap(selector => selector.routeId === undefined ? [] : [selector.routeId]))],
         stopIds: stopIds.slice(0, ALERT_DETAIL_LIMIT), stopCount: stopIds.length, stale: part.freshness !== 'fresh',
-        activePeriods: (alert.activePeriods ?? []).map(period => ({ start: period.start === undefined ? null : new Date(period.start * 1000).toISOString(), end: period.end === undefined ? null : new Date(period.end * 1000).toISOString() })) }];
+        activePeriods: (alert.activePeriods ?? []).map(period => ({ start: period.start === undefined ? null : localTime(new Date(period.start * 1000).toISOString(), coverageTimezone(data)), end: period.end === undefined ? null : localTime(new Date(period.end * 1000).toISOString(), coverageTimezone(data)) })) }];
     })); } catch (error) { if (error instanceof AlertScopeLimitError) return scopeUnavailable(); throw error; }
     // Stations in scope: a station covers its complex; routes, trips and itineraries their stops' stations.
     const stopIndex = new Map(data.indexes.flatMap(index => index.stops).map(stop => [stop.ref as string, stop]));
