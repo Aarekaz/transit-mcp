@@ -6,6 +6,7 @@ import { readZipDirectory, zipEntryStream } from '../static/zip';
 import type { ArtifactManifestV2 } from '../static/schema';
 import { StaticArtifactStore, readBoundedObject, staticVersion } from '../realtime/snapshot-store';
 import { getRealtimeSource, getRealtimeSources, publishedKinds } from '../realtime/sources';
+import { MIN_ELIGIBLE_FOR_MATCH_RATE } from '../realtime/trip-match';
 import { getStaticSource, getStaticSources, isPrimaryFeed, type StaticSourcePolicy } from './policy';
 import { composeManifest } from '../static/compose';
 
@@ -89,11 +90,11 @@ export function guardRefresh(previous: PublishedStats | null, next: PublishedSta
   return reasons;
 }
 
-async function coordinatorStats(env: Env, coverageId: string, feedId: string): Promise<MatchStats | null> {
+async function coordinatorStats(env: Env, coverageId: string, feedId: string, peek = false): Promise<MatchStats | null> {
   // The coordinator that matches this feed's trips (a borough's, not the Bus Time relay).
   const realtime = getRealtimeSources(coverageId).find(source => source.policy.feedId === feedId && publishedKinds(source).has('trip_updates')) ?? getRealtimeSource(coverageId, feedId);
   if (!realtime || !env.REGION_FEED_HUB) return null;
-  const response = await env.REGION_FEED_HUB.get(env.REGION_FEED_HUB.idFromName(realtime.policy.namespace)).fetch(`https://region-feed-hub.internal/stats?feed=${encodeURIComponent(feedId)}`);
+  const response = await env.REGION_FEED_HUB.get(env.REGION_FEED_HUB.idFromName(realtime.policy.namespace)).fetch(`https://region-feed-hub.internal/stats?feed=${encodeURIComponent(feedId)}${peek ? '&peek=1' : ''}`);
   return response.ok ? await response.json<MatchStats | null>() : null;
 }
 
@@ -329,6 +330,35 @@ async function storeStreamedArchive(bucket: R2Bucket, policy: StaticSourcePolicy
 
 /** Cron: cheap change detection. A conditional GET usually answers 304 with no body;
  * only a new archive hash starts a refresh. Never throws for one coverage's failure. */
+/** Match stats older than this say nothing about the timetable now. */
+const ROLL_FORWARD_STATS_SECONDS = 15 * 60;
+
+/** Brings back a timetable the canary rolled back once the live feed has moved onto it.
+ * Providers publish the next timetable ahead of the service day it starts (WMATA: the evening
+ * before), so right after publishing live trips still match the old one and the canary rolls
+ * back; when the provider switches, the old one matches nothing. Only forward, to a newer
+ * source; only on a collapse; only from recent stats, read without waking a coordinator, so
+ * an unused coverage costs nothing and is healed on its first use. */
+export async function rollForwardSchedules(env: Env, now: number): Promise<void> {
+  const bucket = env.TRANSIT_ARTIFACTS;
+  if (!bucket || !env.REGION_FEED_HUB) return;
+  await Promise.allSettled(getStaticSources().filter(policy => getCoverageMode(policy.coverageId, env) === 'on' && getRealtimeSource(policy.coverageId, policy.feedId)).map(async policy => {
+    const store = new StaticArtifactStore(bucket, policy.coverageId), pointer = await store.pointer();
+    if (!pointer?.previous) return;
+    const stats = await coordinatorStats(env, policy.coverageId, policy.feedId, true);
+    if (!stats || stats.artifactVersion !== pointer.current || now / 1000 - stats.atSeconds > ROLL_FORWARD_STATS_SECONDS) return;
+    const collapsed = stats.eligible >= MIN_ELIGIBLE_FOR_MATCH_RATE ? stats.rate < policy.coverage.thresholds.minimumScheduleMatchRate : stats.eligible > 0 && stats.matched === 0;
+    if (!collapsed) return;
+    const [current, previous] = await Promise.all([store.read(pointer.current), store.read(pointer.previous)]);
+    const source = (artifact: typeof current) => artifact.manifest.sources.find(item => item.feedId === policy.feedId);
+    const was = source(current), next = source(previous);
+    if (!was || !next || next.sha256 === was.sha256 || Date.parse(next.retrievedAt) <= Date.parse(was.retrievedAt)) return;
+    const moved = await store.rollback(pointer.current);
+    console.warn(JSON.stringify({ event: 'schedule_refresh', coverage: policy.coverageId, feed: policy.feedId, outcome: moved ? 'rolled_forward' : 'roll_forward_skipped',
+      from: pointer.current, to: pointer.previous, rate: stats.rate, eligible: stats.eligible }));
+  }));
+}
+
 export async function checkStaticSources(env: Env, now: number): Promise<void> {
   const bucket = env.TRANSIT_ARTIFACTS, workflow = env.TRANSIT_REFRESH;
   if (!bucket || !workflow) return;

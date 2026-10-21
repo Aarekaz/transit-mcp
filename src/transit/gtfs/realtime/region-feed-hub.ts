@@ -306,8 +306,9 @@ export class RegionFeedHub implements DurableObject {
       return new Response(null, { status: 204 });
     }
     if (url.pathname === '/stats') {
-      // A refresh checking a new timetable's match rate needs this coordinator polling.
-      await this.#wake();
+      // A refresh checking a new timetable's match rate needs this coordinator polling; a
+      // routine check (peek) reads what it has without waking it.
+      if (!url.searchParams.has('peek')) await this.#wake();
       const feed = url.searchParams.get('feed');
       return Response.json(await this.#state.storage.get(feed ? `stats:trip_updates:${feed}` : 'stats:trip_updates') ?? await this.#state.storage.get('stats:trip_updates') ?? null);
     }
