@@ -50,7 +50,10 @@ export const SFBAY_COVERAGE = {
     tripUpdates: { realtimeSeconds: 180, staleSeconds: 600 },
     vehiclePositions: { realtimeSeconds: 360, unavailableSeconds: 600 },
     alerts: { currentSeconds: 1200 },
-    minimumScheduleMatchRate: 0.95,
+    // A wrong or stale timetable collapses matching toward zero. Healthy SF Bay matches 88-99%
+    // overall with Muni near 74% late at night, so 95% (never calibrated) refused live data on
+    // ordinary nights. The refresh separately rolls back a drop of five points from its baseline.
+    minimumScheduleMatchRate: 0.5,
     maximumUnverifiedWalkMetres: 800,
   },
   attribution: [SFBAY_REGION.attribution],
