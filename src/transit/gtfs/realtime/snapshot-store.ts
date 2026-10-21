@@ -133,16 +133,29 @@ function indexKey(value: unknown): string {
   return record.stopId ?? record.entityId ?? record.id ?? '';
 }
 
-/** The coordinator's latest snapshot per kind, in memory only. Realtime is derived from the
- * agency feed and stale within minutes, so it is never written to R2 or storage: that cost
- * some 1.5 million R2 writes a day. A restarted coordinator serves nothing until its next poll. */
+/** The coordinator's latest snapshot per kind. Realtime is derived from the agency feed and
+ * stale within minutes, so it never goes to R2 (that cost some 1.5 million writes a day): it
+ * is held in memory and kept gzipped in the coordinator's own storage, a few rows per poll,
+ * so an object evicted between polls reloads it instead of polling again. */
 type HeldSnapshot = { snapshot: Omit<NormalizedRealtimeSnapshot, 'payload'>; payload: unknown[] | null; byKey?: Map<string, unknown[]>; etag: string };
+type StoredSnapshot = { chunks: number; warnings?: string[] };
 /** Held per coordinator (keyed by its storage), so it lives exactly as long as the object. */
 const held = new WeakMap<DurableObjectStorage, Map<RealtimeFeedKind, HeldSnapshot>>();
 let published = 0;
+/** Compressed chunks stay below SQLite-backed storage's 2 MB value limit. */
+const CHUNK_BYTES = 1_900_000;
+const MAX_CHUNKS = 32;
+const snapshotKey = (kind: RealtimeFeedKind) => `snapshot:${kind}`;
+const chunkKey = (kind: RealtimeFeedKind, index: number) => `snapshot:${kind}:${index}`;
+
+async function transform(bytes: Uint8Array, stream: CompressionStream | DecompressionStream): Promise<Uint8Array> {
+  return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+}
+
 export class RealtimeSnapshotStore {
   readonly #latest: Map<RealtimeFeedKind, HeldSnapshot>;
-  constructor(storage: DurableObjectStorage) {
+  readonly #restoring = new Map<RealtimeFeedKind, Promise<HeldSnapshot | undefined>>();
+  constructor(private readonly storage: DurableObjectStorage) {
     let latest = held.get(storage);
     if (!latest) { latest = new Map(); held.set(storage, latest); }
     this.#latest = latest;
@@ -152,11 +165,46 @@ export class RealtimeSnapshotStore {
     const { payload, etag: _etag, ...base } = snapshot;
     if (encode(base).length > METADATA_BYTES) throw new Error('Realtime metadata budget exceeded');
     // Any tag unique to this publish lets a reader holding the payload skip it.
-    this.#latest.set(kind, { snapshot: base, payload: payload ?? null, etag: `${base.receivedAtSeconds}.${++published}.${Math.random().toString(36).slice(2, 10)}` });
+    const entry: HeldSnapshot = { snapshot: base, payload: payload ?? null, etag: `${base.receivedAtSeconds}.${++published}.${Math.random().toString(36).slice(2, 10)}` };
+    const bytes = await transform(new TextEncoder().encode(JSON.stringify({ snapshot: entry.snapshot, payload: entry.payload, etag: entry.etag })), new CompressionStream('gzip'));
+    const chunks: Uint8Array[] = [];
+    for (let at = 0; at < bytes.length; at += CHUNK_BYTES) chunks.push(bytes.slice(at, at + CHUNK_BYTES));
+    if (chunks.length > MAX_CHUNKS) throw new Error('Realtime payload byte budget exceeded');
+    const previous = await this.storage.get<StoredSnapshot>(snapshotKey(kind));
+    // One atomic put: the chunk count and its chunks change together.
+    await this.storage.put({ [snapshotKey(kind)]: { chunks: chunks.length } satisfies StoredSnapshot, ...Object.fromEntries(chunks.map((chunk, index) => [chunkKey(kind, index), chunk])) });
+    if (previous && previous.chunks > chunks.length) await this.storage.delete(Array.from({ length: previous.chunks - chunks.length }, (_, index) => chunkKey(kind, chunks.length + index)));
+    this.#latest.set(kind, entry);
+  }
+
+  /** The held snapshot, reloaded from storage after an eviction. */
+  #held(kind: RealtimeFeedKind): Promise<HeldSnapshot | undefined> {
+    const latest = this.#latest.get(kind);
+    if (latest) return Promise.resolve(latest);
+    let restoring = this.#restoring.get(kind);
+    if (!restoring) {
+      restoring = (async () => {
+        const stored = await this.storage.get<StoredSnapshot>(snapshotKey(kind));
+        if (!stored || stored.chunks < 1 || stored.chunks > MAX_CHUNKS) return undefined;
+        const parts = await this.storage.get<Uint8Array>(Array.from({ length: stored.chunks }, (_, index) => chunkKey(kind, index)));
+        const chunks = Array.from({ length: stored.chunks }, (_, index) => parts.get(chunkKey(kind, index)));
+        if (chunks.some(chunk => !chunk)) return undefined;
+        const bytes = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk!.length, 0));
+        let offset = 0;
+        for (const chunk of chunks) { bytes.set(chunk!, offset); offset += chunk!.length; }
+        const entry = JSON.parse(new TextDecoder().decode(await transform(bytes, new DecompressionStream('gzip')))) as HeldSnapshot;
+        if (stored.warnings?.length) entry.snapshot = { ...entry.snapshot, warnings: [...new Set([...(entry.snapshot.warnings ?? []), ...stored.warnings])].slice(0, 32) };
+        // A publish while this was loading wins.
+        if (!this.#latest.has(kind)) this.#latest.set(kind, entry);
+        return this.#latest.get(kind);
+      })().finally(() => this.#restoring.delete(kind));
+      this.#restoring.set(kind, restoring);
+    }
+    return restoring;
   }
 
   async read<T>(kind: RealtimeFeedKind, version: StaticVersion, stopIds?: string[]): Promise<NormalizedRealtimeSnapshot<T> | null> {
-    const latest = this.#latest.get(kind);
+    const latest = await this.#held(kind);
     if (!latest) return null;
     const base = latest.snapshot;
     if (!sameStaticVersion(base.version, version)) return { ...base, payload: null, degraded: true, warnings: ['SCHEDULE_REALTIME_MISMATCH'] };
@@ -169,12 +217,15 @@ export class RealtimeSnapshotStore {
     return { ...base, payload: [...new Set(stopIds)].flatMap(stop => latest.byKey!.get(stop) ?? []) as T[] };
   }
 
-  /** Whether this coordinator holds a snapshot of `kind` (none after a restart). */
-  holds(kind: RealtimeFeedKind): boolean { return this.#latest.has(kind); }
+  /** Whether this coordinator has a snapshot of `kind`, in memory or stored. */
+  async holds(kind: RealtimeFeedKind): Promise<boolean> { return !!await this.#held(kind); }
 
   async warn(kind: RealtimeFeedKind, warning: string): Promise<void> {
-    const latest = this.#latest.get(kind);
-    if (latest) latest.snapshot = { ...latest.snapshot, warnings: [...new Set([...(latest.snapshot.warnings ?? []), warning])].slice(0, 32) };
+    const latest = await this.#held(kind), stored = await this.storage.get<StoredSnapshot>(snapshotKey(kind));
+    if (!latest || !stored) return;
+    const warnings = [...new Set([...(latest.snapshot.warnings ?? []), warning])].slice(0, 32);
+    latest.snapshot = { ...latest.snapshot, warnings };
+    await this.storage.put(snapshotKey(kind), { ...stored, warnings } satisfies StoredSnapshot);
   }
 }
 

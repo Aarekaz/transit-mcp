@@ -191,21 +191,37 @@ describe('bounded snapshot storage and manifest policy', () => {
     expect(hub.read('vehicle_positions', 1601)).toMatchObject({ status: 'unavailable', ageSeconds: 601, payload: [{ observationAgeSeconds: 611, status: 'unavailable' }] });
   });
 
-  it('keeps snapshots in the coordinator\'s memory only: nothing reaches R2 or storage', async () => {
+  it('keeps snapshots out of R2: in memory, and gzipped in a few storage rows an evicted coordinator reloads', async () => {
     const db = memoryStorage(); const store = new snapshots.RealtimeSnapshotStore(db.storage);
     const version = await snapshots.staticVersion((await realtimeFixture()).manifest);
     const payload = Array.from({ length: 15000 }, (_, i) => ({ entityId: `e${i}`, stopId: `S${i % 100}`, label: 'x'.repeat(20) }));
     await store.publish('trip_updates', { version, producerTimestampSeconds: 1000, receivedAtSeconds: 1001, payload });
     expect(db.objects.size).toBe(0);
-    expect(db.values.size).toBe(0);
-    // The same coordinator (same storage) reads it back, filtered by stop.
-    const result = await new snapshots.RealtimeSnapshotStore(db.storage).read('trip_updates', version, ['S1', 'S1']);
+    expect(db.values.size).toBeLessThanOrEqual(3);
+    // The same coordinator reads it back, filtered by stop.
+    const result = await store.read('trip_updates', version, ['S1', 'S1']);
     expect(result?.payload).toHaveLength(150);
     expect(result?.producerTimestampSeconds).toBe(1000);
     const mismatch = await store.read('trip_updates', { ...version, artifactVersion: 'a'.repeat(64) });
     expect(mismatch).toMatchObject({ payload: null, warnings: ['SCHEDULE_REALTIME_MISMATCH'] });
-    // A restarted coordinator (new storage object) has nothing until its next poll.
+    // Evicted (empty memory, same storage): it reloads the same snapshot, tag included.
+    const evicted = new snapshots.RealtimeSnapshotStore(Object.create(db.storage) as DurableObjectStorage);
+    expect(await evicted.holds('trip_updates')).toBe(true);
+    const reloaded = await evicted.read('trip_updates', version);
+    expect(reloaded?.payload).toEqual(payload);
+    expect(reloaded?.etag).toBe((await store.read('trip_updates', version))?.etag);
+    // A smaller snapshot leaves no stale chunk behind; a new coordinator holds nothing.
+    await store.publish('trip_updates', { version, receivedAtSeconds: 1002, payload: [{ stopId: 'S' }] });
+    expect([...db.values.keys()].filter(key => key.startsWith('snapshot:trip_updates:'))).toEqual(['snapshot:trip_updates:0']);
     expect(await new snapshots.RealtimeSnapshotStore(memoryStorage().storage).read('trip_updates', version)).toBeNull();
+  });
+
+  it('keeps warnings on a stored snapshot across an eviction', async () => {
+    const db = memoryStorage(), version = await snapshots.staticVersion((await realtimeFixture()).manifest), store = new snapshots.RealtimeSnapshotStore(db.storage);
+    await store.publish('trip_updates', { version, receivedAtSeconds: 1000, payload: [{ stopId: 'S' }] });
+    await store.warn('trip_updates', 'incomplete_feed');
+    const evicted = new snapshots.RealtimeSnapshotStore(Object.create(db.storage) as DurableObjectStorage);
+    expect((await evicted.read('trip_updates', version))?.warnings).toContain('incomplete_feed');
   });
 
   it('rejects oversized metadata before publishing', async () => {
