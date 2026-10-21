@@ -221,6 +221,16 @@ export function describeCandidate(data: TransitData, entity: Candidate): Candida
  * any containing it; within each, stations before standalone stops before platforms, rail
  * before bus, busier stops, shorter names. A platform whose station also matched is left to it. */
 export function candidates(data: TransitData, query: string, kind?: string): Candidate[] {
+  return rankedCandidates(data, query, kind).map(item => item.entity);
+}
+/** Candidates with their rank, so results from several coverages can be merged in order. */
+export function rankedCandidates(data: TransitData, query: string, kind?: string): { entity: Candidate; rank: number[] }[] {
+  const exact = rankedMatches(data, query, kind, false);
+  // Nothing by name: try misspellings, ranked after every real match.
+  return exact.length || normalizeEntityName(query).length < 3 ? exact : rankedMatches(data, query, kind, true);
+}
+export const compareRanks = (a: number[], b: number[]) => { for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) - (b[i] ?? 0); return 0; };
+function rankedMatches(data: TransitData, query: string, kind: string | undefined, fuzzy: boolean): { entity: Candidate; rank: number[] }[] {
   const normalized = normalizeEntityName(query), aliasStops = aliasStopNames(data, normalized);
   const found: { entity: Candidate; rank: number[] }[] = [];
   for (const index of data.indexes) {
@@ -230,8 +240,10 @@ export function candidates(data: TransitData, query: string, kind?: string): Can
     for (const entity of list) {
       if (kind && kind !== entity.kind) continue;
       const own = names.get(entity.ref)!, alias = aliasMatch(entity, aliasStops);
-      if (!alias && !own.some(name => name.includes(normalized))) continue;
-      const match = alias || own.includes(normalized) ? 0 : own.some(name => name.startsWith(normalized) || name.includes(` ${normalized}`)) ? 1 : 2;
+      const contains = alias || own.some(name => name.includes(normalized)), every = !contains && allWords(normalized, own);
+      if (fuzzy ? !nearMiss(normalized, own) : !contains && !every && !allWords(normalized, own, true)) continue;
+      // Exact, prefix, substring, every word in any order, every word but filler ("station"), misspellings.
+      const match = fuzzy ? 5 : contains ? alias || own.includes(normalized) ? 0 : own.some(name => name.startsWith(normalized) || name.includes(` ${normalized}`)) ? 1 : 2 : every ? 3 : 4;
       const described = describeCandidate(data, entity);
       const type = described.stopType === undefined || described.stopType === 'station' ? 0 : described.stopType === 'stop' ? 1 : 2;
       const mode = described.modes === undefined ? 0 : described.modes.some(item => FIXED_GUIDEWAY.has(item)) ? 0 : described.modes.length ? 1 : 2;
@@ -239,10 +251,8 @@ export function candidates(data: TransitData, query: string, kind?: string): Can
     }
   }
   const refs = new Set(found.map(item => item.entity.ref));
-  const order = (a: number[], b: number[]) => { for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) - (b[i] ?? 0); return 0; };
   return found.filter(item => !(item.entity.stationRef && item.entity.stopType !== 'station' && refs.has(item.entity.stationRef)))
-    .sort((a, b) => order(a.rank, b.rank) || a.entity.providerId.localeCompare(b.entity.providerId) || a.entity.ref.localeCompare(b.entity.ref))
-    .map(item => item.entity);
+    .sort((a, b) => compareRanks(a.rank, b.rank) || a.entity.providerId.localeCompare(b.entity.providerId) || a.entity.ref.localeCompare(b.entity.ref));
 }
 /** Stops a typed name stands for: exact names and reviewed aliases (with any stop whose own
  * name carries the alias) when any exist, else every match. A station complex counts once. */
@@ -252,7 +262,45 @@ export function stopMatches(data: TransitData, query: string): Candidate[] {
   const all = boardable(candidates(data, query, 'stop')), exact = all.filter(candidate => ambiguityCandidate(data, candidate, query));
   return sameStation(data, exact.length ? exact : all);
 }
-const normalizeEntityName = (value: string) => value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+/** Spellings riders and agencies use interchangeably, folded the same way on both sides:
+ * "King Street" finds "King St-Old Town", "W 4th St" finds "W 4 St-Wash Sq". */
+const WORD_FORMS: Readonly<Record<string, string>> = { street: 'st', avenue: 'av', ave: 'av', road: 'rd', boulevard: 'blvd', square: 'sq', place: 'pl',
+  parkway: 'pkwy', drive: 'dr', center: 'ctr', centre: 'ctr', east: 'e', west: 'w', north: 'n', south: 's', saint: 'st', mount: 'mt', fort: 'ft',
+  heights: 'hts', junction: 'jct', and: '&' };
+const normalizeEntityName = (value: string) => value.normalize('NFKC').toLowerCase().replace(/['’]/g, '').replace(/&/g, ' & ').replace(/[-–—/.,()+]/g, ' ')
+  .trim().split(/\s+/).map(word => WORD_FORMS[word] ?? word.replace(/^(\d+)(st|nd|rd|th)$/, '$1')).join(' ');
+/** Words that say what kind of place, not which: "Times Square station", "the Metro at Dupont". */
+const FILLER = new Set(['the', 'station', 'stn', 'stop', 'metro', 'subway', 'train', 'trains', 'rail', 'bus', 'at', 'of']);
+const significant = (normalized: string) => normalized.split(' ').filter(word => word && !FILLER.has(word));
+/** Every query word is a word of the name, or begins one, in any order ("42 st times sq");
+ * with `meaningful`, only the words that are not filler. */
+function allWords(query: string, names: readonly string[], meaningful = false): boolean {
+  const words = meaningful ? significant(query) : query.split(' ').filter(Boolean);
+  return words.length > 0 && names.some(name => { const own = name.split(' '); return words.every(word => own.some(item => item === word || word.length >= 3 && item.startsWith(word))); });
+}
+/** Edits between two words, or `limit + 1` once it is certainly more. */
+function editDistance(a: string, b: string, limit: number): number {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1;
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) row[j] = Math.min(previous[j]! + 1, row[j - 1]! + 1, previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+    if (Math.min(...row) > limit) return limit + 1;
+    previous = row;
+  }
+  return previous[b.length]!;
+}
+/** Each folded word's spelled-out forms: a misspelling is of the long word ("sqare" of "square"). */
+const LONG_FORMS = Object.entries(WORD_FORMS).reduce((forms, [long, short]) => forms.set(short, [...forms.get(short) ?? [], long]), new Map<string, string[]>());
+/** A misspelled name ("Crystl Cty"): every query word within an edit or two of, or a prefix of, a word of the name. */
+function nearMiss(query: string, names: readonly string[]): boolean {
+  const words = significant(query).filter(word => word.length >= 2);
+  return words.length > 0 && names.some(name => {
+    const own = name.split(' ');
+    const limit = (word: string) => word.length >= 6 ? 2 : 1;
+    return words.every(word => own.some(item => item.startsWith(word) || word.length >= 3 && [item, ...LONG_FORMS.get(item) ?? []].some(form => editDistance(word, form, limit(word)) <= limit(word))));
+  });
+}
 function entityNames(data: TransitData, entity: Candidate): readonly string[] {
   const index = data.indexes.find(index => index.feedId === entity.feed);
   return (index && entityIndex(data, index).names.get(entity.ref)) ?? [entity.providerId, entity.name].filter(Boolean).map(normalizeEntityName);

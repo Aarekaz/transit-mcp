@@ -3,8 +3,9 @@ import { z } from 'zod';
 import { traced } from '../../../transit/trace';
 import type { MetroMcpContext } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
-import { getCoverage } from '../../../transit/core/coverage';
-import { MAX_DISCOVERY_CANDIDATES, ambiguityCandidate, describeCandidate, boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, effectiveCapabilities, entities, guarded, trainCandidates, inferCoverage, loadData, metadata, resultShape, unavailable, validRef } from './shared';
+import { getCoverage, getCoverages } from '../../../transit/core/coverage';
+import { getCoverageMode } from '../../../regions/manifest';
+import { MAX_DISCOVERY_CANDIDATES, compareRanks, rankedCandidates, ambiguityCandidate, describeCandidate, boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, effectiveCapabilities, entities, guarded, trainCandidates, inferCoverage, loadData, metadata, resultShape, unavailable, validRef } from './shared';
 
 export const entitySchema = candidateSchema.extend({ scheduleVersion: z.string(), resourceUri: z.string(), coordinates: coordinatesSchema.nullable(), routeRefs: z.array(z.string()),
   agencyRef: z.string().nullable(), mode: z.string().nullable(), patterns: z.array(z.strictObject({ id: z.string(), directionId: z.number().int().nullable(), stopRefs: z.array(z.string()) })),
@@ -23,21 +24,43 @@ export function registerFindTool(server: McpServer, context: MetroMcpContext): v
   const common = { coverage: coverageSchema.optional(), context: z.strictObject({ coverage: coverageSchema.optional(), feed: boundedText.optional(), serviceDate: z.string().regex(/^\d{8}$/).optional() }).optional(), limit: z.number().int().min(1).max(50).default(20) };
   const absent = { ref: z.never().optional(), query: z.never().optional(), latitude: z.never().optional(), longitude: z.never().optional() };
   server.registerTool('find_transit', {
-    title: 'Find transit entities', description: 'Resolve a coverage, agency, route, station, stop, or a currently observed train number (where vehicle data exists); inspect an exact reference or nearby coordinates. Context ranks candidates without selecting identity. Candidates come best first (exact names and well-known place names such as SFO, then stations, then rail before bus), and each stop says what it is: stopType (station, platform or street stop), modes and the lines serving it, so you can pick the one the rider means. No general address geocoding. Use plan_trip for journeys.',
+    title: 'Find transit entities', description: 'Call with no arguments (or only `coverage`) to list the regions served and what each supports. Without a coverage, a name is searched in every region. Resolve a coverage, agency, route, station, stop, or a currently observed train number (where vehicle data exists); inspect an exact reference or nearby coordinates. Context ranks candidates without selecting identity. Candidates come best first (exact names and well-known place names such as SFO, then stations, then rail before bus), and each stop says what it is: stopType (station, platform or street stop), modes and the lines serving it, so you can pick the one the rider means. No general address geocoding. Use plan_trip for journeys.',
     annotations: readOnlyLive('Find transit entities'),
     inputSchema: z.union([z.strictObject({ ...common, ...absent, ref: boundedText }), z.strictObject({ ...common, ...absent, query: boundedText }),
-      z.strictObject({ ...common, ...absent, latitude: coordinatesSchema.shape.latitude, longitude: coordinatesSchema.shape.longitude })]),
+      z.strictObject({ ...common, ...absent, latitude: coordinatesSchema.shape.latitude, longitude: coordinatesSchema.shape.longitude }),
+      z.strictObject({ ...common, ...absent })]),
     outputSchema: findOutput,
   }, async (args, handler) => {
     let resolvedCoverage = args.coverage;
     return guarded(handler, () => traced('find_transit', async () => {
       checkState(handler, 'find_transit');
       if (args.ref) return complete(await findEntityResult(context, args.ref, handler.mcpReq.signal));
+      const describe = (coverage: NonNullable<ReturnType<typeof getCoverage>>) => ({ id: coverage.id, displayName: coverage.displayName, aliases: [...coverage.aliases],
+        supportedModes: [...coverage.supportedModes], available: getCoverageMode(coverage.id, context.env) === 'on', capabilities: effectiveCapabilities(context, coverage) });
+      // Nothing to search: what is served, and what each region supports.
+      if (!args.query && args.latitude === undefined) {
+        const named = args.coverage ? getCoverage(args.coverage) : undefined;
+        return complete({ ...metadata(), status: 'scheduled_only' as const, reasons: [], coverages: (named ? [named] : getCoverages()).map(describe), candidates: [], entities: [], clientCoordinates: null });
+      }
+      // A name with no region: search every served region. When one region has matches it
+      // answers as if named (ambiguity bounds, train numbers); several merge by rank.
+      let unscoped: string | undefined;
+      if (args.query && !args.coverage && !args.context?.coverage && !getCoverage(args.query)) {
+        const loaded = (await Promise.all(getCoverages().filter(coverage => getCoverageMode(coverage.id, context.env) === 'on')
+          .map(async coverage => ({ id: coverage.id, data: await loadData(context, coverage.id, handler.mcpReq.signal) })))).filter(item => item.data);
+        const ranked = loaded.flatMap(({ data }) => rankedCandidates(data!, args.query!))
+          .sort((a, b) => compareRanks(a.rank, b.rank) || a.entity.ref.localeCompare(b.entity.ref));
+        const used = loaded.filter(({ id }) => ranked.some(item => item.entity.coverage === id));
+        if (used.length <= 1) unscoped = used[0]?.id ?? loaded[0]?.id;
+        else return complete({ asOf: new Date().toISOString(), status: (loaded.length ? 'scheduled_only' : 'unavailable') as 'scheduled_only' | 'unavailable', reasons: loaded.length ? [] : ['COVERAGE_UNAVAILABLE' as const],
+          sources: used.flatMap(({ id, data }) => metadata(id, data!).sources), attribution: used.flatMap(({ id }) => metadata(id).attribution),
+          coverages: [], candidates: ranked.slice(0, args.limit).map(item => item.entity), entities: [], clientCoordinates: null });
+      }
       const match = args.query ? getCoverage(args.query) : undefined;
       const coordinateCoverage = args.latitude === undefined ? undefined : inferCoverage({ latitude: args.latitude, longitude: args.longitude! });
       // An exact coverage query identifies the coverage being inspected; a name-search
       // scope must not lend another coverage's availability or provenance to it.
-      const id = match?.id ?? getCoverage(args.coverage ?? '')?.id ?? args.coverage ?? coordinateCoverage ?? 'sfbay';
+      const id = match?.id ?? getCoverage(args.coverage ?? '')?.id ?? args.coverage ?? coordinateCoverage ?? unscoped ?? 'sfbay';
       resolvedCoverage = id;
       const data = await loadData(context, id, handler.mcpReq.signal);
       const base = { ...(data ? { ...metadata(id, data), status: 'scheduled_only' as const, reasons: [] } : unavailable(id)),
