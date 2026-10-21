@@ -38,6 +38,24 @@ async function publishTrip(f: Awaited<ReturnType<typeof setup>>, ...tripUpdates:
 }
 
 describe('regional v2 snapshot service', () => {
+  it('polls on read after a restart empties memory, but not within 30 s of the last attempt', async () => {
+    const f = await setup(); vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
+    const bytes = transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: NOW }, entity: [] }).finish();
+    const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(bytes));
+    const read = async (storage: DurableObjectStorage) => (await new RegionFeedHub({ storage, blockConcurrencyWhile: async (run: () => Promise<void>) => run() } as unknown as DurableObjectState, f.env)
+      .fetch(new Request(`https://hub/trip_updates?now=${NOW}&artifact=${f.version.artifactVersion}`))).json<{ freshness: string }>();
+    try {
+      // The previous instance tried 10 s ago: an empty restart waits rather than hammer the provider.
+      const recent = memoryStorage().storage; await recent.put('polled:trip_updates', NOW - 10);
+      expect((await read(recent)).freshness).toBe('unavailable');
+      expect(upstream).not.toHaveBeenCalled();
+      // 40 s ago, inside the 120 s interval: it holds nothing, so it polls now.
+      const older = memoryStorage().storage; await older.put('polled:trip_updates', NOW - 40);
+      expect((await read(older)).freshness).toBe('fresh');
+      expect(upstream).toHaveBeenCalled();
+    } finally { upstream.mockRestore(); vi.useRealTimers(); }
+  });
+
   it('sleeps while nobody reads, and a read wakes it and polls before answering', async () => {
     const f = await setup(); vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
     await f.db.storage.delete('readAt');
