@@ -492,15 +492,18 @@ export class RegionFeedHub implements DurableObject {
         // A borough reading the relay keeps only its own timetable's trips; a trip in none is
         // not this coordinator's to match.
         const own = (tripId: string | undefined) => tripId !== undefined && listed(discoveries[0]!.tripProviderIds, tripId);
-        // A focused read keeps trips on routes through its stops (or naming no route): a feed
-        // lists only a trip's next stops, so the stops alone would miss propagated delays.
+        // A focused read keeps trips on routes through its stops: a feed lists only a trip's next
+        // stops, so the stops alone would miss propagated delays. A trip naming no route counts
+        // only if it lists one of those stops; kept blindly, a regional feed's many route-less
+        // trips (SF Bay) cannot match and read as the wrong timetable.
         const through = focus && focusRoutes(discoveries, focus.stops);
         // Stops this timetable does not route: no focused answer, rather than an empty "live" one.
         if (through && !through.size) return undefined;
-        const keep = (tripId: string | undefined, routeId?: string) => (!policy.relayFrom || own(tripId)) && (!through || routeId === undefined || through.has(routeId));
-        const routeOf = new Map(decoded.trips.map(trip => [trip.tripId, trip.routeId]));
-        const mine = policy.relayFrom || through ? { ...decoded, trips: decoded.trips.filter(trip => keep(trip.tripId, trip.routeId)),
-          tripUpdates: decoded.tripUpdates.filter(update => keep(update.tripId, routeOf.get(update.tripId))), vehicles: focus ? [] : decoded.vehicles.filter(vehicle => keep(vehicle.tripId, vehicle.routeId)) } : decoded;
+        const kept = through && new Set(decoded.trips.filter(trip => trip.routeId !== undefined ? through.has(trip.routeId) : trip.stops.some(stop => stop.stopId !== undefined && focus!.stops.has(stop.stopId))).map(trip => trip.entityId));
+        const keep = (tripId: string | undefined, entityId?: string, routeId?: string) => (!policy.relayFrom || own(tripId)) &&
+          (!kept || (entityId !== undefined ? kept.has(entityId) : routeId !== undefined && through!.has(routeId)));
+        const mine = policy.relayFrom || through ? { ...decoded, trips: decoded.trips.filter(trip => keep(trip.tripId, trip.entityId)),
+          tripUpdates: decoded.tripUpdates.filter(update => keep(update.tripId, update.entityId)), vehicles: focus ? [] : decoded.vehicles.filter(vehicle => keep(vehicle.tripId, undefined, vehicle.routeId)) } : decoded;
         const routed = feedIds.length === 1 ? [mine] : routeByTimetable(mine, discoveries);
         const applied: AppliedTripUpdates[] = [], matchedVehicles: unknown[] = [];
         let unavailable = false, windowReasons: string[] = [];
