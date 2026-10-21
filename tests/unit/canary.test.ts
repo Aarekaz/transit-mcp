@@ -37,7 +37,7 @@ describe('production canary', () => {
     for (const id of NYC_TRIP_FEEDS) documents[`nyct/${id}`] = feedBytes(stamp, []);
     vi.spyOn(globalThis, 'fetch').mockImplementation(upstream(documents).fetcher);
     await hub.alarm();
-    const report = await recordCanary(env);
+    const report = await recordCanary(env, Date.now(), 0);
     const byName = Object.fromEntries(report.checks.map(item => [item.name, item]));
     // Times Sq exists in the fixture: the board answers.
     expect(byName['nyc.departures']).toMatchObject({ ok: true });

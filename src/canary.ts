@@ -146,8 +146,16 @@ export async function runCanary(env: Env, now = Date.now()): Promise<CanaryRepor
 }
 
 /** Runs the canary and keeps the latest report plus a short history in R2. */
-export async function recordCanary(env: Env, now = Date.now()): Promise<CanaryReport> {
-  const report = await runCanary(env, now);
+/** Coordinators sleep while unread; the first pass wakes them, so a failure is checked again
+ * once they have polled. Only the second pass is recorded. */
+export const CANARY_RETRY_MS = 90_000;
+
+export async function recordCanary(env: Env, now = Date.now(), retryAfterMs = CANARY_RETRY_MS): Promise<CanaryReport> {
+  let report = await runCanary(env, now);
+  if (!report.ok) {
+    await new Promise(resolve => setTimeout(resolve, retryAfterMs));
+    report = await runCanary(env, now + retryAfterMs);
+  }
   const previous = await env.TRANSIT_ARTIFACTS?.get(CANARY_KEY).then(object => object?.json<CanaryState>()).catch(() => undefined);
   const history = [...previous?.history ?? [], { at: report.at, ok: report.ok, failed: report.checks.filter(item => !item.ok).map(item => item.name) }].slice(-HISTORY);
   await env.TRANSIT_ARTIFACTS?.put(CANARY_KEY, JSON.stringify({ latest: report, history } satisfies CanaryState), { httpMetadata: { contentType: 'application/json' } });
