@@ -496,6 +496,24 @@ describe('Washington Metrorail through the global tools', () => {
       .toMatchObject({ realtimeDepartures: false, alerts: false, vehicles: false, accessibility: false });
   });
 
+  it('counts each elevator outage once, however many timetables the coverage has', async () => {
+    quiet();
+    const artifact = await bandedArtifact('dc');
+    // Metrobus is a second timetable in the same coverage.
+    await composeFeed(artifact.db, 'dc', 'wmata_bus', { 'agency.txt': 'agency_id,agency_name,agency_url,agency_timezone\nMET,WMATA,https://wmata.com,America/New_York\n',
+      'stops.txt': 'stop_id,stop_name,stop_lat,stop_lon\n1001,Bus Stop,38.9,-77.03\n1002,Other Stop,38.91,-77.03\n', 'routes.txt': 'route_id,agency_id,route_short_name,route_long_name,route_type\nX2,MET,X2,X2,3\n',
+      'trips.txt': 'route_id,service_id,trip_id\nX2,D,X2_1\n', 'stop_times.txt': 'trip_id,arrival_time,departure_time,stop_id,stop_sequence\nX2_1,09:00:00,09:00:00,1001,1\nX2_1,09:10:00,09:10:00,1002,2\n',
+      'calendar.txt': 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nD,1,1,1,1,1,1,1,20261001,20261231\n' });
+    const env = liveEnv(artifact.db, { WMATA_API_KEY: 'test-wmata-key' });
+    const hub = wireHub(env, artifact.db, 'dc:wmata'), stamp = nowSeconds();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(upstream({ 'rail-gtfsrt-tripupdates.pb': feedBytes(stamp, []), 'rail-gtfsrt-vehiclepositions.pb': feedBytes(stamp, []), 'rail-gtfsrt-alerts.pb': feedBytes(stamp, []),
+      ...wmataIncidentDocument([wmataIncident('A01X01', 'A01', 'ELEVATOR', 'Street to mezzanine'), wmataIncident('A01X02', 'A01', 'ESCALATOR', 'Mezzanine to platform')]) }).fetcher);
+    await hub.alarm();
+    const equipment = (await callTool(env, 'get_service_status', { coverage: 'dc' })).structuredContent.equipment;
+    expect(equipment.count).toBe(2);
+    expect(equipment.outages.map((outage: { equipmentId: string }) => outage.equipmentId).sort()).toEqual(['A01X01', 'A01X02']);
+  });
+
   it('plans step-free Metrorail journeys around station elevator outages, not garage ones', async () => {
     const stepFree = async (incidents: object[]) => {
       const f = await dc({ incidents });
