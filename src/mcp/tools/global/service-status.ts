@@ -17,7 +17,7 @@ import type { ScheduleShard } from '../../../transit/gtfs/static/schema';
 import { AlertScopeLimitError, expandAlertScopes, matchesAlertSelector, resolveAlertSelector, type AlertScope } from '../../../transit/gtfs/realtime/alert-match';
 import { itinerarySchema } from './plan';
 import { blockedStations, currentOutage, outageStations, stationOf, type EquipmentOutage } from '../../../transit/accessibility/equipment';
-import { MAX_DISCOVERY_CANDIDATES, localTime, coverageTimezone, residentShards, TransitToolError, stopMatches, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, closestStops, localTime, coverageTimezone, residentShards, TransitToolError, stopMatches, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
 
 /** Per-alert detail bound: a city-wide status call stays readable for a model. */
 export const ALERT_DETAIL_LIMIT = 20;
@@ -87,7 +87,7 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       const named = await loadData(context, coverageId, handler.mcpReq.signal);
       if (!named) return complete({ ...unavailable(coverageId), alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] });
       const matches = stopMatches(named, args.stop);
-      if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND');
+      if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND', closestStops(named, args.stop));
       if (matches.length > 1) throw new TransitToolError('ENTITY_AMBIGUOUS', matches.slice(0, MAX_DISCOVERY_CANDIDATES));
       args = { ref: matches[0]!.ref } as unknown as typeof args;
     }

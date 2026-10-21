@@ -421,6 +421,16 @@ describe('global transit MCP boundary', () => {
     ] as const) expect(await first(query), query).toBe(expected);
     // Folding and typo tolerance must not invent matches.
     for (const query of ['Brooklyn Bridge', 'Penn Station', 'zzz']) expect(await first(query), query).toBeNull();
+    // A name the timetable spells differently gets suggestions, never a match.
+    const official = (await call(f.env, 'find_transit', { query: 'Gallery Pl-Chinatown Station', coverage: 'sfbay' })).result.structuredContent;
+    expect(official.candidates).toEqual([]);
+    const near = (await call(f.env, 'find_transit', { query: 'Crystal Cityy Metro', coverage: 'sfbay' })).result.structuredContent;
+    expect(near.candidates.length + (near.suggestions?.length ?? 0)).toBeGreaterThan(0);
+    const missing = await call(f.env, 'get_departures', { stop: 'Metro Centre Station Plaza', coverage: 'sfbay' });
+    expect(missing.result.isError).toBe(true);
+    expect(missing.result.structuredContent).toMatchObject({ code: 'ENTITY_NOT_FOUND', message: expect.stringContaining('closest names, not matches') });
+    expect(missing.result.structuredContent.candidates[0]).toMatchObject({ name: 'Metro Center' });
+    expect((await call(f.env, 'find_transit', { query: 'qqqq xxxx', coverage: 'sfbay' })).result.structuredContent.suggestions ?? []).toEqual([]);
   });
   it('preserves exact public route-number alternatives even when provider IDs and long names differ', async () => {
     const input = plannerInput(); input.files['routes.txt'] = 'route_id,agency_id,route_short_name,route_long_name,route_type\nR,A,91,Night Service,3\n';

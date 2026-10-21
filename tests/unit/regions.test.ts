@@ -85,3 +85,19 @@ describe('regional transit manifests', () => {
     expect(packageJson.scripts['upload:sfbay-artifact:preview']).toContain('--remote');
   });
 });
+
+describe('official station names as aliases', () => {
+  it('finds DC stations by the names WMATA publishes and riders use', async () => {
+    const { DC_COVERAGE } = await import('../../src/regions/dc');
+    const stationFor = (alias: string) => DC_COVERAGE.placeAliases.filter(place => place.aliases.some(name => name.toLowerCase() === alias.toLowerCase())).flatMap(place => place.stopNames);
+    expect(stationFor('Chinatown')).toEqual(['Gallery Place']);
+    expect(stationFor('Gallery Pl-Chinatown')).toEqual(['Gallery Place']);
+    expect(stationFor('Convention Center')).toEqual(['Mt Vernon Sq']);
+    expect(stationFor('Adams Morgan')).toEqual(['Woodley Park']);
+    // A name two stations share (GMU) would pick one silently; none is published twice.
+    const owners = new Map<string, Set<string>>();
+    for (const place of DC_COVERAGE.placeAliases) for (const alias of place.aliases) owners.set(alias.toLowerCase(), (owners.get(alias.toLowerCase()) ?? new Set()).add(place.stopNames.join('|')));
+    expect([...owners].filter(([, stations]) => stations.size > 1)).toEqual([]);
+    expect(stationFor('GMU')).toEqual([]);
+  });
+});

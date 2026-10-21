@@ -1,0 +1,357 @@
+{
+  "coverageId": "dc",
+  "scope": "official_station_names",
+  "generatedBy": "scripts/import-wmata-station-names.ts",
+  "source": "https://api.wmata.com/Rail.svc/json/jStations",
+  "places": [
+    {
+      "name": "Addison Rd",
+      "aliases": [
+        "Addison Road-Seat Pleasant",
+        "Seat Pleasant"
+      ],
+      "stopNames": [
+        "Addison Rd"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station G03 is published as \"Addison Road-Seat Pleasant\"; the GTFS feed names it \"Addison Rd\"."
+    },
+    {
+      "name": "Archives",
+      "aliases": [
+        "Archives-Navy Memorial-Penn Quarter",
+        "Navy Memorial",
+        "Penn Quarter"
+      ],
+      "stopNames": [
+        "Archives"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station F02 is published as \"Archives-Navy Memorial-Penn Quarter\"; the GTFS feed names it \"Archives\"."
+    },
+    {
+      "name": "Ballston-MU",
+      "aliases": [
+        "Ballston"
+      ],
+      "stopNames": [
+        "Ballston-MU"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station K04 is published as \"Ballston-MU\"; the GTFS feed names it \"Ballston-MU\"."
+    },
+    {
+      "name": "Brookland-CUA",
+      "aliases": [
+        "Brookland"
+      ],
+      "stopNames": [
+        "Brookland-CUA"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station B05 is published as \"Brookland-CUA\"; the GTFS feed names it \"Brookland-CUA\"."
+    },
+    {
+      "name": "College Park-U of Md",
+      "aliases": [
+        "College Park",
+        "U of Md"
+      ],
+      "stopNames": [
+        "College Park-U of Md"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station E09 is published as \"College Park-U of Md\"; the GTFS feed names it \"College Park-U of Md\"."
+    },
+    {
+      "name": "Dunn Loring",
+      "aliases": [
+        "Dunn Loring-Merrifield",
+        "Merrifield"
+      ],
+      "stopNames": [
+        "Dunn Loring"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station K07 is published as \"Dunn Loring-Merrifield\"; the GTFS feed names it \"Dunn Loring\"."
+    },
+    {
+      "name": "Foggy Bottom-GWU",
+      "aliases": [
+        "Foggy Bottom"
+      ],
+      "stopNames": [
+        "Foggy Bottom-GWU"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station C04 is published as \"Foggy Bottom-GWU\"; the GTFS feed names it \"Foggy Bottom-GWU\"."
+    },
+    {
+      "name": "Franconia-Springfield",
+      "aliases": [
+        "Franconia",
+        "Springfield"
+      ],
+      "stopNames": [
+        "Franconia-Springfield"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station J03 is published as \"Franconia-Springfield\"; the GTFS feed names it \"Franconia-Springfield\"."
+    },
+    {
+      "name": "Gallery Place",
+      "aliases": [
+        "Gallery Pl-Chinatown",
+        "Chinatown"
+      ],
+      "stopNames": [
+        "Gallery Place"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station B01/F01 is published as \"Gallery Pl-Chinatown\"; the GTFS feed names it \"Gallery Place\"."
+    },
+    {
+      "name": "Georgia Av-Petworth",
+      "aliases": [
+        "Georgia Ave",
+        "Petworth"
+      ],
+      "stopNames": [
+        "Georgia Av-Petworth"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station E05 is published as \"Georgia Ave-Petworth\"; the GTFS feed names it \"Georgia Av-Petworth\"."
+    },
+    {
+      "name": "Grosvenor-Strathmore",
+      "aliases": [
+        "Grosvenor",
+        "Strathmore"
+      ],
+      "stopNames": [
+        "Grosvenor-Strathmore"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station A11 is published as \"Grosvenor-Strathmore\"; the GTFS feed names it \"Grosvenor-Strathmore\"."
+    },
+    {
+      "name": "King St-Old Town",
+      "aliases": [
+        "King St",
+        "Old Town"
+      ],
+      "stopNames": [
+        "King St-Old Town"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station C13 is published as \"King St-Old Town\"; the GTFS feed names it \"King St-Old Town\"."
+    },
+    {
+      "name": "Mt Vernon Sq",
+      "aliases": [
+        "Mt Vernon Sq 7th St-Convention Center",
+        "Mt Vernon Sq 7th St",
+        "Convention Center"
+      ],
+      "stopNames": [
+        "Mt Vernon Sq"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station E01 is published as \"Mt Vernon Sq 7th St-Convention Center\"; the GTFS feed names it \"Mt Vernon Sq\"."
+    },
+    {
+      "name": "Navy Yard-Ballpark",
+      "aliases": [
+        "Navy Yard",
+        "Ballpark"
+      ],
+      "stopNames": [
+        "Navy Yard-Ballpark"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station F05 is published as \"Navy Yard-Ballpark\"; the GTFS feed names it \"Navy Yard-Ballpark\"."
+    },
+    {
+      "name": "NoMa-Gallaudet U",
+      "aliases": [
+        "NoMa",
+        "Gallaudet U"
+      ],
+      "stopNames": [
+        "NoMa-Gallaudet U"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station B35 is published as \"NoMa-Gallaudet U\"; the GTFS feed names it \"NoMa-Gallaudet U\"."
+    },
+    {
+      "name": "Rhode Island Av",
+      "aliases": [
+        "Rhode Island Ave-Brentwood",
+        "Brentwood"
+      ],
+      "stopNames": [
+        "Rhode Island Av"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station B04 is published as \"Rhode Island Ave-Brentwood\"; the GTFS feed names it \"Rhode Island Av\"."
+    },
+    {
+      "name": "Shaw-Howard U",
+      "aliases": [
+        "Shaw",
+        "Howard U"
+      ],
+      "stopNames": [
+        "Shaw-Howard U"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station E02 is published as \"Shaw-Howard U\"; the GTFS feed names it \"Shaw-Howard U\"."
+    },
+    {
+      "name": "Stadium-Armory",
+      "aliases": [
+        "Stadium",
+        "Armory"
+      ],
+      "stopNames": [
+        "Stadium-Armory"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station D08 is published as \"Stadium-Armory\"; the GTFS feed names it \"Stadium-Armory\"."
+    },
+    {
+      "name": "Tenleytown-AU",
+      "aliases": [
+        "Tenleytown"
+      ],
+      "stopNames": [
+        "Tenleytown-AU"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station A07 is published as \"Tenleytown-AU\"; the GTFS feed names it \"Tenleytown-AU\"."
+    },
+    {
+      "name": "U St",
+      "aliases": [
+        "U Street/African-Amer Civil War Memorial/Cardozo",
+        "African-Amer Civil War Memorial",
+        "Cardozo"
+      ],
+      "stopNames": [
+        "U St"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station E03 is published as \"U Street/African-Amer Civil War Memorial/Cardozo\"; the GTFS feed names it \"U St\"."
+    },
+    {
+      "name": "Van Ness-UDC",
+      "aliases": [
+        "Van Ness"
+      ],
+      "stopNames": [
+        "Van Ness-UDC"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station A06 is published as \"Van Ness-UDC\"; the GTFS feed names it \"Van Ness-UDC\"."
+    },
+    {
+      "name": "Vienna",
+      "aliases": [
+        "Vienna/Fairfax-GMU",
+        "Fairfax-GMU",
+        "Fairfax"
+      ],
+      "stopNames": [
+        "Vienna"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station K08 is published as \"Vienna/Fairfax-GMU\"; the GTFS feed names it \"Vienna\"."
+    },
+    {
+      "name": "Virginia Sq-GMU",
+      "aliases": [
+        "Virginia Square"
+      ],
+      "stopNames": [
+        "Virginia Sq-GMU"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station K03 is published as \"Virginia Square-GMU\"; the GTFS feed names it \"Virginia Sq-GMU\"."
+    },
+    {
+      "name": "Wiehle-Reston East",
+      "aliases": [
+        "Wiehle",
+        "Reston East"
+      ],
+      "stopNames": [
+        "Wiehle-Reston East"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station N06 is published as \"Wiehle-Reston East\"; the GTFS feed names it \"Wiehle-Reston East\"."
+    },
+    {
+      "name": "Woodley Park",
+      "aliases": [
+        "Woodley Park-Zoo/Adams Morgan",
+        "Woodley Park-Zoo",
+        "Adams Morgan"
+      ],
+      "stopNames": [
+        "Woodley Park"
+      ],
+      "sources": [
+        "https://api.wmata.com/Rail.svc/json/jStations"
+      ],
+      "basis": "WMATA station A04 is published as \"Woodley Park-Zoo/Adams Morgan\"; the GTFS feed names it \"Woodley Park\"."
+    }
+  ]
+}

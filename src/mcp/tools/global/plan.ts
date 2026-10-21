@@ -14,7 +14,7 @@ import type { SourceStatus, VerificationReason } from '../../../transit/core/res
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { canonicalJson, sha256 } from '../../../transit/gtfs/static/shards';
 import { DecodedShardCache } from '../../../transit/planner/schedule-index';
-import { MAX_DISCOVERY_CANDIDATES, residentShards, TransitToolError, asTransitRef, boundedText, routeHints, routeHintsSchema, routeName, effectiveCapabilities, journeyAgencies, validRef, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, stopMatches, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, closestStops, residentShards, TransitToolError, asTransitRef, boundedText, routeHints, routeHintsSchema, routeName, effectiveCapabilities, journeyAgencies, validRef, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, stopMatches, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
 
 const journeyEndpoint = z.union([z.string(), coordinatesSchema]);
 const transitLeg = z.strictObject({ kind: z.literal('transit'), from: z.string(), to: z.string(), tripRef: z.string(), tripInstanceRef: z.string(), serviceDate: z.string(), instanceStartSeconds: z.number(),
@@ -91,7 +91,7 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       else {
         const matches = stopMatches(data, value.query);
         if (matches.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...unavailable(coverageId, data, ['SCOPE_LIMIT_EXCEEDED']), itineraries: [] });
-        if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND');
+        if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND', closestStops(data, value.query));
         if (matches.length === 1) resolved[endpoint] = asTransitRef(matches[0]!.ref);
         else ambiguous[endpoint] = matches.map(candidate => ({ ...candidate, endpoint }));
       }

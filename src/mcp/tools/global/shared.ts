@@ -56,7 +56,11 @@ const messages = {
   SELECTION_DECLINED: 'Transit entity selection was declined or cancelled.',
 };
 export function errorResult(error: TransitToolError) {
-  return { ...complete(errorSchema.parse({ code: error.code, message: `${error.code}: ${messages[error.code]}`, candidates: error.candidates })), isError: true as const };
+  // Nothing matched, but names are close: offer them as suggestions, never as a match.
+  const message = error.code === 'ENTITY_NOT_FOUND' && error.candidates.length
+    ? 'No transit entity matches that name. The candidates are the closest names, not matches: confirm one with the rider (or retry with the official station name) before using it.'
+    : messages[error.code];
+  return { ...complete(errorSchema.parse({ code: error.code, message: `${error.code}: ${message}`, candidates: error.candidates })), isError: true as const };
 }
 export function checkState(handler: ServerContext, tool: string): TransitRequestState | undefined {
   const state = handler.mcpReq.requestState<TransitRequestState>();
@@ -270,6 +274,39 @@ const WORD_FORMS: Readonly<Record<string, string>> = { street: 'st', avenue: 'av
   heights: 'hts', junction: 'jct', and: '&' };
 const normalizeEntityName = (value: string) => value.normalize('NFKC').toLowerCase().replace(/['’]/g, '').replace(/&/g, ' & ').replace(/[-–—/.,()+]/g, ' ')
   .trim().split(/\s+/).map(word => WORD_FORMS[word] ?? word.replace(/^(\d+)(st|nd|rd|th)$/, '$1')).join(' ');
+/** Letter trigrams of a folded name, padded so short words still count. */
+function trigrams(value: string): Set<string> {
+  const padded = `  ${value} `, grams = new Set<string>();
+  for (let at = 0; at + 3 <= padded.length; at++) grams.add(padded.slice(at, at + 3));
+  return grams;
+}
+const trigramCache = new WeakMap<DiscoveryIndex, Map<string, Set<string>>>();
+/** The closest stop names when nothing matches ("Gallery Pl-Chinatown" → Gallery Place):
+ * trigram similarity survives word order, abbreviations and misspellings. Suggestions only;
+ * no tool ever resolves a name to one of them on its own. */
+export function closestStops(data: TransitData, query: string, limit = 5): Candidate[] {
+  const wanted = trigrams(normalizeEntityName(query));
+  if (wanted.size < 3) return [];
+  const scored: { entity: Candidate; score: number }[] = [];
+  for (const index of data.indexes) {
+    let cache = trigramCache.get(index);
+    if (!cache) { cache = new Map(); trigramCache.set(index, cache); }
+    for (const entity of entityIndex(data, index).list) {
+      if (entity.kind !== 'stop') continue;
+      const name = normalizeEntityName(entity.name);
+      let grams = cache.get(name);
+      if (!grams) { grams = trigrams(name); cache.set(name, grams); }
+      let shared = 0;
+      for (const gram of wanted) if (grams.has(gram)) shared++;
+      const score = 2 * shared / (wanted.size + grams.size);
+      if (score >= 0.35) scored.push({ entity, score });
+    }
+  }
+  const described = scored.sort((a, b) => b.score - a.score || a.entity.ref.localeCompare(b.entity.ref)).slice(0, limit * 4).map(item => describeCandidate(data, item.entity));
+  // A station stands for its platforms and entrances.
+  const stations = new Set(described.filter(item => item.stopType === 'station').map(item => item.ref));
+  return described.filter(item => !(item.stationRef && stations.has(item.stationRef)) && item.stopType !== 'entrance').slice(0, limit);
+}
 /** Words that say what kind of place, not which: "Times Square station", "the Metro at Dupont". */
 const FILLER = new Set(['the', 'station', 'stn', 'stop', 'metro', 'subway', 'train', 'trains', 'rail', 'bus', 'at', 'of']);
 const significant = (normalized: string) => normalized.split(' ').filter(word => word && !FILLER.has(word));
