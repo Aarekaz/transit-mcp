@@ -7,7 +7,7 @@ import { formatEntityRef, parseTransitRef } from '../../../transit/core/refs';
 import { getCoverage } from '../../../transit/core/coverage';
 import type { NormalizedVehicle } from '../../../transit/gtfs/realtime/decode';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
-import { MAX_DISCOVERY_CANDIDATES, localTime, coverageTimezone, TransitToolError, boundedText, checkState, complexStations, coordinatesSchema, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, routeName, stopMatches, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, judgedAt, localTime, coverageTimezone, TransitToolError, boundedText, checkState, complexStations, coordinatesSchema, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, routeName, stopMatches, unavailable, validRef, type TransitData } from './shared';
 
 const STOP_STATUS = { STOPPED_AT: 'stopped_at', INCOMING_AT: 'incoming_at', IN_TRANSIT_TO: 'in_transit_to' } as const;
 
@@ -54,7 +54,7 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
     const within = parsed.kind === 'stop' ? new Set([ref!, ...complexStations(data, ref!)]) : undefined;
     const atStop = within && new Set(stopIndex.filter(stop => within.has(stop.ref) || stop.parentStationRef !== undefined && within.has(stop.parentStationRef)).map(stop => stop.providerId));
     const now = Math.floor(Date.now() / 1000), feed = await readFeed<NormalizedVehicle>(context, data, 'vehicle_positions', now, handler.mcpReq.signal, [], [parsed.feed]);
-    const fresh = (feed.feedIds ?? [feed.feedId]).includes(parsed.feed) && feed?.status === 'realtime' && feed.producerTimestampSeconds !== undefined && now >= feed.producerTimestampSeconds && now - feed.producerTimestampSeconds <= data.coverage.thresholds.vehiclePositions.realtimeSeconds;
+    const fresh = (feed.feedIds ?? [feed.feedId]).includes(parsed.feed) && feed?.status === 'realtime' && feed.producerTimestampSeconds !== undefined && judgedAt(now, feed.producerTimestampSeconds) >= feed.producerTimestampSeconds && judgedAt(now, feed.producerTimestampSeconds) - feed.producerTimestampSeconds <= data.coverage.thresholds.vehiclePositions.realtimeSeconds;
     const routes = data.indexes.find(index => index.feedId === parsed.feed)?.routes ?? [];
     const stopRef = (providerId: string | undefined) => {
       const candidate = providerId === undefined ? undefined : formatEntityRef({ coverage: parsed.coverage, feed: parsed.feed, kind: 'stop', id: providerId });

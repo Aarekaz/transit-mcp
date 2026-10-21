@@ -10,7 +10,7 @@ import { DecodedShardCache } from '../../../transit/planner/schedule-index';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import { stopAccess } from '../../../transit/accessibility/equipment';
 import type { ScheduleTrip } from '../../../transit/gtfs/static/schema';
-import { MAX_DISCOVERY_CANDIDATES, localTime, residentShards, TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, stopMatches, stationAgencies, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, judgedAt, localTime, residentShards, TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, stopMatches, stationAgencies, unavailable, validRef, type TransitData } from './shared';
 import { getCoverage } from '../../../transit/core/coverage';
 
 const departureShape = { tripRef: z.string(), serviceDate: z.string(), routeRef: z.string(), routeName: z.string().describe('Public route name, e.g. "1", "A" or "Red".'),
@@ -104,7 +104,8 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     if (feed.payload?.some(update => ['DUPLICATED', 'REPLACEMENT'].includes(update.scheduleRelationship ?? ''))) {
       return complete({ ...meta, sources, status: 'unavailable' as const, reasons: ['REALTIME_UNAVAILABLE' as const], departures: [], frequencyWindows: [] });
     }
-    const fresh = feed?.status === 'realtime' && feed.producerTimestampSeconds !== undefined && nowSeconds >= feed.producerTimestampSeconds && nowSeconds - feed.producerTimestampSeconds <= data.coverage.thresholds.tripUpdates.realtimeSeconds;
+    const judged = judgedAt(nowSeconds, feed.producerTimestampSeconds);
+    const fresh = feed?.status === 'realtime' && feed.producerTimestampSeconds !== undefined && judged >= feed.producerTimestampSeconds && judged - feed.producerTimestampSeconds <= data.coverage.thresholds.tripUpdates.realtimeSeconds;
     let departures: Unnamed<z.infer<typeof departureSchema>>[] = scheduled.flatMap(departure => {
       const update = fresh ? feed.payload?.find(update => update.tripInstanceRef === departure.tripInstanceRef && update.stopSequence === departure.stopSequence && update.stopId === parseTransitRef(departure.stopRef)!.id) : undefined;
       if (update?.status === 'canceled' || update?.status === 'skipped') return [];
