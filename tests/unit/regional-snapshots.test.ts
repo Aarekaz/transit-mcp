@@ -38,6 +38,22 @@ async function publishTrip(f: Awaited<ReturnType<typeof setup>>, ...tripUpdates:
 }
 
 describe('regional v2 snapshot service', () => {
+  it('keeps a cold stop read live when a regional feed carries many route-less trips elsewhere', async () => {
+    const f = await setup(); vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
+    // Twenty trips from other agencies name no route and never call at S; they cannot match.
+    const strays = Array.from({ length: 20 }, (_, index) => ({ id: `x${index}`, tripUpdate: { trip: { tripId: `X${index}`, startDate: '20261019' }, stopTimeUpdate: [{ stopId: 'ELSEWHERE', arrival: { time: NOW + 300 } }] } }));
+    const bytes = transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: NOW },
+      entity: [{ id: 'e', tripUpdate: { trip: { tripId: 'T', routeId: 'R', startDate: '20261019' }, stopTimeUpdate: [{ stopSequence: 1, arrival: { delay: 60 } }] } }, ...strays] }).finish();
+    const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async request => new URL((request as Request).url).pathname.endsWith('tripupdates') ? new Response(bytes) : new Response(null, { status: 503 }));
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const read = await (await f.hub.fetch(new Request(`https://hub/trip_updates?now=${NOW}&artifact=${f.version.artifactVersion}&stop=S`))).json<{ status: string; warnings: string[]; payload: { arrivalTimeSeconds: number }[] }>();
+      expect(read.status).toBe('realtime');
+      expect(read.warnings).not.toContain('SCHEDULE_REALTIME_MISMATCH');
+      expect(read.payload[0]?.arrivalTimeSeconds).toBe(NOW + 60);
+    } finally { upstream.mockRestore(); warning.mockRestore(); vi.useRealTimers(); }
+  });
+
   it('answers a cold stop read live from one provider request, then publishes the whole snapshot from it', async () => {
     const f = await setup(); vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
     const bytes = transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: NOW },
