@@ -4,6 +4,7 @@ import { NYC_TRIP_FEEDS } from '../../src/regions/nyc';
 import { formatEntityRef, formatTripInstanceRef, parseTransitRef } from '../../src/transit/core/refs';
 import { RegionFeedHub } from '../../src/transit/gtfs/realtime/region-feed-hub';
 import { residentShards } from '../../src/mcp/tools/global/shared';
+import { RealtimeSnapshotStore } from '../../src/transit/gtfs/realtime/snapshot-store';
 import { memoryStorage } from '../helpers/realtime-fixture';
 import { NOW, NYC_FILES, SERVICE_DATE, bandedArtifact, composeFeed, callTool, civil, feedBytes, liveEnv, nowSeconds, nyctEquipmentDocuments, nyctOutage, nyctTrip, nyctVehicle, upstream, wireHub, wmataIncident, wmataIncidentDocument } from '../helpers/dc-nyc-realtime';
 
@@ -492,6 +493,24 @@ describe('Washington Metrorail through the global tools', () => {
       ['14362719_20741', 'scheduled_only', null],
     ]);
     expect(console.info).toHaveBeenCalledWith(expect.stringContaining('"eligible":1,"matched":1,"rate":1,"nonRevenue":1'));
+  });
+
+  it('answers the first departures question live when the coordinator has not polled yet', async () => {
+    quiet();
+    const artifact = await bandedArtifact('dc');
+    const env = liveEnv(artifact.db, { WMATA_API_KEY: 'test-wmata-key' });
+    wireHub(env, artifact.db, 'dc:wmata');
+    const stamp = nowSeconds();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(upstream({ 'rail-gtfsrt-tripupdates.pb': feedBytes(stamp, [red, nonRevenue]), 'rail-gtfsrt-vehiclepositions.pb': feedBytes(stamp, []),
+      'rail-gtfsrt-alerts.pb': feedBytes(stamp, []), ...wmataIncidentDocument() }).fetcher);
+    // An evicted coordinator still holds a long-stale stored snapshot; no alarm has run.
+    await new RealtimeSnapshotStore(artifact.db.storage).publish('trip_updates', { version: artifact.version, producerTimestampSeconds: stamp - 3600,
+      receivedAtSeconds: stamp - 3600, payload: [] });
+    await artifact.db.storage.put('polled:trip_updates', stamp - 3600);
+    // The question itself wakes the coordinator and is answered from what it fetches now.
+    const result = (await callTool(env, 'get_departures', { stopRef: artifact.ref('stop', 'STN_A02'), windowSeconds: 1800 })).structuredContent;
+    expect(result).toMatchObject({ status: 'realtime', reasons: [] });
+    expect(result.departures[0]).toMatchObject({ status: 'realtime', predictedTime: '2026-10-19T13:06:00.000Z' });
   });
 
   it('judges schedule identity by match rate only with enough trips, never by one late-night stray', async () => {
