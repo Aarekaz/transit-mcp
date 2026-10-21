@@ -19,7 +19,7 @@ export const PAST_CALL_SECONDS = 600;
 /** Coordinators poll only while someone reads them: a read keeps one polling this long. */
 export const READER_IDLE_SECONDS = 600;
 /** A read that finds its feed out of date waits this long for the poll it starts. */
-const FIRST_READ_WAIT_MS = 25_000;
+const FIRST_READ_WAIT_MS = 20_000;
 /** A cold stop read waits this long for the provider's document before falling back. */
 const FOCUSED_FETCH_WAIT_MS = 10_000;
 const READ_AT_KEY = 'readAt';
@@ -278,7 +278,7 @@ export class RegionFeedHub implements DurableObject {
     const poll = this.#pollOnce(source, spec, nowSeconds);
     if (kind === 'trip_updates' && spec.kind === 'trip_updates' && stops.length) {
       const decoded = await bounded(this.#fetched.get(spec.kind)?.promise ?? Promise.resolve(null), FOCUSED_FETCH_WAIT_MS);
-      const focused = decoded ? await this.#poll(source, spec, nowSeconds, { decoded, stops: new Set(stops) }).catch(() => undefined) : undefined;
+      const focused = decoded ? await bounded(this.#poll(source, spec, nowSeconds, { decoded, stops: new Set(stops) }).catch(() => undefined), FOCUSED_FETCH_WAIT_MS) : undefined;
       if (focused) return focused;
     }
     await bounded(poll, FIRST_READ_WAIT_MS);
@@ -318,9 +318,12 @@ export class RegionFeedHub implements DurableObject {
     if (!publishedKinds(source).has(kind)) {
       return Response.json({ error: 'not_found' }, { status: 404 });
     }
+    const startedAt = Date.now();
     await this.#wake();
+    const woken = Date.now();
     const stops = url.searchParams.getAll('stop');
     const focused = await this.#fresh(kind, kind === 'trip_updates' ? stops : []);
+    const freshened = Date.now();
     const now = Number(url.searchParams.get('now')) || Math.floor(Date.now() / 1_000);
     const core = new RegionalFeedHubCore(source.coverage.thresholds);
     // A request for another version (a refresh or rollback just happened) rereads the pointer.
@@ -338,6 +341,9 @@ export class RegionFeedHub implements DurableObject {
       : held;
     if (snapshot) core.replace(kind, snapshot);
     const read = core.read(kind, now);
+    // Where a slow read spent its time (Durable Object clocks advance only across I/O).
+    if (Date.now() - startedAt > 3000) console.info(JSON.stringify({ event: 'hub_read_slow', region: source.coverage.id, source: source.policy.feedId, kind, focused: Boolean(focused),
+      wakeMs: woken - startedAt, freshMs: freshened - woken, readMs: Date.now() - freshened, freshness: read.freshness }));
     // The reader already holds this exact payload: send only the freshness metadata.
     if (read.etag && url.searchParams.get('have') === read.etag) return Response.json({ ...read, payload: null, notModified: true, queuedMs, servedMs: Date.now() - queuedMs - Number(url.searchParams.get('sent')) });
     return Response.json({ ...read, queuedMs, servedMs: Date.now() - queuedMs - Number(url.searchParams.get('sent')) });

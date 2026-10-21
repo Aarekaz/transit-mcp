@@ -559,6 +559,9 @@ export type CoverageFeedRead<T> = OwnedFeedRead<T> & { parts: OwnedFeedRead<T>[]
 /** Complete payloads this isolate already holds, by coordinator and kind. The coordinator
  * confirms the tag on every read, so freshness metadata is never served from cache. */
 const heldPayloads = new Map<string, { etag: string; payload: unknown[] }>();
+/** A coordinator read never holds a tool past this: past it the tool answers from the
+ * timetable, labelled so, rather than hang. Covers a cold coordinator's first poll. */
+const HUB_READ_DEADLINE_MS = 30_000;
 async function readOwnedFeed<T>(context: MetroMcpContext, data: TransitData, source: RealtimeSource, kind: RealtimeFeedKind, now: number, signal: AbortSignal, stopIds: string[]): Promise<OwnedFeedRead<T[]>> {
   const feedId = source.policy.feedId, feedIds = sourceFeedIds(source.policy);
   const missing = (): OwnedFeedRead<T[]> => ({ feedId, feedIds, freshness: 'unavailable', status: kind === 'trip_updates' ? 'scheduled_only' : 'unavailable', payload: null, warnings: [], reasons: ['REALTIME_UNAVAILABLE'] });
@@ -574,7 +577,8 @@ async function readOwnedFeed<T>(context: MetroMcpContext, data: TransitData, sou
   url.searchParams.set('sent', String(Date.now()));
   signal.throwIfAborted();
   try {
-    const response = await phase('hub', () => context.env.REGION_FEED_HUB!.get(context.env.REGION_FEED_HUB!.idFromName(source.policy.namespace)).fetch(url.href, { signal }));
+    const deadline = AbortSignal.any([signal, AbortSignal.timeout(HUB_READ_DEADLINE_MS)]);
+    const response = await phase('hub', () => context.env.REGION_FEED_HUB!.get(context.env.REGION_FEED_HUB!.idFromName(source.policy.namespace)).fetch(url.href, { signal: deadline }));
     signal.throwIfAborted();
     if (!response.ok) return missing();
     const { notModified, queuedMs, servedMs, ...feed } = await response.json<FeedRead<T[]> & { notModified?: boolean; queuedMs?: number; servedMs?: number }>();
