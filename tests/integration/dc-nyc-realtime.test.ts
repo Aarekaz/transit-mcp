@@ -408,11 +408,13 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     expect(result).toMatchObject({ isError: true, structuredContent: { code: 'INVALID_ITINERARY' } });
   });
 
-  it('serves schedules but no realtime claims when the coordinator has not polled', async () => {
+  it('serves schedules but no realtime claims when the first read cannot reach the provider', async () => {
     quiet();
     const artifact = await bandedArtifact('nyc');
     const env = liveEnv(artifact.db);
     wireHub(env, artifact.db, 'nyc:mta');
+    // A first read polls the provider itself; when that fails it claims nothing live.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 503 }));
     const result = (await callTool(env, 'get_departures', { stopRef: artifact.ref('stop', '129'), windowSeconds: 1800 })).structuredContent;
     expect(result).toMatchObject({ status: 'scheduled_only', reasons: ['REALTIME_UNAVAILABLE'] });
   });
@@ -565,8 +567,11 @@ describe('NYC buses: one Bus Time relay, one coordinator per borough timetable',
     const hubs = new Map<string, RegionFeedHub>();
     env.REGION_FEED_HUB = { idFromName: (name: string) => ({ toString: () => name }), get: (id: { toString(): string }) => ({
       fetch: (request: string | Request) => hubs.get(id.toString())?.fetch(typeof request === 'string' ? new Request(request) : request) ?? Promise.resolve(new Response(null, { status: 409 })) }) } as unknown as DurableObjectNamespace;
-    for (const name of ['nyc:mta_bus', 'nyc:mta_bus_m', 'nyc:mta_bus_bx']) hubs.set(name, new RegionFeedHub({ id: { toString: () => name }, storage: memoryStorage().storage,
-      blockConcurrencyWhile: async (run: () => Promise<void>) => run() } as unknown as DurableObjectState, env));
+    for (const name of ['nyc:mta_bus', 'nyc:mta_bus_m', 'nyc:mta_bus_bx']) {
+      const { storage } = memoryStorage();
+      await storage.put('readAt', Number.MAX_SAFE_INTEGER); // a reader is present
+      hubs.set(name, new RegionFeedHub({ id: { toString: () => name }, storage, blockConcurrencyWhile: async (run: () => Promise<void>) => run() } as unknown as DurableObjectState, env));
+    }
     const stamp = nowSeconds();
     const trip = (tripId: string, routeId: string, stop: string, time: number) => ({ id: tripId, tripUpdate: { trip: { tripId, routeId, startDate: SERVICE_DATE }, stopTimeUpdate: [{ stopId: stop, stopSequence: 1, arrival: { time }, departure: { time } }] } });
     const network = upstream({ tripUpdates: feedBytes(stamp, [trip('MV_M15_0905', 'M15', '401', civil('09:07:00')), trip('BX_BX12_0905', 'BX12', '101', civil('09:06:00'))]),

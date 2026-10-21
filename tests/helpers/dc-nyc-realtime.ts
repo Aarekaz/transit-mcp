@@ -170,6 +170,8 @@ export function wireHub(env: Env, db: ReturnType<typeof memoryStorage>, namespac
       const hub = hubs.get(id.toString());
       return hub ? hub.fetch(typeof request === 'string' ? new Request(request) : request) : Promise.resolve(new Response(null, { status: 409 }));
     } }) } as unknown as DurableObjectNamespace;
+  // Tests drive alarms directly: a reader is always present, so coordinators keep polling.
+  void db.storage.put('readAt', Number.MAX_SAFE_INTEGER);
   const hub = new RegionFeedHub({ id: { toString: () => namespace }, storage: db.storage, blockConcurrencyWhile: async (run: () => Promise<void>) => run() } as unknown as DurableObjectState, env);
   hubs.set(namespace, hub);
   return hub;

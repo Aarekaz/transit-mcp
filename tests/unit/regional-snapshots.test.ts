@@ -17,6 +17,8 @@ async function setup(fixture?: Awaited<ReturnType<typeof realtimeFixture>>) {
   db.objects.set(f.manifest.discoveries[0]!.key, f.discoveryBytes);
   const artifacts = new StaticArtifactStore(db.bucket), version = await artifacts.publish(f.manifest);
   const env = { TRANSIT_ARTIFACTS: db.bucket, SFBAY_MODE: 'dark', SF511_API_KEY: 'test-credential' } as Env;
+  // Tests drive alarms directly: a reader is always present, so the coordinator keeps polling.
+  await db.storage.put('readAt', Number.MAX_SAFE_INTEGER);
   const hub = new RegionFeedHub({ storage: db.storage, blockConcurrencyWhile: async (run: () => Promise<void>) => run() } as unknown as DurableObjectState, env);
   // Coordinators are addressed only by registered names; SF keeps its original one.
   const namespaces = getRealtimeSources().map(source => source.policy.namespace);
@@ -36,6 +38,33 @@ async function publishTrip(f: Awaited<ReturnType<typeof setup>>, ...tripUpdates:
 }
 
 describe('regional v2 snapshot service', () => {
+  it('sleeps while nobody reads, and a read wakes it and polls before answering', async () => {
+    const f = await setup(); vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
+    await f.db.storage.delete('readAt');
+    let alarm: number | null = null;
+    vi.spyOn(f.db.storage, 'getAlarm').mockImplementation(async () => alarm);
+    vi.spyOn(f.db.storage, 'setAlarm').mockImplementation(async value => { alarm = Number(value); });
+    const bytes = transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: NOW }, entity: [] }).finish();
+    const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(bytes));
+    try {
+      // Unread: the alarm polls nothing and schedules nothing.
+      await f.hub.alarm();
+      expect(upstream).not.toHaveBeenCalled();
+      expect(alarm).toBeNull();
+      // A read polls first, then keeps the coordinator polling.
+      const read = await (await f.hub.fetch(new Request(`https://hub/trip_updates?now=${NOW}&artifact=${f.version.artifactVersion}`))).json<{ freshness: string }>();
+      expect(read.freshness).toBe('fresh');
+      expect(upstream).toHaveBeenCalled();
+      expect(alarm).not.toBeNull();
+      // Ten quiet minutes later it stops again.
+      upstream.mockClear(); alarm = null;
+      vi.setSystemTime((NOW + 601) * 1000);
+      await f.hub.alarm();
+      expect(upstream).not.toHaveBeenCalled();
+      expect(alarm).toBeNull();
+    } finally { upstream.mockRestore(); vi.useRealTimers(); }
+  });
+
   it('schedules each feed by its attempt deadline so request duration cannot extend the cadence', async () => {
     const f = await setup(); vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
     let nextAlarm = 0;
@@ -207,9 +236,11 @@ describe('regional v2 snapshot service', () => {
     ]);
   });
 
-  it('uses immutable discovery and exact static/realtime pins without fetching upstream during requests', async () => {
+  it('uses immutable discovery and exact static/realtime pins without fetching upstream while the coordinator is current', async () => {
     const f = await setup(); const upstream = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('No request may fetch upstream'));
     try {
+      // Polled moments ago: requests read what the coordinator holds.
+      await f.db.storage.put('polled:trip_updates', Math.floor(Date.now() / 1000));
       await f.store.publish('trip_updates', { version: f.version, receivedAtSeconds: NOW, producerTimestampSeconds: NOW,
         payload: [{ entityId: 'e', tripId: 'T', tripInstanceRef: 'tr:sfbay:sf511:trip:VA:20261019:MDg6MDA6MDA', stopSequence: 1, stopId: 'S', routeId: 'R', status: 'realtime', arrivalTimeSeconds: NOW + 60, departureTimeSeconds: NOW + 60 }] });
       expect(await f.service.searchStations('Station')).toEqual([expect.objectContaining({ id: 'S', routeIds: ['R'] })]);

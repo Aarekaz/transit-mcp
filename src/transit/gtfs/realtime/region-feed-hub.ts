@@ -16,6 +16,12 @@ const POLLED_PREFIX = 'polled:';
 /** Calls this long before the poll are not published. */
 export const PAST_CALL_SECONDS = 600;
 
+/** Coordinators poll only while someone reads them: a read keeps one polling this long. */
+export const READER_IDLE_SECONDS = 600;
+/** A read that finds its feed out of date waits this long for the poll it starts. */
+const FIRST_READ_WAIT_MS = 15_000;
+const READ_AT_KEY = 'readAt';
+
 function polledKey(kind: RealtimeFeedKind): string {
   return `${POLLED_PREFIX}${kind}`;
 }
@@ -174,6 +180,12 @@ export class RegionFeedHub implements DurableObject {
   /** The published artifact as of this coordinator's last poll or mismatched read. Reads never
    * wait on R2 for it: while a poll uploads a snapshot, R2 connections are all in use. */
   #current?: { version: StaticVersion; manifest: ArtifactManifestV2 };
+  /** Last read (ms), and the last one written to storage: an evicted coordinator's alarm
+   * still knows whether anyone is reading, at one row write a minute. */
+  #readAt = 0;
+  #storedReadAt = 0;
+  /** Polls in flight by feed kind, shared by the alarm and reads waiting on fresh data. */
+  readonly #inflight = new Map<RealtimeFeedKind, Promise<void>>();
   async #artifact(): Promise<{ version: StaticVersion; manifest: ArtifactManifestV2 } | undefined> {
     return this.#current = await this.#artifacts?.current() ?? undefined;
   }
@@ -196,9 +208,41 @@ export class RegionFeedHub implements DurableObject {
       ...source.policy.budget,
       feeds: source.feeds.map(feed => ({ id: feed.kind, weight: feed.weight, minIntervalSeconds: feed.minIntervalSeconds, requestsPerPoll: feedParts(feed).length })),
     });
-    state.blockConcurrencyWhile(async () => {
-      if (await state.storage.getAlarm() == null) await state.storage.setAlarm(Date.now() + 1_000);
-    });
+    // No alarm until someone reads: an unread coordinator costs nothing.
+  }
+
+  /** A reader arrived: keep polling for READER_IDLE_SECONDS, starting now if asleep. */
+  async #wake(): Promise<void> {
+    const now = Date.now();
+    this.#readAt = now;
+    if (now - this.#storedReadAt >= 60_000) { this.#storedReadAt = now; await this.#state.storage.put(READ_AT_KEY, now); }
+    if (await this.#state.storage.getAlarm() == null) await this.#state.storage.setAlarm(now + 1_000);
+  }
+
+  #pollOnce(source: RealtimeSource, spec: RealtimeFeedSpec, nowSeconds: number): Promise<void> {
+    let poll = this.#inflight.get(spec.kind);
+    if (!poll) { poll = this.#poll(source, spec, nowSeconds).finally(() => this.#inflight.delete(spec.kind)); this.#inflight.set(spec.kind, poll); }
+    return poll;
+  }
+
+  /** The first read after a quiet spell polls now rather than serve nothing, waiting a bounded time. */
+  async #fresh(kind: RealtimeFeedKind): Promise<void> {
+    const source = this.#source!;
+    const spec = source.feeds.find(feed => feed.kind === kind) ?? source.feeds.find(feed => feed.alsoPublishes?.includes(kind));
+    if (!spec || !ingestionActive(source, this.#env)) return;
+    const nowSeconds = Math.floor(Date.now() / 1000), last = await this.#state.storage.get<number>(polledKey(spec.kind)) ?? 0;
+    if (nowSeconds - last < this.#intervals[spec.kind]!) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([this.#pollOnce(source, spec, nowSeconds), new Promise<void>(resolve => { timer = setTimeout(resolve, FIRST_READ_WAIT_MS); })]);
+    if (timer !== undefined) clearTimeout(timer);
+  }
+
+  /** A relay consumer's poll keeps the relay awake and its bytes current. */
+  async #touchRelay(source: RealtimeSource, kind: RealtimeFeedKind): Promise<void> {
+    const relay = getRealtimeSources(source.coverage.id).find(item => item.policy.relayTo?.prefix === source.policy.relayFrom);
+    const hub = this.#env.REGION_FEED_HUB;
+    if (!relay || !hub) return;
+    await hub.get(hub.idFromName(relay.policy.namespace)).fetch(`https://region-feed-hub.internal/touch?kind=${kind}`).catch(() => undefined);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -208,7 +252,14 @@ export class RegionFeedHub implements DurableObject {
     const source = this.#source;
     if (!source) return Response.json({ error: 'inactive_coordinator' }, { status: 409 });
     if (url.pathname === '/health') return new Response(null, { status: 204 });
+    if (url.pathname === '/touch') {
+      await this.#wake();
+      await this.#fresh(url.searchParams.get('kind') as RealtimeFeedKind);
+      return new Response(null, { status: 204 });
+    }
     if (url.pathname === '/stats') {
+      // A refresh checking a new timetable's match rate needs this coordinator polling.
+      await this.#wake();
       const feed = url.searchParams.get('feed');
       return Response.json(await this.#state.storage.get(feed ? `stats:trip_updates:${feed}` : 'stats:trip_updates') ?? await this.#state.storage.get('stats:trip_updates') ?? null);
     }
@@ -219,6 +270,8 @@ export class RegionFeedHub implements DurableObject {
     if (!publishedKinds(source).has(kind)) {
       return Response.json({ error: 'not_found' }, { status: 404 });
     }
+    await this.#wake();
+    await this.#fresh(kind);
     const now = Number(url.searchParams.get('now')) || Math.floor(Date.now() / 1_000);
     const core = new RegionalFeedHubCore(source.coverage.thresholds);
     // A request for another version (a refresh or rollback just happened) rereads the pointer.
@@ -240,13 +293,16 @@ export class RegionFeedHub implements DurableObject {
     const source = this.#source;
     if (!source) return;
     const nowSeconds = Math.floor(Date.now() / 1_000);
+    // Nobody has read for a while: stop and schedule nothing. The next read wakes it.
+    const readAt = Math.max(this.#readAt, await this.#state.storage.get<number>(READ_AT_KEY) ?? 0);
+    if (Date.now() - readAt > READER_IDLE_SECONDS * 1000) return;
     const active = ingestionActive(source, this.#env);
     if (active) {
       for (const feed of source.feeds) {
         const lastPolled = await this.#state.storage.get<number>(polledKey(feed.kind)) ?? 0;
         const attemptSeconds = Math.floor(Date.now() / 1000);
         if (attemptSeconds - lastPolled >= this.#intervals[feed.kind]!) {
-          await this.#poll(source, feed, attemptSeconds);
+          await this.#pollOnce(source, feed, attemptSeconds);
         }
       }
     }
@@ -328,6 +384,7 @@ export class RegionFeedHub implements DurableObject {
       const parts = feedParts(spec);
       const timings: Record<string, number> = {}, startedAt = Date.now();
       const lap = (phase: string) => { timings[phase] = Date.now() - startedAt; };
+      if (policy.relayFrom) await this.#touchRelay(source, spec.kind);
       const settled = await Promise.allSettled(parts.map(part => policy.relayFrom ? this.#readRelay(source, spec) : this.#fetchPart(source, spec, part.url, nowSeconds)));
       const failed = settled.flatMap((result, index) => result.status === 'rejected' ? [parts[index]!.id] : []);
       if (failed.length) {
