@@ -13,7 +13,7 @@ import { normalizeMcpRoute } from './route-normalizer';
 import { serializeTelemetry, type TelemetryInput } from './telemetry';
 import type { Env } from './types';
 import { bootstrapRegionalFeedHub } from './transit/gtfs/realtime/bootstrap';
-import { checkStaticSources } from './transit/gtfs/refresh/refresh';
+import { checkStaticSources, rollForwardSchedules } from './transit/gtfs/refresh/refresh';
 import { compactSchedules } from './transit/planner/compactor';
 import { canaryDue, recordCanary } from './canary';
 
@@ -116,6 +116,8 @@ export default {
   scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
     ctx.waitUntil(bootstrapRegionalFeedHub(env));
     ctx.waitUntil(checkStaticSources(env, Date.now()));
+    // A timetable rolled back too early comes back once the live feed has moved onto it.
+    ctx.waitUntil(rollForwardSchedules(env, Date.now()));
     // The network planner's compact timetables, a bounded batch per tick.
     ctx.waitUntil(compactSchedules(env, Date.now()));
     // Every other day: check production the way an agent uses it.

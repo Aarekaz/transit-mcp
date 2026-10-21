@@ -7,7 +7,8 @@ import { partitionSchedule } from '../../src/transit/gtfs/static/partition';
 import { sha256 } from '../../src/transit/gtfs/static/shards';
 import { readZipDirectory, zipEntryText } from '../../src/transit/gtfs/static/zip';
 import { StaticArtifactStore } from '../../src/transit/gtfs/realtime/snapshot-store';
-import { BAND_SECONDS, checkStaticSources, guardRefresh, runRefresh, sourceKeys, type StepRunner } from '../../src/transit/gtfs/refresh/refresh';
+import { BAND_SECONDS, checkStaticSources, guardRefresh, rollForwardSchedules, runRefresh, sourceKeys, type StepRunner } from '../../src/transit/gtfs/refresh/refresh';
+import { bandedArtifact } from '../helpers/dc-nyc-realtime';
 import type { Env } from '../../src/types';
 import { DC_FILES, NOW, NYC_FILES } from '../helpers/dc-nyc-realtime';
 import { memoryStorage } from '../helpers/realtime-fixture';
@@ -382,5 +383,47 @@ describe('edge refresh workflow', () => {
     expect(created).toHaveLength(1);
     // DC is not active in this environment and is never contacted.
     expect(requests.some(request => request.url.includes('wmata'))).toBe(false);
+  });
+});
+
+describe('rolling forward a timetable rolled back too early', () => {
+  // WMATA publishes the next rail timetable the evening before it starts: the canary sees live
+  // trips still on the old one and rolls back; the next morning the old one matches nothing.
+  async function rolledBack(retrievedNewer = '2026-10-20T22:15:33.345Z') {
+    const { db, partitioned } = await bandedArtifact('dc');
+    const store = new StaticArtifactStore(db.bucket, 'dc');
+    const old = await store.publish(partitioned.manifest);
+    const newer = structuredClone(partitioned.manifest);
+    newer.sources = newer.sources.map(source => ({ ...source, sha256: 'f'.repeat(64), retrievedAt: retrievedNewer }));
+    const next = await store.publish(newer);
+    await store.rollback(next.artifactVersion);
+    return { db, store, old: old.artifactVersion, next: next.artifactVersion };
+  }
+  function envWith(db: Awaited<ReturnType<typeof rolledBack>>['db'], stats: object | null, calls: string[] = []) {
+    return { TRANSIT_ARTIFACTS: db.bucket, TRANSIT_COVERAGE_MODES: '{"dc":"on"}', REGION_FEED_HUB: { idFromName: (name: string) => name,
+      get: () => ({ fetch: async (url: string) => { calls.push(url); return Response.json(stats); } }) } } as unknown as Env;
+  }
+  const now = Date.parse('2026-10-21T13:50:00Z');
+  afterEach(() => vi.restoreAllMocks());
+
+  it('switches forward when live matching collapses on the timetable it rolled back to', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = await rolledBack(), calls: string[] = [];
+    await rollForwardSchedules(envWith(f.db, { artifactVersion: f.old, eligible: 142, matched: 0, rate: 0, atSeconds: now / 1000 - 60 }, calls), now);
+    expect(await f.store.pointer()).toEqual({ current: f.next, previous: f.old });
+    // A routine check never wakes a sleeping coordinator.
+    expect(calls.every(url => url.includes('peek=1'))).toBe(true);
+  });
+
+  it('stays put while live data matches, on stale stats, or when the other timetable is not newer', async () => {
+    const healthy = await rolledBack();
+    await rollForwardSchedules(envWith(healthy.db, { artifactVersion: healthy.old, eligible: 142, matched: 140, rate: 0.99, atSeconds: now / 1000 - 60 }), now);
+    expect((await healthy.store.pointer())?.current).toBe(healthy.old);
+    const stale = await rolledBack();
+    await rollForwardSchedules(envWith(stale.db, { artifactVersion: stale.old, eligible: 142, matched: 0, rate: 0, atSeconds: now / 1000 - 3600 }), now);
+    expect((await stale.store.pointer())?.current).toBe(stale.old);
+    const older = await rolledBack('2026-10-01T00:00:00Z');
+    await rollForwardSchedules(envWith(older.db, { artifactVersion: older.old, eligible: 142, matched: 0, rate: 0, atSeconds: now / 1000 - 60 }), now);
+    expect((await older.store.pointer())?.current).toBe(older.old);
   });
 });
