@@ -189,8 +189,7 @@ export class RegionFeedHub implements DurableObject {
     this.#quota = new ApiKeyQuota(state.storage, source.policy.budget);
     if (source.policy.relayFrom) this.#shards = new DecodedShardCache(8 * 1024 * 1024);
     if (env.TRANSIT_ARTIFACTS) {
-      const primary = getRealtimeSource(source.coverage.id)?.policy.feedId === source.policy.feedId;
-      this.#snapshots = new RealtimeSnapshotStore(state.storage, env.TRANSIT_ARTIFACTS, source.coverage.id, primary ? undefined : source.policy.feedId);
+      this.#snapshots = new RealtimeSnapshotStore(state.storage);
       this.#artifacts = new StaticArtifactStore(env.TRANSIT_ARTIFACTS, source.coverage.id);
     }
     this.#intervals = allocatePollIntervals({

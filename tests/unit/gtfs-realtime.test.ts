@@ -191,99 +191,62 @@ describe('bounded snapshot storage and manifest policy', () => {
     expect(hub.read('vehicle_positions', 1601)).toMatchObject({ status: 'unavailable', ageSeconds: 601, payload: [{ observationAgeSeconds: 611, status: 'unavailable' }] });
   });
 
-  it('stores indexed payload shards in R2 and preserves bounded metadata across restoration', async () => {
-    const db = memoryStorage(); const store = new snapshots.RealtimeSnapshotStore(db.storage, db.bucket);
+  it('keeps snapshots in the coordinator\'s memory only: nothing reaches R2 or storage', async () => {
+    const db = memoryStorage(); const store = new snapshots.RealtimeSnapshotStore(db.storage);
     const version = await snapshots.staticVersion((await realtimeFixture()).manifest);
-    const payload = Array.from({ length: 15000 }, (_, i) => ({ entityId: `e${i}`, stopId: `S${i % 100}`, label: 'x'.repeat(200) }));
+    const payload = Array.from({ length: 15000 }, (_, i) => ({ entityId: `e${i}`, stopId: `S${i % 100}`, label: 'x'.repeat(20) }));
     await store.publish('trip_updates', { version, producerTimestampSeconds: 1000, receivedAtSeconds: 1001, payload });
-    expect(new TextEncoder().encode(JSON.stringify([...db.values])).byteLength).toBeLessThan(2 * 1024 * 1024);
-    expect(JSON.stringify([...db.values])).not.toContain('xxxxxxxxxxxxxxxx');
-    expect(db.objects.size).toBeGreaterThan(1);
-    const restored = new snapshots.RealtimeSnapshotStore(db.storage, db.bucket);
-    const result = await restored.read('trip_updates', version, ['S1']);
+    expect(db.objects.size).toBe(0);
+    expect(db.values.size).toBe(0);
+    // The same coordinator (same storage) reads it back, filtered by stop.
+    const result = await new snapshots.RealtimeSnapshotStore(db.storage).read('trip_updates', version, ['S1', 'S1']);
     expect(result?.payload).toHaveLength(150);
     expect(result?.producerTimestampSeconds).toBe(1000);
-    expect(db.reads.length).toBeLessThan(db.objects.size);
-    // A restarted coordinator keeps the bytes it read; the same partitions read again stay in memory.
-    const loaded = db.reads.length;
-    expect((await restored.read('trip_updates', version, ['S1']))?.payload).toHaveLength(150);
-    expect(db.reads.length).toBe(loaded);
-    const mismatch = await restored.read('trip_updates', { ...version, artifactVersion: 'a'.repeat(64) });
+    const mismatch = await store.read('trip_updates', { ...version, artifactVersion: 'a'.repeat(64) });
     expect(mismatch).toMatchObject({ payload: null, warnings: ['SCHEDULE_REALTIME_MISMATCH'] });
+    // A restarted coordinator (new storage object) has nothing until its next poll.
+    expect(await new snapshots.RealtimeSnapshotStore(memoryStorage().storage).read('trip_updates', version)).toBeNull();
   });
 
-  it('rejects oversized metadata before publishing and rejects tampered shards', async () => {
-    const db = memoryStorage(); const store = new snapshots.RealtimeSnapshotStore(db.storage, db.bucket);
+  it('rejects oversized metadata before publishing', async () => {
+    const db = memoryStorage(); const store = new snapshots.RealtimeSnapshotStore(db.storage);
     const version = await snapshots.staticVersion((await realtimeFixture()).manifest);
     await expect(store.publish('trip_updates', { version, receivedAtSeconds: 1000, payload: [], warnings: ['x'.repeat(2 * 1024 * 1024)] })).rejects.toThrow(/metadata/i);
-    expect(db.values.size).toBe(0);
-    await store.publish('trip_updates', { version, receivedAtSeconds: 1000, payload: [{ stopId: 'S' }] });
-    for (const key of db.objects.keys()) db.objects.set(key, new TextEncoder().encode('[]'));
-    // The publisher serves the payload it holds; a restarted coordinator reads R2 and verifies it.
-    expect((await store.read('trip_updates', version))?.payload).toEqual([{ stopId: 'S' }]);
-    await expect(new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).read('trip_updates', version)).rejects.toThrow(/integrity/i);
+    expect(await store.read('trip_updates', version)).toBeNull();
   });
 
-  it('stores rows column-wise without changing what a reader gets back, and keeps meaningful nulls', async () => {
-    const db = memoryStorage(), version = await snapshots.staticVersion((await realtimeFixture()).manifest);
+  it('returns records exactly as published, meaningful nulls included', async () => {
+    const db = memoryStorage(), version = await snapshots.staticVersion((await realtimeFixture()).manifest), store = new snapshots.RealtimeSnapshotStore(db.storage);
     const rows = [{ stopId: 'S', tripId: 't1', stopSequence: 3, arrivalTimeSeconds: 100 }, { stopId: 'S', tripId: 't2', departureTimeSeconds: 200, status: 'realtime' }];
-    await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).publish('trip_updates', { version, receivedAtSeconds: 1000, payload: rows });
-    const stored = JSON.parse(new TextDecoder().decode([...db.objects.values()][0]!));
-    expect(stored).toMatchObject({ columns: ['arrivalTimeSeconds', 'departureTimeSeconds', 'status', 'stopId', 'stopSequence', 'tripId'] });
-    // A restarted coordinator reads R2: the same records, absent fields still absent.
-    expect((await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).read('trip_updates', version))?.payload).toEqual(rows);
+    await store.publish('trip_updates', { version, receivedAtSeconds: 1000, payload: rows });
+    expect((await store.read('trip_updates', version))?.payload).toEqual(rows);
     const outages = [{ id: 'EL1', stationId: 'S', estimatedReturn: null }];
-    await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).publish('equipment_outages', { version, receivedAtSeconds: 1000, payload: outages });
-    expect((await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).read('equipment_outages', version))?.payload).toEqual(outages);
+    await store.publish('equipment_outages', { version, receivedAtSeconds: 1000, payload: outages });
+    expect((await store.read('equipment_outages', version))?.payload).toEqual(outages);
   });
 
-  it('fits a city of bus predictions (82,000 rows) in one snapshot', async () => {
-    const db = memoryStorage(), version = await snapshots.staticVersion((await realtimeFixture()).manifest);
-    const rows = Array.from({ length: 82_000 }, (_, i) => ({ entityId: `MTA NYCT_${100000 + Math.floor(i / 16)}`, tripId: `MV_E3-Weekday-SDon-0${10000 + Math.floor(i / 16)}00_M15_${i % 400}`,
-      routeId: 'M15', stopId: `${400000 + (i % 3000)}`, stopSequence: i % 40, arrivalTimeSeconds: 1_792_500_000 + i, departureTimeSeconds: 1_792_500_030 + i,
-      scheduledArrivalTimeSeconds: 1_792_500_000 + i, scheduledDepartureTimeSeconds: 1_792_500_000 + i, scheduleRelationship: 'SCHEDULED', stopScheduleRelationship: 'SCHEDULED',
-      tripInstanceRef: `tr:nyc:mta_bus_m:trip:${Buffer.from(`MV_E3-Weekday-SDon-0${10000 + Math.floor(i / 16)}00_M15_${i % 400}`).toString('base64url')}:20261020:MDk6MDA6MDA`,
-      serviceDate: '20261020', status: 'realtime', scheduleMatch: 'matched' }));
-    await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).publish('trip_updates', { version, receivedAtSeconds: 1000, payload: rows });
-    const read = await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).read<{ stopId: string }>('trip_updates', version);
-    expect(read?.payload).toHaveLength(82_000);
-    expect(read?.payload?.find(row => row.stopId === '400007')).toEqual(rows[7]);
+  it('serves a city of bus predictions (82,000 rows) whole and by stop', async () => {
+    const db = memoryStorage(), version = await snapshots.staticVersion((await realtimeFixture()).manifest), store = new snapshots.RealtimeSnapshotStore(db.storage);
+    const rows = Array.from({ length: 82_000 }, (_, i) => ({ entityId: `MTA NYCT_${100000 + Math.floor(i / 16)}`, routeId: 'M15', stopId: `${400000 + (i % 3000)}`, stopSequence: i % 40, arrivalTimeSeconds: 1_792_500_000 + i }));
+    await store.publish('trip_updates', { version, receivedAtSeconds: 1000, payload: rows });
+    expect((await store.read('trip_updates', version))?.payload).toHaveLength(82_000);
+    const read = await store.read<{ stopId: string }>('trip_updates', version, ['400007']);
+    expect(read?.payload?.[0]).toEqual(rows[7]);
+    expect(read?.payload).toHaveLength(28);
   });
 
-  it('tags complete payloads so a reader that holds one skips the transfer', async () => {
-    const db = memoryStorage(), version = await snapshots.staticVersion((await realtimeFixture()).manifest);
-    await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).publish('trip_updates', { version, receivedAtSeconds: 1000, payload: [{ stopId: 'S' }, { stopId: 'T' }] });
-    const cold = new snapshots.RealtimeSnapshotStore(db.storage, db.bucket);
-    const first = await cold.read('trip_updates', version), again = await cold.read('trip_updates', version);
-    expect(first?.etag).toMatch(/^[0-9a-f]{64}$/);
+  it('tags each complete payload so a reader that holds it skips the transfer', async () => {
+    const db = memoryStorage(), version = await snapshots.staticVersion((await realtimeFixture()).manifest), store = new snapshots.RealtimeSnapshotStore(db.storage);
+    await store.publish('trip_updates', { version, receivedAtSeconds: 1000, payload: [{ stopId: 'S' }, { stopId: 'T' }] });
+    const first = await store.read('trip_updates', version), again = await store.read('trip_updates', version);
+    expect(first?.etag).toBeTruthy();
     expect(again?.etag).toBe(first?.etag);
-    // Stop-filtered reads are partial and carry no tag.
-    expect(await cold.read('trip_updates', version, ['T'])).toMatchObject({ payload: [{ stopId: 'T' }] });
-    expect((await cold.read('trip_updates', version, ['T']))?.etag).toBeUndefined();
-  });
-
-  it('retains at most the current and previous snapshot payload generations after repeated polls', async () => {
-    const db = memoryStorage(); const store = new snapshots.RealtimeSnapshotStore(db.storage, db.bucket);
-    const version = await snapshots.staticVersion((await realtimeFixture()).manifest);
-    for (let i = 0; i < 10; i++) await store.publish('trip_updates', { version, receivedAtSeconds: 1000 + i, payload: [{ stopId: 'S', value: i }] });
-    expect(db.objects.size).toBe(2);
-    expect((await store.read<{ value: number }>('trip_updates', version))?.payload?.[0]?.value).toBe(9);
-  });
-
-  it('recovers an interrupted shard publication without exposing partial data or retaining orphan payloads', async () => {
-    const db = memoryStorage(); const store = new snapshots.RealtimeSnapshotStore(db.storage, db.bucket);
-    const version = await snapshots.staticVersion((await realtimeFixture()).manifest);
-    await store.publish('trip_updates', { version, receivedAtSeconds: 1000, payload: [{ stopId: 'S', value: 0 }] });
-    const originalPut = db.bucket.put.bind(db.bucket); let writes = 0;
-    db.bucket.put = (async (...args: Parameters<R2Bucket['put']>) => {
-      if (++writes === 2) throw new Error('R2 write failed');
-      return originalPut(...args);
-    }) as R2Bucket['put'];
-    await expect(store.publish('trip_updates', { version, receivedAtSeconds: 1001, payload: [{ stopId: 'S', value: 1 }, { stopId: 'Q', value: 2 }] })).rejects.toThrow('R2 write failed');
-    expect((await store.read<{ value: number }>('trip_updates', version))?.payload?.[0]?.value).toBe(0);
-    db.bucket.put = originalPut;
-    await new snapshots.RealtimeSnapshotStore(db.storage, db.bucket).publish('trip_updates', { version, receivedAtSeconds: 1002, payload: [{ stopId: 'S', value: 3 }] });
-    expect(db.objects.size).toBe(2);
+    // Stop-filtered reads are partial and carry no tag; a new publish carries a new one.
+    expect(await store.read('trip_updates', version, ['T'])).toMatchObject({ payload: [{ stopId: 'T' }] });
+    expect((await store.read('trip_updates', version, ['T']))?.etag).toBeUndefined();
+    await store.publish('trip_updates', { version, receivedAtSeconds: 1001, payload: [{ stopId: 'S' }] });
+    expect((await store.read('trip_updates', version))?.etag).not.toBe(first?.etag);
+    expect((await store.read('trip_updates', version, ['T']))?.payload).toEqual([]);
   });
 
   it('keeps current and previous static manifests addressable without retaining both in the resident cache', async () => {

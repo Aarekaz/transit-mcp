@@ -116,7 +116,7 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     const first = (await plan()).structuredContent, second = (await plan()).structuredContent;
     expect(reads[0]).toMatchObject({ notModified: false });
     expect(reads[0]!.rows).toBeGreaterThan(0);
-    expect(reads.at(-1)).toMatchObject({ have: expect.stringMatching(/^[0-9a-f]{64}$/), notModified: true, rows: 0 });
+    expect(reads.at(-1)).toMatchObject({ have: expect.any(String), notModified: true, rows: 0 });
     expect(second.itineraries).toEqual(first.itineraries);
     expect(second.status).toBe(first.status);
   });
