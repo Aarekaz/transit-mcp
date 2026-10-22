@@ -206,13 +206,15 @@ describe('assembled MCP Worker', () => {
     const args = { coverage: 'sfbay', origin: { query: 'Montgomery Street' }, destination: { query: 'Montgomery Street' } };
     const meta = { [CLIENT_CAPABILITIES_META_KEY]: { elicitation: { form: {} } } };
     const requestOptions = { meta, headers: { 'CF-Connecting-IP': '198.51.100.241' } };
-    const pending = onlyResult(await readMcpResponse(await worker.fetch(await modernMcpRequest('tools/call', { name: 'plan_trip', arguments: args }, requestOptions), sfEnv, context)));
-    expect(pending.resultType).toBe('input_required');
-    const mismatch = await readMcpResponse(await worker.fetch(await modernMcpRequest('tools/call', {
-      name: 'plan_trip', arguments: { ...args, departAt: '2026-10-19T08:00:00-07:00' }, requestState: pending.requestState,
-      inputResponses: { endpoints: { action: 'accept', content: { origin: 'tr:sfbay:sf511:stop:UzE', destination: 'tr:sfbay:sf511:stop:UzI' } } },
+    // Even a client that can show forms gets an answer, never a form of stop IDs.
+    const planned = onlyResult(await readMcpResponse(await worker.fetch(await modernMcpRequest('tools/call', { name: 'plan_trip', arguments: args }, requestOptions), sfEnv, context)));
+    expect(planned.resultType).not.toBe('input_required');
+    expect(planned.requestState).toBeUndefined();
+    const stray = await readMcpResponse(await worker.fetch(await modernMcpRequest('tools/call', {
+      name: 'plan_trip', arguments: args, requestState: 'v1.not-ours',
+      inputResponses: { endpoints: { action: 'accept', content: { origin: 'tr:sfbay:sf511:stop:UzE' } } },
     }, requestOptions), sfEnv, context));
-    expect(mismatch[0]).toMatchObject({ error: { code: -32602 } });
+    expect(stray[0]).toMatchObject({ error: { code: -32602 } });
   });
 
   it('serves anonymous modern server/discover without an authentication challenge', async () => {

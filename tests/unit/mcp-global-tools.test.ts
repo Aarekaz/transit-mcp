@@ -77,17 +77,16 @@ describe('global transit MCP boundary', () => {
   });
   it('bounds discovery and endpoint ambiguity without silently losing exact alternatives', async () => {
     const input = plannerInput();
-    for (let index = 0; index < 200; index++) input.files['stops.txt'] += `Large${index},Crowded,37,-122\nFuzzy${index},Fuzzy station ${index},37,-122\n`;
+    // Each "Crowded" stop is its own place: farther from the next than a short walk.
+    for (let index = 0; index < 200; index++) input.files['stops.txt'] += `Large${index},Crowded,${37 + index * 0.004},-122\nFuzzy${index},Fuzzy station ${index},37,-122\n`;
     const f = await fixture(false, input);
     const exact = (await call(f.env, 'find_transit', { query: 'Crowded', limit: 3 })).result.structuredContent;
     expect(exact).toMatchObject({ status: 'unavailable', reasons: ['SCOPE_LIMIT_EXCEEDED'], candidates: [] });
     const fuzzy = (await call(f.env, 'find_transit', { query: 'Fuzzy', limit: 3 })).result.structuredContent;
     expect(fuzzy.candidates).toHaveLength(3);
-    for (const elicitation of [false, true]) {
-      const result = (await call(f.env, 'plan_trip', { coverage: 'sfbay', origin: { query: 'Crowded' }, destination: { query: 'Destination' } }, elicitation)).result;
-      expect(result.structuredContent).toMatchObject({ status: 'unavailable', reasons: ['SCOPE_LIMIT_EXCEEDED'], itineraries: [] });
-      expect(result.requestState).toBeUndefined();
-    }
+    const result = (await call(f.env, 'plan_trip', { coverage: 'sfbay', origin: { query: 'Crowded' }, destination: { query: 'Destination' } }, true)).result;
+    expect(result.structuredContent).toMatchObject({ status: 'unavailable', reasons: ['SCOPE_LIMIT_EXCEEDED'], itineraries: [] });
+    expect(result.requestState).toBeUndefined();
   });
 
   it('makes public instructions and the commute prompt capability-driven with honest legacy lookups', async () => {
@@ -440,32 +439,6 @@ describe('global transit MCP boundary', () => {
     const result = (await call(f.env, 'find_transit', { query: ' 91 ', context: { feed: 'other' }, limit: 1 })).result.structuredContent;
     expect(result.candidates.map((candidate: any) => candidate.ref)).toEqual(['tr:sfbay:other:route:Ug', 'tr:sfbay:sf511:route:OTE', 'tr:sfbay:sf511:route:Ug']);
   });
-  it('never substitutes a newly unique endpoint after a signed selection artifact changes', async () => {
-    const f = await fixture(true), args = { coverage: 'sfbay', origin: { query: 'Origin' }, destination: { ref: ref('stop', 'C') }, departAt: at('08:59:00'), maxWalkMetres: 0 };
-    const pending = (await call(f.env, 'plan_trip', args, true)).result;
-    const replacement = await compileSchedule(plannerInput());
-    f.db.objects.set(replacement.manifest.discoveries[0]!.key, replacement.discoveryBytes); f.db.objects.set(replacement.manifest.shards[0]!.key, replacement.shardBytes);
-    await new StaticArtifactStore(f.db.bucket).publish(replacement.manifest);
-    const resumed = await call(f.env, 'plan_trip', args, true, { requestState: pending.requestState,
-      inputResponses: { endpoints: { action: 'accept', content: { origin: ref('stop', 'AA') } } } });
-    expect(resumed).toMatchObject({ error: { code: -32602 } });
-    expect(resumed.result?.structuredContent?.itineraries).toBeUndefined();
-  });
-  it('keeps the verified selection artifact pinned if publication races handler dispatch', async () => {
-    const f = await fixture(true), args = { coverage: 'sfbay', origin: { query: 'Origin' }, destination: { ref: ref('stop', 'C') }, departAt: at('08:59:00'), maxWalkMetres: 0 };
-    const pending = (await call(f.env, 'plan_trip', args, true)).result;
-    const pointer = 'artifacts/sfbay/v2/current.json', originalPointer = f.db.objects.get(pointer)!;
-    const input = plannerInput(); input.files['stop_times.txt'] = input.files['stop_times.txt'].replaceAll('09:00:00', '09:01:00');
-    const replacement = await compileSchedule(input);
-    f.db.objects.set(replacement.manifest.discoveries[0]!.key, replacement.discoveryBytes); f.db.objects.set(replacement.manifest.shards[0]!.key, replacement.shardBytes);
-    await new StaticArtifactStore(f.db.bucket).publish(replacement.manifest);
-    const newPointer = f.db.objects.get(pointer)!; f.db.objects.set(pointer, originalPointer);
-    const get = f.db.bucket.get.bind(f.db.bucket);
-    Object.assign(f.db.bucket, { get: async (key: string) => { const object = await get(key); if (key === pointer) f.db.objects.set(pointer, newPointer); return object; } });
-    const resumed = await call(f.env, 'plan_trip', args, true, { requestState: pending.requestState,
-      inputResponses: { endpoints: { action: 'accept', content: { origin: ref('stop', 'A') } } } });
-    expect(resumed.result.structuredContent.itineraries[0].artifactVersion).toBe(f.version.artifactVersion);
-  });
   it('advertises flat input schemas, with selector exclusivity checked by the tool', async () => {
     const env = createMockEnv(), { result } = await wire(env, 'tools/list', {}), validator = new AjvJsonSchemaValidator();
     for (const [name, valid, invalid, combined] of [
@@ -568,29 +541,30 @@ describe('global transit MCP boundary', () => {
     // Malformed configuration withholds planning everywhere rather than guessing.
     expect(await plan('not json')).toMatchObject({ reasons: ['PLANNING_UNAVAILABLE'] });
   });
-  it('returns deterministic candidate errors without elicitation and resolves both choices in one round', async () => {
+  it('plans a name standing for one place from all its stops, and never asks the user to pick stop IDs', async () => {
+    // Two stops named "Origin" at one spot, and two "Destination"s: one place each.
     const { env } = await fixture(true);
     const args = { coverage: 'sfbay', origin: { query: 'Origin' }, destination: { query: 'Destination' }, departAt: at('08:59:00'), maxWalkMetres: 0 };
-    const fallback = (await call(env, 'plan_trip', args)).result;
-    expect(fallback).toMatchObject({ isError: true, structuredContent: { code: 'ENTITY_AMBIGUOUS', candidates: [
-      { endpoint: 'origin', ref: ref('stop', 'A') }, { endpoint: 'origin', ref: ref('stop', 'AA') },
-      { endpoint: 'destination', ref: ref('stop', 'C') }, { endpoint: 'destination', ref: ref('stop', 'CC') },
-    ] } });
-    expect(JSON.parse(fallback.content[0].text)).toEqual(fallback.structuredContent);
-    const initial = (await call(env, 'plan_trip', args, true)).result;
-    expect(initial, JSON.stringify(initial)).toMatchObject({ resultType: 'input_required', inputRequests: { endpoints: { method: 'elicitation/create' } } });
-    expect(initial.inputRequests.endpoints.params.requestedSchema.required).toEqual(['origin', 'destination']);
-    const envelope = JSON.parse(Buffer.from(initial.requestState.split('.')[1], 'base64url').toString());
-    expect(envelope.p.tool).toBe('plan_trip');
-    expect(JSON.stringify(envelope.p)).not.toContain('Origin');
-    const retry = { requestState: initial.requestState, inputResponses: { endpoints: { action: 'accept', content: { origin: ref('stop', 'A'), destination: ref('stop', 'C') } } } };
-    expect((await call(env, 'plan_trip', args, true, retry)).result.structuredContent.itineraries).toHaveLength(1);
-    expect((await call(env, 'plan_trip', { ...args, departAt: at('09:30:00') }, true, retry)).error.code).toBe(-32602);
-    expect((await call(env, 'get_departures', { stopRef: ref('stop', 'A') }, true, retry)).error.code).toBe(-32602);
-    const invalidChoice = { ...retry, inputResponses: { endpoints: { action: 'accept', content: { origin: ref('stop', 'missing'), destination: ref('stop', 'C') } } } };
-    expect((await call(env, 'plan_trip', args, true, invalidChoice)).error.code).toBe(-32602);
-    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.now() + 301_000);
-    expect((await call(env, 'plan_trip', args, true, retry)).error.code).toBe(-32602);
+    for (const elicitation of [false, true]) {
+      const result = (await call(env, 'plan_trip', args, elicitation)).result;
+      expect(result.isError).toBeUndefined(); expect(result.resultType).not.toBe('input_required'); expect(result.requestState).toBeUndefined();
+      expect(result.structuredContent.itineraries).toHaveLength(1);
+      expect(result.structuredContent.notice).toBeUndefined(); expect(result.structuredContent.itineraries[0].reading).toBeUndefined();
+    }
+    expect((await call(env, 'get_departures', { stop: 'Origin', coverage: 'sfbay', at: at('08:59:00') })).result.structuredContent.departures).toHaveLength(1);
+  });
+  it('plans each place a name means, labelled, and asks a question a rider can answer elsewhere', async () => {
+    const input = plannerInput(); input.files['stops.txt'] += 'FAR,Origin,37.5,-122\n';
+    const { env } = await fixture(false, input);
+    const result = (await call(env, 'plan_trip', { coverage: 'sfbay', origin: { query: 'Origin' }, destination: { query: 'Destination' }, departAt: at('08:59:00'), maxWalkMetres: 0 }, true)).result;
+    expect(result.isError).toBeUndefined(); expect(result.requestState).toBeUndefined();
+    // The far "Origin" has no service: only the reading with a trip is returned, and the notice names both.
+    expect(result.structuredContent.notice).toMatch(/^"Origin" is 2 different places \(Origin \(.+\); Origin\)\. The best trip for each reading follows/);
+    expect(result.structuredContent.itineraries).toHaveLength(1);
+    expect(result.structuredContent.itineraries[0]).toMatchObject({ origin: ref('stop', 'A'), reading: { origin: 'Origin (R tram)', destination: 'Destination (R tram)' } });
+    const board = (await call(env, 'get_departures', { stop: 'Origin', coverage: 'sfbay' })).result;
+    expect(board).toMatchObject({ isError: true, structuredContent: { code: 'ENTITY_AMBIGUOUS', candidates: [{ ref: ref('stop', 'A') }, { ref: ref('stop', 'FAR') }] } });
+    expect(board.structuredContent.message).toMatch(/"Origin" is 2 different places: .*ask the rider which/);
   });
   it('returns the same versioned essential detail from tools and resources and never aliases an old version', async () => {
     const { env, version } = await fixture();

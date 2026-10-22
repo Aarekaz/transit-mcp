@@ -36,8 +36,9 @@ describe('SF Bay synthetic acceptance corpus through global MCP tools', () => {
     expect(result.structuredContent.candidates.map((candidate: { providerId: string }) => candidate.providerId)).toEqual(['syn_airport_rail']);
   });
 
-  // Breaks if two exact alias targets hide a separate stop whose public name says SFO.
-  it.each([{ name: 'default limit', limit: undefined }, { name: 'limit one', limit: 1 }])('preserves airport and terminal ambiguity with $name', async ({ limit }) => {
+  // Breaks if two exact alias targets hide a separate stop whose public name says SFO, or if an
+  // airport's stops stop being one place to plan from.
+  it.each([{ name: 'default limit', limit: undefined }, { name: 'limit one', limit: 1 }])('lists airport terminals and plans the airport as one place with $name', async ({ limit }) => {
     const fixture = await sfBayCorpusFixture('scheduled', undefined, { ...corpus.files,
       'stops.txt': corpus.files['stops.txt'] +
         'syn_airport_a_terminal,SFO International Terminal,37.616,-122.392\n' +
@@ -49,11 +50,9 @@ describe('SF Bay synthetic acceptance corpus through global MCP tools', () => {
     });
     const env = createMockEnv({ SFBAY_MODE: 'on', TRANSIT_ARTIFACTS: fixture.bucket });
     const plan = await call(env, 'plan_trip', { coverage: 'SF', origin: { query: 'Pier 39' }, destination: { query: 'SFO' } });
-    expect(plan.isError).toBe(true);
-    expect(plan.structuredContent.code).toBe('ENTITY_AMBIGUOUS');
-    expect(plan.structuredContent.candidates.map((candidate: { providerId: string }) => candidate.providerId))
-      .toEqual(['syn_airport_rail', 'syn_airport_second', 'syn_airport_a_terminal']);
-    expect(plan.structuredContent).not.toHaveProperty('itineraries');
+    expect(plan.isError).toBeUndefined();
+    expect(plan.structuredContent).toHaveProperty('itineraries');
+    expect(plan.structuredContent).not.toHaveProperty('notice');
     const found = await call(env, 'find_transit', { query: ' sFo ', coverage: 'SF', ...(limit === undefined ? {} : { limit }) });
     // Reviewed targets rank first even though the terminal has an earlier provider ID.
     expect(found.structuredContent.candidates.map((candidate: { providerId: string }) => candidate.providerId))
@@ -98,14 +97,16 @@ describe('SF Bay synthetic acceptance corpus through global MCP tools', () => {
     }
   });
 
-  it('returns both ambiguous places and never guesses a journey', async () => {
+  it('plans from each place a name means, labelled, and never presents one as the answer', async () => {
     const fixture = await sfBayCorpusFixture(), query = corpus.queries.ambiguous;
     const env = createMockEnv({ SFBAY_MODE: 'on', TRANSIT_ARTIFACTS: fixture.bucket, REGION_FEED_HUB: fixture.hub });
     const result = await call(env, 'plan_trip', { coverage: 'SF', origin: { query: query.origin }, destination: { query: query.destination } });
-    expect(result.isError).toBe(true);
-    expect(result.structuredContent.code).toBe('ENTITY_AMBIGUOUS');
-    expect(result.structuredContent.candidates.map((candidate: { providerId: string }) => candidate.providerId)).toEqual(query.candidates);
-    expect(result.structuredContent).not.toHaveProperty('itineraries');
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent.notice).toMatch(new RegExp(`^"${query.origin}" is ${query.candidates.length} different places`));
+    for (const itinerary of result.structuredContent.itineraries) expect(itinerary.reading.origin).toMatch(new RegExp(`^${query.origin}`));
+    const departures = await call(env, 'get_departures', { coverage: 'SF', stop: query.origin });
+    expect(departures.structuredContent.code).toBe('ENTITY_AMBIGUOUS');
+    expect(departures.structuredContent.candidates.map((candidate: { providerId: string }) => candidate.providerId)).toEqual(query.candidates);
   });
 
   it('returns only the matching agency alert with sanitized agency text', async () => {

@@ -283,8 +283,8 @@ describe('NYC subway through the global tools with every MTA feed', () => {
   it('checks a station by name, and names the station a departure reaches', async () => {
     const down = await nyc(nycDocuments(nowSeconds(), nyctEquipmentDocuments([nyctOutage('EL132A')])));
     const byName = (await callTool(down.env, 'get_service_status', { stop: '14 St', coverage: 'nyc' })).structuredContent;
-    // Two stations are named 14 St: the agent is asked which, with candidates.
-    expect(byName).toMatchObject({ code: 'ENTITY_AMBIGUOUS' });
+    // Two stations named 14 St a short walk apart are one place.
+    expect(byName).toMatchObject({ status: expect.any(String), equipment: expect.any(Object) });
     const timesSq = (await callTool(down.env, 'get_service_status', { stop: 'Times Sq-42 St', coverage: 'nyc' })).structuredContent;
     expect(timesSq).toMatchObject({ status: expect.any(String), equipment: expect.any(Object) });
     const rows = (await callTool(down.env, 'get_departures', { stopRef: down.ref('stop', '127S'), toStopRef: down.ref('stop', '132'), windowSeconds: 3600 })).structuredContent.departures;
@@ -403,27 +403,29 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     expect(coverage.sources.map((source: { kind: string }) => source.kind)).toEqual(['gtfs_schedule', 'alerts', 'equipment_outages']);
   });
 
-  it('never silently chooses between two stations with the same name', async () => {
+  it('lists same-named stations, and plans those a short walk apart as one place', async () => {
     const f = await nyc();
     const found = (await callTool(f.env, 'find_transit', { query: '14 St', coverage: 'nyc' })).structuredContent;
     // Each station once (its platforms are represented by it), described so a model can choose.
     expect(new Set(found.candidates.filter((c: { kind: string }) => c.kind === 'stop').map((c: { providerId: string }) => c.providerId))).toEqual(new Set(['132', 'D19']));
     expect(found.candidates.find((c: { providerId: string }) => c.providerId === '132')).toMatchObject({ stopType: 'station', modes: ['subway'], routeNames: ['1', '2', 'F'] });
-    const plan = await callTool(f.env, 'plan_trip', { coverage: 'nyc', origin: { query: '14 St' }, destination: { query: 'Times Sq-42 St' } });
-    expect(plan.isError).toBe(true);
-    expect(plan.structuredContent).toMatchObject({ code: 'ENTITY_AMBIGUOUS' });
-    expect(plan.structuredContent.candidates.length).toBeGreaterThan(1);
+    // The fixture's trains run south, so the place is the destination.
+    const plan = await callTool(f.env, 'plan_trip', { coverage: 'nyc', origin: { query: 'Times Sq-42 St' }, destination: { query: '14 St' } });
+    expect(plan.isError).toBeUndefined(); expect(plan.structuredContent.notice).toBeUndefined();
+    expect(plan.structuredContent.itineraries.length).toBeGreaterThan(0);
+    // Each journey ends at the 14 St station it rides to.
+    for (const itinerary of plan.structuredContent.itineraries) expect([f.ref('stop', '132'), f.ref('stop', 'D19')]).toContain(itinerary.destination);
   });
 
-  it('answers "next train at <station>" in one call, resolving one station complex but never two places', async () => {
+  it('answers "next train at <station>" in one call, for a station complex or stations a short walk apart', async () => {
     const f = await nyc();
     const byName = (await callTool(f.env, 'get_departures', { stop: 'Times Sq-42 St', coverage: 'nyc', windowSeconds: 1800 })).structuredContent;
     expect(byName.status).toBe('realtime');
     expect(byName.departures[0]).toMatchObject({ stopName: 'Times Sq-42 St', routeName: expect.stringMatching(/^[12]$/) });
     expect(byName.departures.every((row: { routeName: string; stopName: string }) => row.routeName && row.stopName)).toBe(true);
-    const ambiguous = await callTool(f.env, 'get_departures', { stop: '14 St', coverage: 'nyc' });
-    expect(ambiguous).toMatchObject({ isError: true, structuredContent: { code: 'ENTITY_AMBIGUOUS' } });
-    expect(new Set(ambiguous.structuredContent.candidates.map((c: { providerId: string }) => c.providerId))).toEqual(new Set(['132', 'D19']));
+    const place = await callTool(f.env, 'get_departures', { stop: '14 St', coverage: 'nyc', windowSeconds: 1800 });
+    expect(place.isError).toBeUndefined();
+    expect(place.structuredContent.departures.every((row: { stopName: string }) => row.stopName === '14 St')).toBe(true);
     expect(await callTool(f.env, 'get_departures', { stopRef: f.ref('stop', '127'), stop: 'Times Sq-42 St', coverage: 'nyc' })).toMatchObject({ isError: true, structuredContent: { code: 'INVALID_TRANSIT_REF' } });
     const plan = (await callTool(f.env, 'plan_trip', { coverage: 'nyc', origin: { query: 'Times Sq-42 St' }, destination: { query: '23 St' } })).structuredContent;
     expect(plan.itineraries.length).toBeGreaterThan(0);

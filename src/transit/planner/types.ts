@@ -49,6 +49,10 @@ export interface JourneyQuery extends Omit<ValidationSource, 'shards'> {
   /** Whole decodes kept across requests (the isolate's), consulted after `decoded`. */
   resident?: DecodedShardCache;
   origin: JourneyEndpoint; destination: JourneyEndpoint; departAt: string;
+  /** Other stations an endpoint stands for, when one name is a place several make up (Penn
+   * Station: two subway stations and the LIRR's). The network search starts or ends at any of
+   * them, and each journey names the one it uses. */
+  originStops?: readonly TransitRef[]; destinationStops?: readonly TransitRef[];
   /** Exact journeys must arrive inside this horizon (default two hours, max seven days). */
   windowSeconds?: number;
   /** Total walking budget, capped at 800 metres; straight-line estimates are explicitly unverified. */

@@ -1,8 +1,8 @@
-import { CLIENT_CAPABILITIES_META_KEY, ProtocolError, ProtocolErrorCode, acceptedContent, inputRequired, inputResponse, type McpServer, type RequestStateCodec } from '@modelcontextprotocol/server';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import { z } from 'zod';
 import { traced } from '../../../transit/trace';
-import type { MetroMcpContext, TransitRequestState } from '../../context';
+import type { MetroMcpContext } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
 import { getCoverage, networkPlanning, planningFeedIds, planningWithheld } from '../../../transit/core/coverage';
 import { parseTransitRef } from '../../../transit/core/refs';
@@ -12,9 +12,8 @@ import type { JourneyEndpoint } from '../../../transit/planner/types';
 import type { TransitRef } from '../../../transit/core/refs';
 import type { SourceStatus, VerificationReason } from '../../../transit/core/results';
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
-import { canonicalJson, sha256 } from '../../../transit/gtfs/static/shards';
 import { DecodedShardCache } from '../../../transit/planner/schedule-index';
-import { MAX_DISCOVERY_CANDIDATES, closestStops, residentShards, TransitToolError, asTransitRef, boundedText, routeHints, routeHintsSchema, routeName, effectiveCapabilities, journeyAgencies, validRef, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, stopMatches, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type Candidate } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, closestStops, residentShards, TransitToolError, asTransitRef, boundedText, routeHints, routeHintsSchema, routeName, effectiveCapabilities, journeyAgencies, validRef, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, stopPlaces, refPlace, placeLabel, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type TransitData } from './shared';
 
 const journeyEndpoint = z.union([z.string(), coordinatesSchema]);
 const transitLeg = z.strictObject({ kind: z.literal('transit'), from: z.string(), to: z.string(), tripRef: z.string(), tripInstanceRef: z.string(), serviceDate: z.string(), instanceStartSeconds: z.number(),
@@ -34,41 +33,35 @@ const stepSchema = z.discriminatedUnion('kind', [
 ]).describe('fromName/toName null means the caller\'s own map point.');
 export const itinerarySchema = z.strictObject({ coverageId: z.string(), artifactVersion: z.string(), origin: journeyEndpoint, destination: journeyEndpoint, departAt: instantSchema, windowSeconds: z.number().int(),
   maxWalkMetres: z.number(), maxTransfers: z.number().int(), departureTime: instantSchema, arrivalTime: instantSchema, walkingMetres: z.number(), transfers: z.number().int(),
-  status: z.enum(['realtime', 'scheduled_only']), legs: z.array(z.union([transitLeg, walkLeg])), steps: z.array(stepSchema).optional() });
+  status: z.enum(['realtime', 'scheduled_only']), legs: z.array(z.union([transitLeg, walkLeg])), steps: z.array(stepSchema).optional(),
+  reading: z.strictObject({ origin: z.string().nullable(), destination: z.string().nullable() }).optional()
+    .describe('When a name means several places: the place this trip is from and to (null: as given).') });
+type Planned = z.infer<typeof itinerarySchema>;
+/** What a journey endpoint stands for: where to plan from, the rest of its place, and how a rider names it. */
+type Reading = { endpoint: JourneyEndpoint; stops: TransitRef[]; label?: string };
+/** Readings of an ambiguous journey planned, at most: each is a full search. */
+const MAX_READINGS = 3;
 
 export const planInput = z.strictObject({ origin: endpointSchema, destination: endpointSchema, coverage: coverageSchema.optional(), departAt: instantSchema.optional(),
   windowSeconds: z.number().int().min(1).max(604800).default(7200), maxWalkMetres: z.number().min(0).max(800).default(800), maxTransfers: z.number().int().min(0).max(4).default(3),
   accessibility: z.enum(['no_preference', 'step_free']).default('no_preference').describe('step_free: only platforms reachable without stairs, avoiding current elevator outages.'),
   routes: z.array(boundedText).min(1).max(4).optional().describe('Route refs (from find_transit) the journey may ride, e.g. the lines you would take: BART from SFO, then a Muni line. The server finds the actual trips, boarding stops, transfers and walks on only these routes and validates them. Works where full search is unavailable (SF Bay) and for buses.') });
-export const planState = z.strictObject({ phase: z.literal('transit-selection'), tool: z.literal('plan_trip'), requestHash: z.string().regex(/^[a-f0-9]{64}$/),
-  artifactVersion: z.string().regex(/^[a-f0-9]{64}$/),
-  candidates: z.strictObject({ origin: z.array(z.string()).min(2).max(MAX_DISCOVERY_CANDIDATES).optional(), destination: z.array(z.string()).min(2).max(MAX_DISCOVERY_CANDIDATES).optional() }) });
-export const planRequestHash = async (args: unknown) => sha256(new TextEncoder().encode(canonicalJson(planInput.parse(args))));
-export function verifyPlanChoices(state: z.infer<typeof planState>, inputResponses: unknown): void {
-  const response = z.object({ endpoints: z.object({ action: z.enum(['accept', 'decline', 'cancel']), content: z.strictObject({ origin: z.string().optional(), destination: z.string().optional() }).optional() }) }).parse(inputResponses).endpoints;
-  if (response.action !== 'accept') return;
-  for (const endpoint of ['origin', 'destination'] as const) {
-    if (state.candidates[endpoint] && (!response.content?.[endpoint] || !state.candidates[endpoint]!.includes(response.content[endpoint]!))) throw new Error('Invalid transit entity selection');
-    if (!state.candidates[endpoint] && response.content?.[endpoint]) throw new Error('Unexpected transit entity selection');
-  }
-}
-
-export function registerPlanTool(server: McpServer, context: MetroMcpContext, codec: RequestStateCodec<TransitRequestState>): void {
+export function registerPlanTool(server: McpServer, context: MetroMcpContext): void {
   server.registerTool('plan_trip', {
-    title: 'Plan a transit journey', description: 'Plan an origin-to-destination journey. Returns up to three independently validated itineraries (the fastest, then other lines) and resolves named endpoints together; departure defaults to now. The search covers every line of the coverage, buses included. When no itinerary is possible (planning unavailable, a search too large, or nothing found) it returns routeHints: lines near each end and direct lines serving both. Call again with routes (the lines you would ride, from routeHints or your own knowledge) to plan along only those lines, which works wherever schedules exist. Present only returned itineraries as confirmed. The whole journey must finish within windowSeconds (default two hours): if none is found for a long trip, retry with a larger window. Each transit leg carries a tripInstanceRef; pass it to get_vehicle_status to see where that train is now. For a wheelchair user or anyone avoiding stairs, set accessibility: "step_free": journeys then board, alight and change only at platforms step-free from the street per the agency (partial stations by direction), avoiding stations cut off by a current elevator outage; in-station changes between such platforms are taken as step-free. It refuses with ACCESSIBILITY_UNAVAILABLE when no current elevator report exists and ENDPOINT_NOT_STEP_FREE when an endpoint has no step-free platform now (get_service_status lists the outages). Never present a journey pieced together from get_departures as confirmed; check it here with routes.',
+    title: 'Plan a transit journey', description: 'Plan an origin-to-destination journey. Returns up to three independently validated itineraries (the fastest, then other lines); departure defaults to now. Pass the rider\'s place names as given: a name for one place (Penn Station, SFO) plans from or to all its stations. A name meaning different places (Broadway) returns the best trip from each, each labelled in reading and explained in notice: use the one the conversation points to, or ask the rider. The search covers every line of the coverage, buses included. When no itinerary is possible (planning unavailable, a search too large, or nothing found) it returns routeHints: lines near each end and direct lines serving both. Call again with routes (the lines you would ride, from routeHints or your own knowledge) to plan along only those lines, which works wherever schedules exist. Present only returned itineraries as confirmed. The whole journey must finish within windowSeconds (default two hours): if none is found for a long trip, retry with a larger window. Each transit leg carries a tripInstanceRef; pass it to get_vehicle_status to see where that train is now. For a wheelchair user or anyone avoiding stairs, set accessibility: "step_free": journeys then board, alight and change only at platforms step-free from the street per the agency (partial stations by direction), avoiding stations cut off by a current elevator outage; in-station changes between such platforms are taken as step-free. It refuses with ACCESSIBILITY_UNAVAILABLE when no current elevator report exists and ENDPOINT_NOT_STEP_FREE when an endpoint has no step-free platform now (get_service_status lists the outages). Never present a journey pieced together from get_departures as confirmed; check it here with routes.',
     annotations: readOnlyLive('Plan a transit journey'),
     inputSchema: planInput,
-    outputSchema: z.strictObject({ ...resultShape, itineraries: z.array(itinerarySchema).max(3), routeHints: routeHintsSchema.optional() }),
+    outputSchema: z.strictObject({ ...resultShape, itineraries: z.array(itinerarySchema).max(3), routeHints: routeHintsSchema.optional(),
+      notice: z.string().optional().describe('Set when a name means several places: which, and how the trips are labelled.') }),
   }, async (args, handler) => guarded(handler, () => traced('plan_trip', async () => {
-    const state = checkState(handler, 'plan_trip');
-    const requestHash = await planRequestHash(args);
-    if (state && (state.phase !== 'transit-selection' || state.tool !== 'plan_trip' || state.requestHash !== requestHash)) throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Transit selection state does not match this request');
+    checkState(handler);
     const originCoverage = inferCoverage(args.origin), destinationCoverage = inferCoverage(args.destination);
     const coverageId = originCoverage ?? destinationCoverage ?? getCoverage(args.coverage ?? '')?.id ?? args.coverage;
     const noData = () => complete({ ...unavailable(coverageId), itineraries: [] });
     if (!coverageId || originCoverage && destinationCoverage && originCoverage !== destinationCoverage) return noData();
-    const data = await loadData(context, coverageId, handler.mcpReq.signal, state?.phase === 'transit-selection' ? state.artifactVersion : undefined);
+    const data = await loadData(context, coverageId, handler.mcpReq.signal);
     if (!data) return noData();
+    const planningData: TransitData = data, planningCoverage: string = coverageId;
     // Proposed routes keep the search to a few lines, so it runs even where an open
     // search is withheld (SF Bay) and on feeds too large to search whole (buses).
     const viaRoutes = args.routes?.map(ref => {
@@ -77,45 +70,41 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       knownEntity(data, ref);
       return asTransitRef(ref);
     });
-    const resolved: Partial<Record<'origin' | 'destination', JourneyEndpoint>> = {};
-    const ambiguous: Partial<Record<'origin' | 'destination', Candidate[]>> = {};
-    const accepted = state?.phase === 'transit-selection' ? acceptedContent(handler.mcpReq.inputResponses, 'endpoints', z.strictObject({ origin: z.string().optional(), destination: z.string().optional() })) : undefined;
-    for (const endpoint of ['origin', 'destination'] as const) {
-      if (state?.phase === 'transit-selection' && state.candidates[endpoint]) {
-        if (!accepted?.[endpoint]) throw new TransitToolError('SELECTION_DECLINED');
-        knownEntity(data, accepted[endpoint]!); resolved[endpoint] = asTransitRef(accepted[endpoint]!); continue;
-      }
+    // What an endpoint stands for: a point, a stop with its complex, or each place a name means.
+    const readings = (endpoint: 'origin' | 'destination'): Reading[] | null => {
       const value = args[endpoint];
-      if ('ref' in value) { knownEntity(data, value.ref); resolved[endpoint] = asTransitRef(value.ref); }
-      else if ('latitude' in value) resolved[endpoint] = value;
-      else {
-        const matches = stopMatches(data, value.query);
-        if (matches.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...unavailable(coverageId, data, ['SCOPE_LIMIT_EXCEEDED']), itineraries: [] });
-        if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND', closestStops(data, value.query));
-        if (matches.length === 1) resolved[endpoint] = asTransitRef(matches[0]!.ref);
-        else ambiguous[endpoint] = matches.map(candidate => ({ ...candidate, endpoint }));
-      }
-    }
-    if (state?.phase === 'transit-selection') {
-      const response = inputResponse(handler.mcpReq.inputResponses, 'endpoints');
-      if (response.kind === 'elicit' && response.action !== 'accept') throw new TransitToolError('SELECTION_DECLINED');
-    } else if (Object.keys(ambiguous).length) {
-      // SDK 2.3 exposes this runtime envelope but currently types it as {}.
-      const declared = (handler.mcpReq.envelope as Record<string, { elicitation?: { form?: unknown; url?: unknown } }> | undefined)?.[CLIENT_CAPABILITIES_META_KEY];
-      if (context.era !== 'modern' || !declared?.elicitation || (declared.elicitation.form === undefined && Object.keys(declared.elicitation).length > 0)) throw new TransitToolError('ENTITY_AMBIGUOUS', Object.values(ambiguous).flat());
-      const choices: Partial<Record<'origin' | 'destination', string[]>> = {};
-      const shape: Record<string, z.ZodEnum<Record<string, string>>> = {};
-      for (const endpoint of ['origin', 'destination'] as const) {
-        const matches = ambiguous[endpoint]; if (!matches) continue;
-        choices[endpoint] = matches.map(candidate => candidate.ref);
-        shape[endpoint] = z.enum(choices[endpoint] as [string, ...string[]]).describe(matches.map(candidate => `${candidate.ref} (${candidate.coverage}/${candidate.feed}): ${candidate.name}${candidate.stopType ? ` [${candidate.stopType}${candidate.routeNames?.length ? `: ${candidate.routeNames.join(', ')}` : ''}]` : ''}`).join('; '));
-      }
-      return inputRequired({ inputRequests: { endpoints: inputRequired.elicit({ message: 'Choose the transit endpoints for this journey.', requestedSchema: z.object(shape) }) },
-        requestState: await codec.mint({ phase: 'transit-selection', tool: 'plan_trip', requestHash, artifactVersion: data.version.artifactVersion, candidates: choices }, handler) });
-    }
+      if ('latitude' in value) return [{ endpoint: value, stops: [] }];
+      if ('ref' in value) { knownEntity(data, value.ref); return [{ endpoint: asTransitRef(value.ref), stops: refPlace(data, value.ref).slice(1) }]; }
+      const places = stopPlaces(data, value.query);
+      if (!places.length) throw new TransitToolError('ENTITY_NOT_FOUND', closestStops(data, value.query));
+      if (places.length > MAX_DISCOVERY_CANDIDATES) return null;
+      return places.map(place => ({ endpoint: asTransitRef(place.candidate.ref), stops: place.members.filter(ref => ref !== place.candidate.ref), label: placeLabel(place.candidate) }));
+    };
+    const origins = readings('origin'), destinations = readings('destination');
+    if (!origins || !destinations) return complete({ ...unavailable(coverageId, data, ['SCOPE_LIMIT_EXCEEDED']), itineraries: [] });
+    // A name meaning different places is planned from each (the likeliest few), every trip
+    // labelled, so the model picks by the conversation or asks the rider. One at a time:
+    // each search holds its own working set.
+    const pairs = origins.flatMap((origin, i) => destinations.map((destination, j) => ({ origin, destination, rank: i + j }))).sort((a, b) => a.rank - b.rank).slice(0, MAX_READINGS);
+    if (pairs.length === 1) return complete(await planPair(pairs[0]!.origin, pairs[0]!.destination));
+    const planned: Awaited<ReturnType<typeof planPair>>[] = [];
+    for (const { origin, destination } of pairs) planned.push(await planPair(origin, destination));
+    const found = planned.filter(result => result.itineraries.length);
+    const named = (list: Reading[], endpoint: 'origin' | 'destination') => list.length > 1 ? `"${sanitizeTransitText((args[endpoint] as { query: string }).query, 80)}" is ${list.length} different places (${list.slice(0, 5).map(reading => reading.label).join('; ')}${list.length > 5 ? '; …' : ''})` : null;
+    const notice = `${[named(origins, 'origin'), named(destinations, 'destination')].filter(Boolean).join(' and ')}. ${found.length ? 'The best trip for each reading follows, labelled in reading; use the one the conversation points to, or ask the rider which they mean.' : 'No reading has a trip: ask the rider which they mean.'}`;
+    const sources = [...new Map(planned.flatMap(result => result.sources).map(source => [JSON.stringify(source), source])).values()];
+    return complete({ ...(found[0] ?? planned[0]!), sources, status: found.some(result => result.status === 'realtime') ? 'realtime' as const : found.length ? 'scheduled_only' as const : 'unavailable' as const,
+      reasons: [...new Set(planned.flatMap(result => result.reasons))], itineraries: found.map(result => result.itineraries[0]!), notice });
+
+    async function planPair(origin: Reading, destination: Reading) {
+    const data = planningData, coverageId = planningCoverage;
+    const resolved = { origin: origin.endpoint, destination: destination.endpoint };
+    const label = (reading: Reading) => reading.label ?? (typeof reading.endpoint === 'string' ? null : 'your point');
+    // Labelled only when a name has several readings: the trip says which it is.
+    const reading = pairs.length > 1 ? { origin: label(origin), destination: label(destination) } : undefined;
     // Without an itinerary, say which lines could carry the journey so the model can propose them.
     const walkMetres = Math.min(800, args.maxWalkMetres ?? 800);
-    const hinted = (reasons: VerificationReason[]) => complete({ ...unavailable(coverageId, data, reasons), itineraries: [], routeHints: routeHints(data, resolved.origin!, resolved.destination!, walkMetres) });
+    const hinted = (reasons: VerificationReason[]) => ({ ...unavailable(coverageId, data, reasons), itineraries: [] as Planned[], routeHints: routeHints(data, resolved.origin!, resolved.destination!, walkMetres) });
     if (!viaRoutes && !effectiveCapabilities(context, data.coverage, false).planning) return hinted(['PLANNING_UNAVAILABLE']);
     // The network planner searches every feed, buses included; the whole-feed router, only
     // what fits an isolate, and not at all where it is withheld (SF Bay).
@@ -140,7 +129,7 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     if (args.accessibility === 'step_free') {
       const access = await stepFreeAccess(context, data, Date.parse(now) / 1000, handler.mcpReq.signal);
       accessSources = access.sources;
-      const refuse = (reasons: VerificationReason[]) => complete({ ...unavailable(coverageId, data, reasons), sources: [...metadata(coverageId, data).sources, ...accessSources], itineraries: [] });
+      const refuse = (reasons: VerificationReason[]) => ({ ...unavailable(coverageId, data, reasons), sources: [...metadata(coverageId, data).sources, ...accessSources], itineraries: [] as Planned[] });
       if (!access.usable) return refuse(access.reasons);
       const stops = data.indexes.flatMap(index => index.stops);
       for (const endpoint of [resolved.origin!, resolved.destination!]) {
@@ -148,7 +137,7 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       }
       stepFree = { usableStopRefs: access.usable as ReadonlySet<TransitRef> };
     }
-    const refuseDuplicated = (read: PlanningRead) => complete({ ...unavailable(coverageId, data, ['REALTIME_UNAVAILABLE']), sources: [...metadata(coverageId, data).sources, ...realtimeSource(data, read, 'trip_updates', Date.parse(now) / 1000)], itineraries: [] });
+    const refuseDuplicated = (read: PlanningRead) => ({ ...unavailable(coverageId, data, ['REALTIME_UNAVAILABLE']), sources: [...metadata(coverageId, data).sources, ...realtimeSource(data, read, 'trip_updates', Date.parse(now) / 1000)], itineraries: [] as Planned[] });
     // A stop the search cannot board or alight at (a Metrobus stop in an open search, or a stop
     // none of the named lines serve) is planned from its location: the journey walks from or to it.
     const allStops = data.indexes.flatMap(index => index.stops);
@@ -178,6 +167,7 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
     if (network) {
       try {
         result = await planNetworkJourney({ manifest: data.manifest, indexes: data.indexes, readShard: data.readObject, decoded, resident: residentShards, origin: requested.origin!, destination: requested.destination!,
+          originStops: origin.stops, destinationStops: destination.stops,
           departAt: args.departAt ?? now, now, windowSeconds: args.windowSeconds, maxWalkMetres: args.maxWalkMetres, maxTransfers: args.maxTransfers,
           realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds, ...(stepFree ? { stepFree } : {}),
           networkFeedIds: data.manifest.sources.map(source => source.feedId).filter(feedId => data.version.sourceVersions[feedId] !== undefined),
@@ -256,11 +246,12 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext, co
       if (final?.kind === 'walk' && final.toName === null) final.toName = asked.destination;
       return kept;
     };
-    return complete({ ...meta, status: result.status, reasons: [...new Set([...result.reasons, ...realtimeReads.flatMap(read => read.reasons)])], itineraries: result.candidates.map(candidate => ({ ...candidate, legs: candidate.legs.map((leg, index) => {
+    return { ...meta, status: result.status, reasons: [...new Set([...result.reasons, ...realtimeReads.flatMap(read => read.reasons)])], itineraries: result.candidates.map(candidate => ({ ...candidate, legs: candidate.legs.map((leg, index) => {
       if (leg.kind === 'walk') return { ...leg, validatorOutcome: 'valid' as const };
       const route = routes.find(route => route.ref === leg.routeRef)!;
       return { ...leg, mode: route.mode, agencyRef: route.agencyRef, intermediateStopCount: (sequences.get(leg.tripRef) ?? []).filter(sequence => sequence > leg.boardSequence && sequence < leg.alightSequence).length,
         transferRequired: candidate.legs.slice(0, index).some(prior => prior.kind === 'transit') && !leg.continuation, sources: meta.sources.filter(source => source.scheduleVersion === leg.scheduleVersion), validatorOutcome: 'valid' as const };
-    }) })).map(itinerary => ({ ...itinerary, steps: riderSteps(itinerary.legs) })), ...(result.candidates.length ? {} : { routeHints: routeHints(data, resolved.origin!, resolved.destination!, walkMetres) }) });
+    }) })).map(itinerary => ({ ...itinerary, steps: riderSteps(itinerary.legs), ...(reading ? { reading } : {}) })), ...(result.candidates.length ? {} : { routeHints: routeHints(data, resolved.origin!, resolved.destination!, walkMetres) }) };
+    }
   }), () => complete({ ...unavailable(args.coverage), itineraries: [] })));
 }

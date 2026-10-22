@@ -83,7 +83,7 @@ async function planNetworkJourneyUntraced(query: NetworkPlanQuery, signal?: Abor
     return day ? parseInstant(day.startTime) / 1000 : undefined;
   }) }));
   const stops = networkStops(query.indexes);
-  const search = { stops, bands: network, origin: query.origin, destination: query.destination, begin, end: begin + windowSeconds, maxWalkMetres, maxTransfers,
+  const search = { stops, bands: network, origin: query.origin, destination: query.destination, originStops: query.originStops, destinationStops: query.destinationStops, begin, end: begin + windowSeconds, maxWalkMetres, maxTransfers,
     ...(query.stepFree ? { usableStops: query.stepFree.usableStopRefs } : {}) };
   // Proposals: the Pareto set (arrival, rides), then the best journey avoiding the line of
   // the longest ride so far, for a real alternative rather than the next train.
@@ -126,17 +126,21 @@ async function planNetworkJourneyUntraced(query: NetworkPlanQuery, signal?: Abor
     const routeRefs = new Set(proposal.rides.map(ride => ride.routeRef));
     const feedIds = [...new Set([...routeRefs].map(ref => parseTransitRef(ref)!.feed))];
     const servedBy = (ref: TransitRef) => [...routeRefs].some(route => query.indexes.some(index => index.stopRoutes[ref]?.includes(route)));
-    // An endpoint none of these lines serve is planned from its location, as guided mode does.
-    const endpoint = (value: JourneyEndpoint): JourneyEndpoint => {
+    // An endpoint is planned from the station of its place this proposal rides from (or to);
+    // one none of these lines serve is planned from its location, as guided mode does.
+    const serves = (ref: TransitRef) => feedIds.includes(parseTransitRef(ref)!.feed) && (servedBy(ref) || [...stopRows.values()].some(child => child.parentStationRef === ref && servedBy(child.ref)));
+    const endpoint = (value: JourneyEndpoint, place: readonly TransitRef[] = [], at?: TransitRef): JourneyEndpoint => {
       if (typeof value !== 'string') return value;
+      const stations = [value, ...place];
+      const used = stations.find(ref => at === ref || stopRows.get(at!)?.parentStationRef === ref) ?? stations.find(serves);
+      if (used) return used;
       const stop = stopRows.get(value);
-      if (feedIds.includes(parseTransitRef(value)!.feed) && (servedBy(value) || [...stopRows.values()].some(child => child.parentStationRef === value && servedBy(child.ref)))) return value;
       return stop?.latitude != null && stop.longitude != null ? { latitude: stop.latitude, longitude: stop.longitude } : value;
     };
     const realtime = query.realtimeFor ? await query.realtimeFor(routeRefs, feedIds) : query.realtime;
     if (realtime === null) { reasons.add('REALTIME_UNAVAILABLE'); continue; }
     try {
-      const result = await planJourney({ ...query, readShard, realtime, origin: endpoint(query.origin), destination: endpoint(query.destination), feedIds, routeRefs,
+      const result = await planJourney({ ...query, readShard, realtime, origin: endpoint(query.origin, query.originStops, proposal.rides[0]?.from), destination: endpoint(query.destination, query.destinationStops, proposal.rides.at(-1)?.to), feedIds, routeRefs,
         agencyRefs: [...new Set([...routeRefs].map(ref => routes.get(ref)!.agencyRef))], windowSeconds: Math.max(60, Math.ceil(end - begin)), readConcurrency: 8 }, signal);
       count('exactPlans');
       result.reasons.forEach(reason => reasons.add(reason));
