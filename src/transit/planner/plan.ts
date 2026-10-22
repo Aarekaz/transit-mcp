@@ -59,14 +59,23 @@ async function planJourneyUntraced(query: JourneyQuery, signal?: AbortSignal): P
   const candidates: JourneyResult['candidates'] = [];
   const source = { manifest: query.manifest, shards: window.shards.map(item => item.shard), now: query.now,
     realtime: query.realtime, realtimeMaxAgeSeconds: query.realtimeMaxAgeSeconds, ...(query.stepFree ? { stepFree: query.stepFree } : {}) };
+  const rejected: unknown[] = [];
   for (const candidate of routed.candidates) {
     assertNotAborted(signal);
-    if (!(await validateItinerary(candidate, source, signal)).valid) { reasons.add('VALIDATOR_REJECTED'); continue; }
+    const check = await validateItinerary(candidate, source, signal);
+    if (!check.valid) {
+      reasons.add('VALIDATOR_REJECTED');
+      // Why: the validator's own reasons, so a planner/validator disagreement shows in logs.
+      if (rejected.length < 3) rejected.push({ reasons: check.reasons, legFailures: check.legFailures, transferFailures: check.transferFailures,
+        legs: candidate.legs.map(leg => leg.kind === 'transit' ? `${leg.routeRef.split(':').at(-1)}@${leg.boardSequence}-${leg.alightSequence}` : `walk${Math.round(leg.distanceMetres ?? 0)}`) });
+      continue;
+    }
     // Only independently proven journeys may dominate another candidate.
     if (!candidates.some(other => Date.parse(other.arrivalTime) <= Date.parse(candidate.arrivalTime) && other.transfers <= candidate.transfers && other.walkingMetres <= candidate.walkingMetres &&
       (other.transfers < candidate.transfers || other.walkingMetres < candidate.walkingMetres))) candidates.push(candidate);
     if (candidates.length === 3) break;
   }
+  if (rejected.length) console.warn(JSON.stringify({ event: 'plan_validator_rejected', coverage: query.manifest.coverageId, kept: candidates.length, rejected }));
   return { status: candidates.length ? candidates.some(candidate => candidate.status === 'realtime') ? 'realtime' : 'scheduled_only' : 'unavailable',
     reasons: [...reasons], candidates, diagnostics: { rounds: routed.rounds, estimatedWorkingSetBytes: routed.estimatedWorkingSetBytes } };
 }
