@@ -353,8 +353,12 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
         if (time > end || dominated({ stop: ref, time, walking: label.walking + metres, boardings: label.boardings, legs: [] })) continue;
         edges.push(makeWalk(label.stop, ref, label.time, metres));
       }
+      // A walk never returns to a stop it has passed since the last ride: a loop between
+      // platforms (N to S and back) costs nothing and only lengthens the journey.
+      const passed = new Set<JourneyEndpoint>([label.stop]);
+      for (let at = label.legs.length - 1; at >= 0; at--) { const prior = label.legs[at]!; passed.add(prior.to); if (prior.kind !== 'walk') break; passed.add(prior.from); }
       for (const leg of edges) {
-        if (label.walking + leg.distanceMetres > maxWalk || Date.parse(leg.arrivalTime) > end) continue;
+        if (label.walking + leg.distanceMetres > maxWalk || Date.parse(leg.arrivalTime) > end || passed.has(leg.to)) continue;
         const next: Label = { ...label, stop: leg.to as TransitRef, time: Date.parse(leg.arrivalTime), walking: label.walking + leg.distanceMetres, legs: [...label.legs, leg] };
         offer(next, false);
       }
@@ -471,10 +475,16 @@ export async function routeDepartAt(query: JourneyQuery, loaded: LoadedScheduleS
     }));
     frontier.forEach(finish);
   }
-  const unique = new Map<number, Label>();
-  for (const label of finished) unique.set(label.signature!, label);
+  // The same rides reached by different walks are one journey: keep the earliest, least
+  // walking, then fewest legs (no zero-length hop to a co-located platform on the way out).
+  const better = (a: Label, b: Label) => a.time - b.time || a.walking - b.walking || a.legs.length - b.legs.length;
+  const unique = new Map<string, Label>();
+  for (const label of finished) {
+    const rides = signature(label.legs.filter(leg => leg.kind === 'transit')), held = unique.get(rides);
+    if (!held || better(label, held) < 0) unique.set(rides, label);
+  }
   const text = new Map([...unique.values()].map(label => [label, signature(label.legs)]));
-  const ordered = [...unique.values()].sort((a, b) => a.time - b.time || a.boardings - b.boardings || a.walking - b.walking || compare(text.get(a)!, text.get(b)!));
+  const ordered = [...unique.values()].sort((a, b) => a.time - b.time || a.boardings - b.boardings || a.walking - b.walking || a.legs.length - b.legs.length || compare(text.get(a)!, text.get(b)!));
   const candidates = ordered.map(label => ({
     coverageId: query.manifest.coverageId, artifactVersion, origin: query.origin, destination: query.destination, departAt: query.departAt,
     windowSeconds: query.windowSeconds ?? 7200, maxWalkMetres: maxWalk, maxTransfers, departureTime: label.legs[0]!.departureTime,

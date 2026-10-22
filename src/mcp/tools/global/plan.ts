@@ -13,7 +13,7 @@ import type { TransitRef } from '../../../transit/core/refs';
 import type { SourceStatus, VerificationReason } from '../../../transit/core/results';
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { DecodedShardCache } from '../../../transit/planner/schedule-index';
-import { MAX_DISCOVERY_CANDIDATES, closestStops, residentShards, TransitToolError, asTransitRef, boundedText, routeHints, routeHintsSchema, routeName, effectiveCapabilities, journeyAgencies, validRef, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, stopPlaces, refPlace, placeLabel, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, closestStops, residentShards, TransitToolError, asTransitRef, boundedText, routeHints, routeHintsSchema, routeName, effectiveCapabilities, journeyAgencies, validRef, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, stopPlaces, refPlace, placeLabel, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, localTime, coverageTimezone, describeCandidate, type TransitData } from './shared';
 
 const journeyEndpoint = z.union([z.string(), coordinatesSchema]);
 const transitLeg = z.strictObject({ kind: z.literal('transit'), from: z.string(), to: z.string(), tripRef: z.string(), tripInstanceRef: z.string(), serviceDate: z.string(), instanceStartSeconds: z.number(),
@@ -223,16 +223,25 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext): v
     };
     type OutLeg = { kind: string; from: unknown; to: unknown; departureTime: string; arrivalTime: string; distanceMetres?: number; verification?: string; routeRef?: string; headsign?: string;
       mode?: string; status?: 'realtime' | 'scheduled_only'; intermediateStopCount?: number; tripInstanceRef?: string };
+    // Two stations can share a name (34 St-Penn Station for the A and for the 1): a walk
+    // between them names each by its lines.
+    const withLines = (name: string, ref: unknown) => {
+      const stop = typeof ref === 'string' ? stopRows.get(ref) : undefined, station = stop?.parentStationRef ?? stop?.ref;
+      const lines = station ? describeCandidate(data, knownEntity(data, station)).routeNames ?? [] : [];
+      return lines.length ? `${name} (${lines.slice(0, 6).join(', ')})` : name;
+    };
     const riderSteps = (legs: OutLeg[]) => {
-      const steps: z.infer<typeof stepSchema>[] = [];
+      const steps: z.infer<typeof stepSchema>[] = [], ends = new Map<z.infer<typeof stepSchema>, { from: unknown; to: unknown }>();
       for (const leg of legs) {
         const last = steps.at(-1);
         if (leg.kind === 'walk' && last?.kind === 'walk') {
+          ends.get(last)!.to = leg.to;
           last.toName = placeName(leg.to); last.arrivalTime = leg.arrivalTime; last.distanceMetres += leg.distanceMetres ?? 0;
           last.throughStation ||= leg.verification === 'pathway';
         } else if (leg.kind === 'walk') {
           steps.push({ kind: 'walk', fromName: placeName(leg.from), toName: placeName(leg.to), departureTime: leg.departureTime, arrivalTime: leg.arrivalTime,
             distanceMetres: leg.distanceMetres ?? 0, minutes: 0, throughStation: leg.verification === 'pathway' });
+          ends.set(steps.at(-1)!, { from: leg.from, to: leg.to });
         } else {
           const route = routes.find(item => item.ref === leg.routeRef);
           steps.push({ kind: 'ride', routeName: route ? routeName(route) : '', headsign: sanitizeTransitText(leg.headsign ?? '', 200), mode: leg.mode ?? '', fromName: placeName(leg.from) ?? '', toName: placeName(leg.to) ?? '',
@@ -244,10 +253,18 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext): v
       const kept = steps.filter(step => step.kind === 'ride' || step.distanceMetres > 0), first = kept[0], final = kept.at(-1);
       if (first?.kind === 'walk' && first.fromName === null) first.fromName = asked.origin;
       if (final?.kind === 'walk' && final.toName === null) final.toName = asked.destination;
+      for (const step of kept) if (step.kind === 'walk' && step.fromName !== null && step.fromName === step.toName) {
+        const end = ends.get(step)!;
+        step.fromName = withLines(step.fromName, typeof end.from === 'string' ? end.from : requested.origin);
+        step.toName = withLines(step.toName!, typeof end.to === 'string' ? end.to : requested.destination);
+      }
       return kept;
     };
-    return { ...meta, status: result.status, reasons: [...new Set([...result.reasons, ...realtimeReads.flatMap(read => read.reasons)])], itineraries: result.candidates.map(candidate => ({ ...candidate, legs: candidate.legs.map((leg, index) => {
-      if (leg.kind === 'walk') return { ...leg, validatorOutcome: 'valid' as const };
+    // Every rider-facing time in the agency's clock: walks are computed in UTC, rides in local time.
+    const timezone = coverageTimezone(data), local = (instant: string) => localTime(instant, timezone);
+    return { ...meta, status: result.status, reasons: [...new Set([...result.reasons, ...realtimeReads.flatMap(read => read.reasons)])], itineraries: result.candidates.map(candidate => ({ ...candidate,
+      departureTime: local(candidate.departureTime), arrivalTime: local(candidate.arrivalTime), legs: candidate.legs.map((leg, index) => {
+      if (leg.kind === 'walk') return { ...leg, departureTime: local(leg.departureTime), arrivalTime: local(leg.arrivalTime), validatorOutcome: 'valid' as const };
       const route = routes.find(route => route.ref === leg.routeRef)!;
       return { ...leg, mode: route.mode, agencyRef: route.agencyRef, intermediateStopCount: (sequences.get(leg.tripRef) ?? []).filter(sequence => sequence > leg.boardSequence && sequence < leg.alightSequence).length,
         transferRequired: candidate.legs.slice(0, index).some(prior => prior.kind === 'transit') && !leg.continuation, sources: meta.sources.filter(source => source.scheduleVersion === leg.scheduleVersion), validatorOutcome: 'valid' as const };

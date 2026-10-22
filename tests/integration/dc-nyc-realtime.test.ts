@@ -242,7 +242,9 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     const walked = (await callTool(f.env, 'plan_trip', { origin: { ref: f.ref('stop', '725S') }, destination: { ref: f.ref('stop', '132') }, routes: [f.ref('route', '1')] })).structuredContent;
     expect(walked.itineraries.length).toBeGreaterThan(0);
     expect(walked.itineraries[0].steps.map((step: { kind: string }) => step.kind)).toEqual(['walk', 'ride']);
-    expect(walked.itineraries[0].steps[0]).toMatchObject({ fromName: 'Times Sq-42 St', toName: 'Times Sq-42 St' });
+    // Both ends are named Times Sq-42 St: the platform walked to is told apart by its lines
+    // (the fixture's 7 platform has no service, so it has none).
+    expect(walked.itineraries[0].steps[0]).toMatchObject({ fromName: 'Times Sq-42 St', toName: 'Times Sq-42 St (1, 2)' });
     // A route from another coverage is not a proposal for this one.
     expect((await ask({ routes: ['tr:dc:wmata:route:UkVE'] })).structuredContent).toMatchObject({ code: 'INVALID_TRANSIT_REF' });
   });
