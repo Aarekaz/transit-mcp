@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agency errors in the original tools say what the caller can do; `get_bus_predictions` validates the 7-digit stop ID.
 
 ### Fixed
+- `find_transit` and `get_service_status` advertise one flat input object instead of a union. Clients flatten a top-level union, often to its last branch, so models were told `query`, `ref` and `stop` were never allowed. Combinations that don't fit (`ref` with `query`, `stop` without `coverage`…) now return `INVALID_ARGUMENTS`, saying what to send.
 - Elevator and escalator outages were counted once per timetable in a coverage (twice in DC, about nine times in NYC).
 - Live data fetched while a question waited was judged against the question's own clock and rejected; timestamps up to 120 s ahead now count as new.
 - Network journey planner: `plan_trip` searches every line of DC, NYC and SF Bay, buses included, over compact timetables a cron builds in R2 (`compact/<coverage>/`), then plans and validates the proposed lines with the exact planner. Switch: `TRANSIT_NETWORK_PLANNING`; without its compact bands a coverage plans as before.

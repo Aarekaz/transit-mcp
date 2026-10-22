@@ -61,15 +61,15 @@ async function equipmentReport(context: MetroMcpContext, data: TransitData, stat
 }
 
 export function registerServiceStatusTool(server: McpServer, context: MetroMcpContext): void {
-  const absent = { coverage: z.never().optional(), ref: z.never().optional(), itinerary: z.never().optional(), stop: z.never().optional() };
   const selectorSchema = z.strictObject({ agencyId: z.string().optional(), routeId: z.string().optional(), routeType: z.number().int().optional(), stopId: z.string().optional(), directionId: z.number().int().optional(),
     trip: z.strictObject({ tripId: z.string().optional(), startDate: z.string().optional(), startTime: z.string().optional(), routeId: z.string().optional(), directionId: z.number().int().optional() }).optional() });
   server.registerTool('get_service_status', {
     title: 'Transit service status', description: 'Check disruptions, delays, closures, elevator and escalator outages, or revalidate a chosen itinerary without replacing it. Scope by coverage, a station name with its coverage (stop), or an agency, route, stop or dated trip reference; a station covers its complex. Aggregate scopes include canonical service in the next 24 hours. equipment lists elevator/escalator outages: accessiblePath marks the step-free route, blocksStepFree marks stations step-free plan_trip avoids, and alternativeRoute is the agency\'s way around. Use get_vehicle_status for an observed vehicle location.',
     annotations: readOnlyLive('Transit service status'),
-    inputSchema: z.union([z.strictObject({ ...absent, coverage: coverageSchema }), z.strictObject({ ...absent, ref: boundedText }),
-      z.strictObject({ ...absent, stop: boundedText.describe('Station name, e.g. "Fulton St"; a station covers its complex.'), coverage: coverageSchema }), z.strictObject({ ...absent, itinerary: z.record(z.string(), z.unknown())
-      .describe('An itinerary exactly as plan_trip returned it; validated strictly against that contract.') })]),
+    // One flat object, as for find_transit: the allowed combinations are checked in the handler.
+    inputSchema: z.strictObject({ coverage: coverageSchema.optional(), ref: boundedText.optional().describe('Agency, route, stop or dated trip reference.'),
+      stop: boundedText.optional().describe('Station name, e.g. "Fulton St", with coverage; a station covers its complex.'),
+      itinerary: z.record(z.string(), z.unknown()).optional().describe('An itinerary exactly as plan_trip returned it; validated strictly against that contract.') }),
     outputSchema: z.strictObject({ ...resultShape, alerts: z.array(z.strictObject({ id: z.string(), agencyText: z.strictObject({ title: z.string(), description: z.string(), label: z.literal('agency_supplied') }),
       routeIds: z.array(z.string()), stopIds: z.array(z.string()).describe(`At most ${ALERT_DETAIL_LIMIT}; stopCount is the full number.`),
       selectors: z.array(selectorSchema).describe(`At most ${ALERT_DETAIL_LIMIT}; selectorCount is the full number.`), selectorCount: z.number().int().nonnegative(), stopCount: z.number().int().nonnegative(), stale: z.boolean(),
@@ -80,6 +80,10 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       equipment: equipmentSchema.optional().describe('Elevator and escalator outages in scope, where the coverage publishes them.') }),
   }, async (args, handler) => guarded(handler, () => traced('get_service_status', async () => {
     checkState(handler, 'get_service_status');
+    // Exactly one scope; coverage stands alone or names a station's region.
+    const scoped = [args.ref, args.stop, args.itinerary].filter(value => value !== undefined).length;
+    if (scoped > 1 || (args.coverage !== undefined) !== (scoped === 0 || args.stop !== undefined))
+      throw new TransitToolError('INVALID_ARGUMENTS', [], 'Give one scope: coverage, ref, stop with its coverage, or itinerary.');
     // A station by name, resolved as get_departures does, then checked as that station.
     if ('stop' in args && args.stop) {
       const coverageId = getCoverage(args.coverage ?? '')?.id;

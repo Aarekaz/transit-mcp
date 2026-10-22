@@ -5,7 +5,7 @@ import type { MetroMcpContext } from '../../context';
 import { complete, readOnlyLive } from '../../shared';
 import { getCoverage, getCoverages } from '../../../transit/core/coverage';
 import { getCoverageMode } from '../../../regions/manifest';
-import { MAX_DISCOVERY_CANDIDATES, closestStops, compareRanks, rankedCandidates, ambiguityCandidate, describeCandidate, boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, effectiveCapabilities, entities, guarded, trainCandidates, inferCoverage, loadData, metadata, resultShape, unavailable, validRef } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, closestStops, compareRanks, rankedCandidates, ambiguityCandidate, describeCandidate, boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, effectiveCapabilities, entities, guarded, trainCandidates, inferCoverage, loadData, metadata, resultShape, unavailable, validRef, TransitToolError } from './shared';
 
 export const entitySchema = candidateSchema.extend({ scheduleVersion: z.string(), resourceUri: z.string(), coordinates: coordinatesSchema.nullable(), routeRefs: z.array(z.string()),
   agencyRef: z.string().nullable(), mode: z.string().nullable(), patterns: z.array(z.strictObject({ id: z.string(), directionId: z.number().int().nullable(), stopRefs: z.array(z.string()) })),
@@ -23,18 +23,20 @@ export async function findEntityResult(context: MetroMcpContext, ref: string, si
 }
 export function registerFindTool(server: McpServer, context: MetroMcpContext): void {
   const common = { coverage: coverageSchema.optional(), context: z.strictObject({ coverage: coverageSchema.optional(), feed: boundedText.optional(), serviceDate: z.string().regex(/^\d{8}$/).optional() }).optional(), limit: z.number().int().min(1).max(50).default(20) };
-  const absent = { ref: z.never().optional(), query: z.never().optional(), latitude: z.never().optional(), longitude: z.never().optional() };
   server.registerTool('find_transit', {
     title: 'Find transit entities', description: 'Call with no arguments (or only `coverage`) to list the regions served and what each supports. Without a coverage, a name is searched in every region. If nothing matches, suggestions lists the closest names (not matches). Resolve a coverage, agency, route, station, stop, or a currently observed train number (where vehicle data exists); inspect an exact reference or nearby coordinates. Context ranks candidates without selecting identity. Candidates come best first (exact names and well-known place names such as SFO, then stations, then rail before bus), and each stop says what it is: stopType (station, platform or street stop), modes and the lines serving it, so you can pick the one the rider means. No general address geocoding. Use plan_trip for journeys.',
     annotations: readOnlyLive('Find transit entities'),
-    inputSchema: z.union([z.strictObject({ ...common, ...absent, ref: boundedText }), z.strictObject({ ...common, ...absent, query: boundedText }),
-      z.strictObject({ ...common, ...absent, latitude: coordinatesSchema.shape.latitude, longitude: coordinatesSchema.shape.longitude }),
-      z.strictObject({ ...common, ...absent })]),
+    // One flat object: clients flatten a top-level union, often to its last branch, which
+    // hid query from models. The one-selector rule is checked in the handler instead.
+    inputSchema: z.strictObject({ ...common, ref: boundedText.optional().describe('Exact reference to inspect.'), query: boundedText.optional().describe('A name to search: station, stop, line, agency or train number.'),
+      latitude: coordinatesSchema.shape.latitude.optional().describe('With longitude: stops near this point.'), longitude: coordinatesSchema.shape.longitude.optional() }),
     outputSchema: findOutput,
   }, async (args, handler) => {
     let resolvedCoverage = args.coverage;
     return guarded(handler, () => traced('find_transit', async () => {
       checkState(handler, 'find_transit');
+      if ((args.latitude === undefined) !== (args.longitude === undefined)) throw new TransitToolError('INVALID_ARGUMENTS', [], 'Give latitude and longitude together.');
+      if ([args.ref, args.query, args.latitude].filter(value => value !== undefined).length > 1) throw new TransitToolError('INVALID_ARGUMENTS', [], 'Give only one of ref, query, or latitude with longitude.');
       if (args.ref) return complete(await findEntityResult(context, args.ref, handler.mcpReq.signal));
       const describe = (coverage: NonNullable<ReturnType<typeof getCoverage>>) => ({ id: coverage.id, displayName: coverage.displayName, aliases: [...coverage.aliases],
         supportedModes: [...coverage.supportedModes], available: getCoverageMode(coverage.id, context.env) === 'on', capabilities: effectiveCapabilities(context, coverage) });
