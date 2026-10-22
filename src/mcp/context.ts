@@ -35,11 +35,4 @@ export type LegacyStationRequestState = {
   candidateIds: string[];
 };
 
-export type TransitRequestState = LegacyStationRequestState | {
-  phase: 'transit-selection';
-  tool: 'plan_trip';
-  requestHash: string;
-  artifactVersion: string;
-  candidates: Partial<Record<'origin' | 'destination', string[]>>;
-};
-export type MetroRequestState = TransitRequestState;
+export type MetroRequestState = LegacyStationRequestState;

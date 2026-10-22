@@ -34,7 +34,7 @@ export function registerFindTool(server: McpServer, context: MetroMcpContext): v
   }, async (args, handler) => {
     let resolvedCoverage = args.coverage;
     return guarded(handler, () => traced('find_transit', async () => {
-      checkState(handler, 'find_transit');
+      checkState(handler);
       if ((args.latitude === undefined) !== (args.longitude === undefined)) throw new TransitToolError('INVALID_ARGUMENTS', [], 'Give latitude and longitude together.');
       if ([args.ref, args.query, args.latitude].filter(value => value !== undefined).length > 1) throw new TransitToolError('INVALID_ARGUMENTS', [], 'Give only one of ref, query, or latitude with longitude.');
       if (args.ref) return complete(await findEntityResult(context, args.ref, handler.mcpReq.signal));

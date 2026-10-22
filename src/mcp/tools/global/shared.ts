@@ -3,7 +3,7 @@ import { count, phase } from '../../../transit/trace';
 import { DecodedShardCache } from '../../../transit/planner/schedule-index';
 import { formatInstant } from '../../../transit/planner/service-day';
 import { z } from 'zod';
-import type { MetroMcpContext, TransitRequestState } from '../../context';
+import type { MetroMcpContext, MetroRequestState } from '../../context';
 import { complete } from '../../shared';
 import { getCoverage, getCoverages, networkPlanning, planningWithheld, type CoverageManifest } from '../../../transit/core/coverage';
 import { getCoverageMode } from '../../../regions/manifest';
@@ -47,20 +47,19 @@ export const candidateSchema = z.strictObject({ ref: z.string(), kind: z.enum(['
   modes: z.array(z.string()).optional(), routeNames: z.array(z.string()).max(10).optional().describe('Lines serving it, up to ten.'),
   routeCount: z.number().int().nonnegative().optional(), stationRef: z.string().optional(), coordinates: coordinatesSchema.nullable().optional() });
 export type Candidate = z.infer<typeof candidateSchema>;
-/** Per endpoint/query; two-endpoint elicitation is therefore at most 100 choices. */
+/** Exact matches or places per name; beyond this a name is too broad to answer. */
 export const MAX_DISCOVERY_CANDIDATES = 50;
-export const errorSchema = z.strictObject({ code: z.enum(['ENTITY_NOT_FOUND', 'ENTITY_AMBIGUOUS', 'INVALID_TRANSIT_REF', 'INVALID_ITINERARY', 'TIME_OUTSIDE_WINDOW', 'SELECTION_DECLINED', 'INVALID_ARGUMENTS']),
+export const errorSchema = z.strictObject({ code: z.enum(['ENTITY_NOT_FOUND', 'ENTITY_AMBIGUOUS', 'INVALID_TRANSIT_REF', 'INVALID_ITINERARY', 'TIME_OUTSIDE_WINDOW', 'INVALID_ARGUMENTS']),
   message: z.string(), candidates: z.array(candidateSchema).max(2 * MAX_DISCOVERY_CANDIDATES) });
 export class TransitToolError extends Error {
   constructor(readonly code: z.infer<typeof errorSchema>['code'], readonly candidates: Candidate[] = [], readonly hint?: string) { super(code); }
 }
 const messages = {
   ENTITY_NOT_FOUND: 'No matching transit entity was found. Use find_transit to choose a reference.',
-  ENTITY_AMBIGUOUS: 'Choose an exact reference from the candidates and retry.',
+  ENTITY_AMBIGUOUS: 'This name means several different places. Pick one from the conversation or ask the rider, then retry with its ref.',
   INVALID_TRANSIT_REF: 'Use a reference of the kind required by this tool, returned by find_transit or get_departures.',
   INVALID_ITINERARY: 'Pass an itinerary exactly as plan_trip returned it, without edits.',
   TIME_OUTSIDE_WINDOW: 'Narrow the search window or filters; the window must be between one second and seven days and within the candidate budget.',
-  SELECTION_DECLINED: 'Transit entity selection was declined or cancelled.',
   INVALID_ARGUMENTS: 'These arguments cannot be combined.',
 };
 export function errorResult(error: TransitToolError) {
@@ -70,10 +69,9 @@ export function errorResult(error: TransitToolError) {
     : error.hint ?? messages[error.code];
   return { ...complete(errorSchema.parse({ code: error.code, message: `${error.code}: ${message}`, candidates: error.candidates })), isError: true as const };
 }
-export function checkState(handler: ServerContext, tool: string): TransitRequestState | undefined {
-  const state = handler.mcpReq.requestState<TransitRequestState>();
-  if (state && state.tool !== tool) throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Transit selection state does not match this request');
-  return state;
+/** Global tools never ask the user for input, so request state sent to one is not its own. */
+export function checkState(handler: ServerContext): void {
+  if (handler.mcpReq.requestState<MetroRequestState>()) throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Transit selection state does not match this request');
 }
 export function metadata(coverageId?: string, data?: TransitData, asOf = new Date().toISOString()) {
   return { asOf, sources: data ? scheduleSources(data) : [], attribution: [...(getCoverage(coverageId ?? '')?.attribution ?? [])] };
@@ -267,13 +265,51 @@ function rankedMatches(data: TransitData, query: string, kind: string | undefine
   return found.filter(item => !(item.entity.stationRef && item.entity.stopType !== 'station' && refs.has(item.entity.stationRef)))
     .sort((a, b) => compareRanks(a.rank, b.rank) || a.entity.providerId.localeCompare(b.entity.providerId) || a.entity.ref.localeCompare(b.entity.ref));
 }
-/** Stops a typed name stands for: exact names and reviewed aliases (with any stop whose own
- * name carries the alias) when any exist, else every match. A station complex counts once. */
-export function stopMatches(data: TransitData, query: string): Candidate[] {
+/** A place a rider names: the stops it stands for (stations, or stops outside any station),
+ * and the best of them to describe it by. */
+export type Place = { candidate: Candidate; members: TransitRef[] };
+/** Matches this close to a place's best match are the same place: one rider-facing name
+ * for stations across the street from each other (34 St-Penn Station's two subway stations). */
+export const PLACE_RADIUS_METRES = 400;
+/** The places a typed name stands for, best first. Matches are its exact names and reviewed
+ * aliases when any exist, else every match. A place gathers, around its best remaining match,
+ * the same station complex, matches within a short walk, and for an alias every stop it names
+ * (an airport's terminals). Different places are never merged: that is the rider's to say. */
+export function stopPlaces(data: TransitData, query: string): Place[] {
   // Entrances lead into a station; they are never where a journey boards.
   const boardable = (list: Candidate[]) => { const kept = list.filter(candidate => candidate.stopType !== 'entrance' && candidate.stopType !== 'other'); return kept.length ? kept : list; };
-  const all = boardable(candidates(data, query, 'stop')), exact = all.filter(candidate => ambiguityCandidate(data, candidate, query));
-  return sameStation(data, exact.length ? exact : all);
+  const all = boardable(candidates(data, query, 'stop')), exact = all.filter(candidate => ambiguityCandidate(data, candidate, query)), matches = exact.length ? exact : all;
+  const alias = exact.length > 0 && aliasStopNames(data, normalizeEntityName(query)).size > 0;
+  const roots = matches.map(match => (stationOf(data, match.ref) ?? match.ref) as TransitRef);
+  const complex = stationComplexes(data, roots.filter(root => stopsByRef(data).has(root)));
+  const places: Place[] = [], placed = new Set<number>();
+  for (const [at, seed] of matches.entries()) {
+    if (placed.has(at)) continue;
+    const group = matches.flatMap((match, other) => !placed.has(other) && (other === at || alias || complex.get(roots[at]!) !== undefined && complex.get(roots[at]!) === complex.get(roots[other]!) ||
+      metresBetween(seed.coordinates, match.coordinates) <= PLACE_RADIUS_METRES) ? [other] : []);
+    for (const other of group) placed.add(other);
+    places.push({ candidate: sameStation(data, group.map(other => matches[other]!))[0]!, members: [...new Set(group.map(other => roots[other]!))] });
+  }
+  return places;
+}
+/** The stations a stop reference stands for: its whole complex. */
+export const refPlace = (data: TransitData, ref: string): TransitRef[] => [asTransitRef(ref), ...complexStations(data, ref).map(asTransitRef)];
+const metresBetween = (a: Candidate['coordinates'], b: Candidate['coordinates']) => {
+  if (!a || !b) return Infinity;
+  const radians = Math.PI / 180, x = (b.longitude - a.longitude) * radians * Math.cos((a.latitude + b.latitude) * radians / 2), y = (b.latitude - a.latitude) * radians;
+  return Math.hypot(x, y) * 6_371_000;
+};
+/** How a rider tells places apart: the name, and the lines and modes there. */
+export const placeLabel = (candidate: Candidate) => {
+  const lines = candidate.routeNames?.slice(0, 6).join(', '), modes = candidate.modes?.join('/');
+  return lines || modes ? `${candidate.name} (${[lines, modes].filter(Boolean).join(' ')})` : candidate.name;
+};
+/** A name that stands for several different places: a question a rider can answer, with each
+ * place's reference for the retry. */
+export function ambiguousPlaces(query: string, places: Place[]): TransitToolError {
+  const listed = places.slice(0, 5).map(place => placeLabel(place.candidate)).join('; ');
+  return new TransitToolError('ENTITY_AMBIGUOUS', places.map(place => place.candidate),
+    `"${sanitizeTransitText(query, 80)}" is ${places.length} different places: ${listed}${places.length > 5 ? '; …' : ''}. Pick one from the conversation, or ask the rider which; then retry with that candidate's ref or a more specific name.`);
 }
 /** Spellings riders and agencies use interchangeably, folded the same way on both sides:
  * "King Street" finds "King St-Old Town", "W 4th St" finds "W 4 St-Wash Sq". */

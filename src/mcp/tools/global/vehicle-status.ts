@@ -7,7 +7,7 @@ import { formatEntityRef, parseTransitRef } from '../../../transit/core/refs';
 import { getCoverage } from '../../../transit/core/coverage';
 import type { NormalizedVehicle } from '../../../transit/gtfs/realtime/decode';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
-import { MAX_DISCOVERY_CANDIDATES, closestStops, judgedAt, localTime, coverageTimezone, TransitToolError, boundedText, checkState, complexStations, coordinatesSchema, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, routeName, stopMatches, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, closestStops, judgedAt, localTime, coverageTimezone, TransitToolError, boundedText, checkState, complexStations, coordinatesSchema, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, routeName, stopPlaces, ambiguousPlaces, unavailable, validRef, type TransitData } from './shared';
 
 const STOP_STATUS = { STOPPED_AT: 'stopped_at', INCOMING_AT: 'incoming_at', IN_TRANSIT_TO: 'in_transit_to' } as const;
 
@@ -32,26 +32,27 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
       coordinates: coordinatesSchema.nullable(), coordinatesSource: z.enum(['vehicle', 'stop']).nullable(),
       bearing: z.number().nullable(), speedMetersPerSecond: z.number().nullable(), observedAt: instantSchema, ageSeconds: z.number().nonnegative() })) }),
   }, async (args, handler) => guarded(handler, () => traced('get_vehicle_status', async () => {
-    checkState(handler, 'get_vehicle_status');
+    checkState(handler);
     if (!args.ref === !args.stop) throw new TransitToolError('INVALID_TRANSIT_REF');
-    let ref = args.ref, data: TransitData | null = null;
+    let ref = args.ref, data: TransitData | null = null, members: string[] = [];
     if (args.stop) {
       const coverageId = getCoverage(args.coverage ?? '')?.id;
       if (!coverageId) throw new TransitToolError('ENTITY_NOT_FOUND');
       data = await loadData(context, coverageId, handler.mcpReq.signal);
       if (!data) return complete({ ...unavailable(coverageId), vehicles: [] });
-      const matches = stopMatches(data, args.stop);
-      if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND', closestStops(data, args.stop));
-      if (matches.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...unavailable(coverageId, data, ['SCOPE_LIMIT_EXCEEDED']), vehicles: [] });
-      if (matches.length > 1) throw new TransitToolError('ENTITY_AMBIGUOUS', matches);
-      ref = matches[0]!.ref;
+      const places = stopPlaces(data, args.stop);
+      if (!places.length) throw new TransitToolError('ENTITY_NOT_FOUND', closestStops(data, args.stop));
+      if (places.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...unavailable(coverageId, data, ['SCOPE_LIMIT_EXCEEDED']), vehicles: [] });
+      if (places.length > 1) throw ambiguousPlaces(args.stop, places);
+      ref = places[0]!.candidate.ref; members = places[0]!.members;
     }
     const parsed = validRef(ref!, ['route', 'trip', 'stop'], true);
     data ??= await loadData(context, parsed.coverage, handler.mcpReq.signal);
     if (!data) return complete({ ...unavailable(parsed.coverage), vehicles: [] });
     knownEntity(data, ref!);
     const stopIndex = data.indexes.flatMap(index => index.stops), byRef = new Map(stopIndex.map(stop => [stop.ref as string, stop]));
-    const within = parsed.kind === 'stop' ? new Set([ref!, ...complexStations(data, ref!)]) : undefined;
+    // A station covers its complex, and a named place its other stations in this network.
+    const within = parsed.kind === 'stop' ? new Set([ref!, ...complexStations(data, ref!), ...members.filter(member => parseTransitRef(member)!.feed === parsed.feed)]) : undefined;
     const atStop = within && new Set(stopIndex.filter(stop => within.has(stop.ref) || stop.parentStationRef !== undefined && within.has(stop.parentStationRef)).map(stop => stop.providerId));
     const now = Math.floor(Date.now() / 1000), feed = await readFeed<NormalizedVehicle>(context, data, 'vehicle_positions', now, handler.mcpReq.signal, [], [parsed.feed]);
     const fresh = (feed.feedIds ?? [feed.feedId]).includes(parsed.feed) && feed?.status === 'realtime' && feed.producerTimestampSeconds !== undefined && judgedAt(now, feed.producerTimestampSeconds) >= feed.producerTimestampSeconds && judgedAt(now, feed.producerTimestampSeconds) - feed.producerTimestampSeconds <= data.coverage.thresholds.vehiclePositions.realtimeSeconds;

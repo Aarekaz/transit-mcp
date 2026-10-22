@@ -21,8 +21,6 @@ import { registerRouteTools } from './tools/routes';
 import { registerStationTools } from './tools/stations';
 import { registerTrainTools } from './tools/trains';
 import { registerGlobalTools } from './tools/global';
-import { planRequestHash, planState, verifyPlanChoices } from './tools/global/plan';
-import { knownEntity, loadData, validRef } from './tools/global/shared';
 
 /** Public identity reported in initialize/discover results and registry listings. */
 export const SERVER_IDENTITY = Object.freeze({
@@ -43,7 +41,7 @@ export const SERVER_IDENTITY = Object.freeze({
 
 /** Model-facing orientation; keep every claim true of the registered tools. */
 export const SERVER_INSTRUCTIONS = [
-  'Resolve ambiguous transit entities with find_transit; context may rank candidates but never silently establishes identity. Coverage availability is runtime data.',
+  'Pass the rider\'s own place names straight to plan_trip, get_departures, get_vehicle_status and get_service_status. A name for one place (Penn Station, SFO, stations a short walk apart) covers all its stations. A name for different places (Broadway) gets one labelled trip from each in plan_trip (see notice) and a question to ask elsewhere: choose by the conversation or ask the rider; never guess silently. Coverage availability is runtime data.',
   'Riders use everyday names ("Chinatown", "the Times Square station"). If a name finds nothing, use your own knowledge to retry with the official station name or a nearby landmark, or pass coordinates; suggestions (and a not-found error\'s candidates) are the closest names, not matches, so confirm one before relying on it.',
   'Use find_transit to inspect coverage first. To get from A to B call plan_trip. If it returns no itinerary it returns routeHints (lines near each end, and direct lines serving both): choose the lines you would ride, using your own knowledge of the network too, and call plan_trip again with routes. That plans along only those lines, and works where open search is unavailable and for buses.',
   'For the next train or bus from A to B, call get_departures with toStop: rows list only trips that stop there, with arrival times. Present only itineraries returned by plan_trip as confirmed journeys; never present one pieced together from departures or predictions as confirmed.',
@@ -114,18 +112,7 @@ function buildMetroMcpServer(context: MetroMcpContext): {
       inputRequired: { legacyShim: false, maxRounds: 1 },
       requestState: { verify: async (wireState, handler) => {
         const state = await stateCodec.verify(wireState, handler);
-        if (state.phase === 'transit-selection') {
-          const checked = planState.parse(state);
-          if (context.toolRequest?.name !== checked.tool || await planRequestHash(context.toolRequest.arguments) !== checked.requestHash) {
-            throw new Error('Transit request state mismatch');
-          }
-          verifyPlanChoices(checked, context.toolRequest.inputResponses);
-          const candidate = checked.candidates.origin?.[0] ?? checked.candidates.destination?.[0];
-          const coverage = candidate ? validRef(candidate, ['stop']).coverage : undefined;
-          const data = coverage ? await loadData(context, coverage, handler.mcpReq.signal) : null;
-          if (!data || data.version.artifactVersion !== checked.artifactVersion) throw new Error('Stale transit selection state');
-          for (const refs of Object.values(checked.candidates)) for (const ref of refs ?? []) knownEntity(data, ref);
-        } else if (state.phase !== 'station-selection' || state.tool !== 'get_station_predictions' ||
+        if (state.phase !== 'station-selection' || state.tool !== 'get_station_predictions' ||
           context.toolRequest && context.toolRequest.name !== state.tool) throw new Error('Transit request state mismatch');
         return state;
       } },
@@ -133,7 +120,7 @@ function buildMetroMcpServer(context: MetroMcpContext): {
   );
 
   registerMetroFeatures(server, context, stateCodec);
-  registerGlobalTools(server, context, stateCodec);
+  registerGlobalTools(server, context);
   registerTransitBoardApp(server, context);
   registerResources(server, context);
   registerPrompts(server);

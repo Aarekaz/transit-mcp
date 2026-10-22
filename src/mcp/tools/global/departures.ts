@@ -10,7 +10,7 @@ import { DecodedShardCache } from '../../../transit/planner/schedule-index';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import { stopAccess } from '../../../transit/accessibility/equipment';
 import type { ScheduleTrip } from '../../../transit/gtfs/static/schema';
-import { MAX_DISCOVERY_CANDIDATES, closestStops, judgedAt, localTime, residentShards, TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, stopMatches, stationAgencies, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, closestStops, judgedAt, localTime, residentShards, TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, stopPlaces, ambiguousPlaces, describeCandidate, candidateSchema, stationAgencies, unavailable, validRef, type TransitData } from './shared';
 import { getCoverage } from '../../../transit/core/coverage';
 
 const departureShape = { tripRef: z.string(), serviceDate: z.string(), routeRef: z.string(), routeName: z.string().describe('Public route name, e.g. "1", "A" or "Red".'),
@@ -30,30 +30,31 @@ type Unnamed<T> = Omit<T, 'routeName' | 'stopName' | 'stepFree' | 'arrival'> & {
 
 export function registerDeparturesTool(server: McpServer, context: MetroMcpContext): void {
   server.registerTool('get_departures', {
-    title: 'Departures at a stop', description: 'Find what leaves a stop next, the first service or last service in a bounded window. Pass a stopRef from find_transit, or a stop name with its coverage (one station complex resolves directly; different same-named stations return candidates). A station covers its whole complex, e.g. every line at Times Sq-42 St; a platform ref covers that platform. Pass toStop or toStopRef for the next trips from here that stop at a destination, each with its arrival time there. Returns dated trip references for get_vehicle_status. For a journey with a change use plan_trip (with routes where needed): departures alone cannot prove a connection.',
+    title: 'Departures at a stop', description: 'Find what leaves a stop next, the first service or last service in a bounded window. Pass a stopRef from find_transit, or a stop name with its coverage: a name for one place covers all its stations in that network (otherStations lists the same place in other networks, such as the LIRR at Penn Station); a name for different places returns a question to ask, with candidates. A station covers its whole complex, e.g. every line at Times Sq-42 St; a platform ref covers that platform. Pass toStop or toStopRef for the next trips from here that stop at a destination, each with its arrival time there. Returns dated trip references for get_vehicle_status. For a journey with a change use plan_trip (with routes where needed): departures alone cannot prove a connection.',
     annotations: readOnlyLive('Departures at a stop'),
     inputSchema: z.strictObject({ stopRef: boundedText.optional().describe('Exact stop or station reference. Give this or stop.'),
       stop: boundedText.optional().describe('Stop or station name, with coverage. Give this or stopRef.'), coverage: coverageSchema.optional(), at: instantSchema.optional(), windowSeconds: z.number().int().default(7200).describe('Search window in seconds, 1 through 604800 (seven days).'),
       toStopRef: boundedText.optional().describe('Destination stop or station: only trips that go on to stop there are listed, each with its arrival time there.'),
       toStop: boundedText.optional().describe('Destination stop or station name, with coverage. Give this or toStopRef, or neither.'),
       routeRefs: z.array(boundedText).max(20).optional(), agencyRefs: z.array(boundedText).max(20).optional(), selection: z.enum(['first', 'last']).default('first'), limit: z.number().int().min(1).max(100).default(20) }),
-    outputSchema: z.strictObject({ ...resultShape, departures: z.array(departureSchema), frequencyWindows: z.array(frequencySchema) }),
+    outputSchema: z.strictObject({ ...resultShape, departures: z.array(departureSchema), frequencyWindows: z.array(frequencySchema),
+      otherStations: z.array(candidateSchema).optional().describe('The same place in another network (the LIRR at Penn Station): call again with its ref for its departures.') }),
   }, async (args, handler) => guarded(handler, () => traced('get_departures', async () => {
-    checkState(handler, 'get_departures');
+    checkState(handler);
     if (args.windowSeconds < 1 || args.windowSeconds > 604800) throw new TransitToolError('TIME_OUTSIDE_WINDOW');
     if (!args.stopRef === !args.stop || args.toStopRef && args.toStop) throw new TransitToolError('INVALID_TRANSIT_REF');
-    let stopRef = args.stopRef, data: TransitData | null = null;
+    let stopRef = args.stopRef, data: TransitData | null = null, members: string[] = [];
     if (args.stop) {
       // One request for the common question: resolve the name exactly as plan_trip does.
       const coverageId = getCoverage(args.coverage ?? '')?.id;
       if (!coverageId) throw new TransitToolError('ENTITY_NOT_FOUND');
       data = await loadData(context, coverageId, handler.mcpReq.signal);
       if (!data) return complete({ ...unavailable(coverageId), departures: [], frequencyWindows: [] });
-      const matches = stopMatches(data, args.stop);
-      if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND', closestStops(data, args.stop));
-      if (matches.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...unavailable(coverageId, data, ['SCOPE_LIMIT_EXCEEDED']), departures: [], frequencyWindows: [] });
-      if (matches.length > 1) throw new TransitToolError('ENTITY_AMBIGUOUS', matches);
-      stopRef = matches[0]!.ref;
+      const places = stopPlaces(data, args.stop);
+      if (!places.length) throw new TransitToolError('ENTITY_NOT_FOUND', closestStops(data, args.stop));
+      if (places.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...unavailable(coverageId, data, ['SCOPE_LIMIT_EXCEEDED']), departures: [], frequencyWindows: [] });
+      if (places.length > 1) throw ambiguousPlaces(args.stop, places);
+      stopRef = places[0]!.candidate.ref; members = places[0]!.members;
     }
     const stop = validRef(stopRef!, ['stop']);
     for (const ref of args.routeRefs ?? []) validRef(ref, ['route']);
@@ -64,20 +65,22 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     for (const ref of [...args.routeRefs ?? [], ...args.agencyRefs ?? []]) knownEntity(data, ref);
     const now = new Date().toISOString(), nowSeconds = Date.parse(now) / 1000;
     // A destination keeps only trips that stop there later: "the next train from A to B".
-    let toRef = args.toStopRef;
+    let toRef = args.toStopRef, toMembers: string[] = [];
     if (args.toStop) {
-      const matches = stopMatches(data, args.toStop);
-      if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND', closestStops(data, args.toStop));
-      if (matches.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...unavailable(stop.coverage, data, ['SCOPE_LIMIT_EXCEEDED']), departures: [], frequencyWindows: [] });
-      if (matches.length > 1) throw new TransitToolError('ENTITY_AMBIGUOUS', matches);
-      toRef = matches[0]!.ref;
+      const places = stopPlaces(data, args.toStop);
+      if (!places.length) throw new TransitToolError('ENTITY_NOT_FOUND', closestStops(data, args.toStop));
+      if (places.length > MAX_DISCOVERY_CANDIDATES) return complete({ ...unavailable(stop.coverage, data, ['SCOPE_LIMIT_EXCEEDED']), departures: [], frequencyWindows: [] });
+      if (places.length > 1) throw ambiguousPlaces(args.toStop, places);
+      toRef = places[0]!.candidate.ref; toMembers = places[0]!.members;
     }
     if (toRef && validRef(toRef, ['stop']).coverage !== stop.coverage) throw new TransitToolError('INVALID_TRANSIT_REF');
     if (toRef) knownEntity(data, toRef);
-    const toWithin = toRef ? new Set([toRef, ...complexStations(data, toRef)]) : undefined;
+    const toWithin = toRef ? new Set([toRef, ...complexStations(data, toRef), ...toMembers]) : undefined;
     const destinationStops = new Set(toWithin ? data.indexes.flatMap(index => index.stops).filter(row => toWithin.has(row.ref) || row.parentStationRef !== undefined && toWithin.has(row.parentStationRef)).map(row => row.ref as string) : []);
-    // A station is the whole complex a rider knows by that name; a platform is just itself.
-    const complex = complexStations(data, stopRef!), within = new Set([stopRef!, ...complex]);
+    // A station is the whole complex a rider knows by that name; a platform is just itself. A
+    // named place adds its other stations in this network; those in others are listed.
+    const complex = [...new Set([...complexStations(data, stopRef!), ...members.filter(ref => ref !== stopRef && parseTransitRef(ref)!.feed === stop.feed)])], within = new Set([stopRef!, ...complex]);
+    const otherStations = members.filter(ref => parseTransitRef(ref)!.feed !== stop.feed).map(ref => describeCandidate(data!, knownEntity(data!, ref)));
     const relevantStops = new Set(data.indexes.flatMap(index => index.stops).filter(stop => within.has(stop.ref) || stop.parentStationRef !== undefined && within.has(stop.parentStationRef)).map(stop => stop.ref));
     // One decode per shard: the scan fills this, and observed rows read trips from it.
     const decoded = new DecodedShardCache(Number.MAX_SAFE_INTEGER);
@@ -182,6 +185,6 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     const windows = toWithin ? schedule.frequencyWindows.filter(window => trips.get(window.tripRef)?.stopTimes.some(call => call.sequence > window.stopSequence && destinationStops.has(call.stopRef) && call.dropOffType !== 1)) : schedule.frequencyWindows;
     return complete({ ...meta, sources,
       status: departures.some(row => row.status === 'realtime') ? 'realtime' as const : schedule.status, reasons: [...new Set([...schedule.reasons, ...feed.reasons])],
-      departures: departures.map(withArrival), frequencyWindows: windows.map(named) });
+      departures: departures.map(withArrival), frequencyWindows: windows.map(named), ...(otherStations.length ? { otherStations } : {}) });
   }), () => complete({ ...unavailable(args.stopRef ? parseTransitRef(args.stopRef)?.coverage : getCoverage(args.coverage ?? '')?.id), departures: [], frequencyWindows: [] })));
 }

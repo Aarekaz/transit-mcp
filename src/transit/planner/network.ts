@@ -17,6 +17,8 @@ export interface NetworkBand { band: CompactBand; origins: (number | undefined)[
 export interface NetworkQuery {
   stops: NetworkStops; bands: NetworkBand[];
   origin: JourneyEndpoint; destination: JourneyEndpoint;
+  /** The rest of a place each endpoint stands for: reached without walking, like the endpoint. */
+  originStops?: readonly TransitRef[]; destinationStops?: readonly TransitRef[];
   /** Epoch seconds; journeys arrive by end. */
   begin: number; end: number;
   maxWalkMetres: number; maxTransfers: number;
@@ -82,9 +84,15 @@ function near(stops: NetworkStops, lat: number, lon: number, limit: number): { s
 
 /** Stops an endpoint reaches and the metres walked to each: a stop ref is itself (a station,
  * its platforms) plus what lies within walking distance; coordinates, what lies within it. */
-function endpointStops(stops: NetworkStops, endpoint: JourneyEndpoint, limit: number, position: (ref: TransitRef) => number | undefined): Map<number, number> {
+function endpointStops(stops: NetworkStops, endpoint: JourneyEndpoint, limit: number, position: (ref: TransitRef) => number | undefined, place: readonly TransitRef[] = []): Map<number, number> {
   const found = new Map<number, number>();
   const add = (stop: number, metres: number) => { if (metres < (found.get(stop) ?? Infinity)) found.set(stop, metres); };
+  for (const ref of place) {
+    const self = position(ref);
+    if (self === undefined) continue;
+    add(self, 0);
+    for (let stop = 0; stop < stops.parent.length; stop++) if (stops.parent[stop] === self) add(stop, 0);
+  }
   let lat: number, lon: number;
   if (typeof endpoint === 'string') {
     const self = position(endpoint);
@@ -141,8 +149,8 @@ export function searchNetwork(query: NetworkQuery, bannedRoutes: ReadonlySet<Tra
     for (let at = startAt; at < band.patternStart[local + 1]!; at++) { const slot = fill[base + band.patternStops[at]!]!++ * 2; occurrences[slot] = index; occurrences[slot + 1] = at - startAt; }
   });
 
-  const access = endpointStops(stops, query.origin, query.maxWalkMetres, position);
-  const egress = endpointStops(stops, query.destination, query.maxWalkMetres, position);
+  const access = endpointStops(stops, query.origin, query.maxWalkMetres, position, query.originStops);
+  const egress = endpointStops(stops, query.destination, query.maxWalkMetres, position, query.destinationStops);
   // Walking is a limit, not a cost: the earliest arrival at a stop may have walked too far
   // to finish, while a later one has not. Labels are kept per walking band (WALK_BANDS of
   // the limit), each band dominating only those that walked more.

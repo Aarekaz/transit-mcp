@@ -17,7 +17,7 @@ import type { ScheduleShard } from '../../../transit/gtfs/static/schema';
 import { AlertScopeLimitError, expandAlertScopes, matchesAlertSelector, resolveAlertSelector, type AlertScope } from '../../../transit/gtfs/realtime/alert-match';
 import { itinerarySchema } from './plan';
 import { blockedStations, currentOutage, outageStations, stationOf, type EquipmentOutage } from '../../../transit/accessibility/equipment';
-import { MAX_DISCOVERY_CANDIDATES, closestStops, localTime, coverageTimezone, residentShards, TransitToolError, stopMatches, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
+import { MAX_DISCOVERY_CANDIDATES, closestStops, localTime, coverageTimezone, residentShards, TransitToolError, stopPlaces, ambiguousPlaces, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
 
 /** Per-alert detail bound: a city-wide status call stays readable for a model. */
 export const ALERT_DETAIL_LIMIT = 20;
@@ -79,7 +79,7 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       transferChecks: z.array(z.strictObject({ fromLegIndex: z.number().int(), toLegIndex: z.number().int(), valid: z.literal(false), reasons: z.array(z.string()) })),
       equipment: equipmentSchema.optional().describe('Elevator and escalator outages in scope, where the coverage publishes them.') }),
   }, async (args, handler) => guarded(handler, () => traced('get_service_status', async () => {
-    checkState(handler, 'get_service_status');
+    checkState(handler);
     // Exactly one scope; coverage stands alone or names a station's region.
     const scoped = [args.ref, args.stop, args.itinerary].filter(value => value !== undefined).length;
     if (scoped > 1 || (args.coverage !== undefined) !== (scoped === 0 || args.stop !== undefined))
@@ -90,10 +90,10 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       if (!coverageId) throw new TransitToolError('ENTITY_NOT_FOUND');
       const named = await loadData(context, coverageId, handler.mcpReq.signal);
       if (!named) return complete({ ...unavailable(coverageId), alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] });
-      const matches = stopMatches(named, args.stop);
-      if (!matches.length) throw new TransitToolError('ENTITY_NOT_FOUND', closestStops(named, args.stop));
-      if (matches.length > 1) throw new TransitToolError('ENTITY_AMBIGUOUS', matches.slice(0, MAX_DISCOVERY_CANDIDATES));
-      args = { ref: matches[0]!.ref } as unknown as typeof args;
+      const places = stopPlaces(named, args.stop);
+      if (!places.length) throw new TransitToolError('ENTITY_NOT_FOUND', closestStops(named, args.stop));
+      if (places.length > 1) throw ambiguousPlaces(args.stop, places.slice(0, MAX_DISCOVERY_CANDIDATES));
+      args = { ref: places[0]!.candidate.ref } as unknown as typeof args;
     }
     const parsed = args.ref ? validRef(args.ref, ['agency', 'route', 'stop', 'trip'], true) : undefined;
     // The advertised input stays small; the itinerary contract is enforced here.
