@@ -66,6 +66,9 @@ export interface CoverageManifest {
    * vehicles and alerts: the planner cannot search it within an isolate's memory. */
   feeds: readonly { id: string; realtime: readonly RealtimeFeedSpec[]; planning?: false }[];
   agencyTimezones: Readonly<Record<string, string>>;
+  /** The region's clock. Its coordinators keep live data warm through local service hours
+   * (SERVICE_HOURS) and poll on demand overnight; absent, they always poll on demand. */
+  timezone?: string;
   supportedModes: readonly TransitMode[];
   bounds?: readonly [west: number, south: number, east: number, north: number];
   capabilities: CoverageCapability;
