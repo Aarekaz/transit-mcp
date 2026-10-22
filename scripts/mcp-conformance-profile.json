@@ -875,8 +875,8 @@
       "title": "returns every preserved prompt variant as one exact user text message"
     },
     "mrtr": {
-      "file": "tests/unit/mcp-global-tools.test.ts",
-      "title": "returns deterministic candidate errors without elicitation and resolves both choices in one round"
+      "file": "tests/unit/mcp-stations.test.ts",
+      "title": "accepts a selected candidate and fetches only that station"
     },
     "tampered": {
       "file": "tests/unit/mcp-stations.test.ts",
