@@ -129,11 +129,13 @@ export async function runCanary(env: Env, now = Date.now()): Promise<CanaryRepor
         expect(departures.status !== 'unavailable' && (!service || rows(departures.departures) > 0), `no SFO departures (${departures.status})`);
         return `${departures.status}, ${rows(departures.departures)} rows`;
       });
-      await check('sfbay.route_hints', async () => {
-        const hinted = await tool('plan_trip', { origin: { ref: sfo!.ref }, destination: { ref: powell!.ref } });
-        routes = (hinted.routeHints?.direct ?? []).slice(0, 4).map((hint: Structured) => hint.ref);
-        expect(routes.length > 0, 'no route hints');
-        return `${routes.length} direct lines`;
+      // SF Bay plans openly now; where it cannot, it must offer route hints a guided plan can use.
+      await check('sfbay.plan', async () => {
+        const open = await tool('plan_trip', { origin: { ref: sfo!.ref }, destination: { ref: powell!.ref } });
+        if (rows(open.itineraries) > 0) return `${open.status}, ${rows(open.itineraries)} itineraries`;
+        routes = (open.routeHints?.direct ?? []).slice(0, 4).map((hint: Structured) => hint.ref);
+        expect(routes.length > 0 || !service, `no itinerary and no route hints (${open.reasons})`);
+        return `no open itinerary; ${routes.length} direct lines hinted`;
       });
       if (routes.length) await check('sfbay.guided_plan', async () => {
         const guided = await tool('plan_trip', { origin: { ref: sfo!.ref }, destination: { ref: powell!.ref }, routes });

@@ -38,6 +38,25 @@ async function publishTrip(f: Awaited<ReturnType<typeof setup>>, ...tripUpdates:
 }
 
 describe('regional v2 snapshot service', () => {
+  it('polls when the timetable moved on since its snapshot, instead of serving the old match', async () => {
+    const f = await setup(); vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
+    // A snapshot matched against the current timetable, polled 60 s ago (inside the interval).
+    await f.store.publish('trip_updates', { version: f.version, receivedAtSeconds: NOW - 60, producerTimestampSeconds: NOW - 60, payload: [] });
+    await f.db.storage.put('polled:trip_updates', NOW - 60);
+    // The timetable is republished (NYC: hourly); readers now ask about the new version.
+    const republished = structuredClone(f.f.manifest);
+    republished.validators = {}; // a new artifact of the same timetable, as a refresh publishes
+    const next = await f.artifacts.publish(republished);
+    expect(next.artifactVersion).not.toBe(f.version.artifactVersion);
+    const bytes = transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: NOW }, entity: [] }).finish();
+    const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(bytes));
+    try {
+      const read = await (await f.hub.fetch(new Request(`https://hub/trip_updates?now=${NOW}&artifact=${next.artifactVersion}`))).json<{ warnings: string[]; version: { artifactVersion: string } }>();
+      expect(upstream).toHaveBeenCalled();
+      expect(read.warnings ?? []).not.toContain('SCHEDULE_REALTIME_MISMATCH');
+    } finally { upstream.mockRestore(); vi.useRealTimers(); }
+  });
+
   it('judges a cold stop read by the last full poll, not by its own skewed sample of routes', async () => {
     // Route B: thirty trips the timetable has, all live. Route R through S: one known trip and
     // twenty it does not have. The whole feed is healthy (31/51); the slice through S is not (1/21).
