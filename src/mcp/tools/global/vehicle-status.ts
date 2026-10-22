@@ -67,7 +67,7 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
     };
     const order = { STOPPED_AT: 0, INCOMING_AT: 1, IN_TRANSIT_TO: 2 } as const;
     const vehicles = (fresh ? feed.payload ?? [] : []).filter(vehicle => (parsed.kind === 'trip' ? vehicle.tripInstanceRef === ref : parsed.kind === 'route' ? vehicle.routeId === parsed.id : vehicle.stopId !== undefined && atStop!.has(vehicle.stopId)) &&
-      vehicle.timestampSeconds !== undefined && now >= vehicle.timestampSeconds && now - vehicle.timestampSeconds <= data.coverage.thresholds.vehiclePositions.realtimeSeconds)
+      vehicle.timestampSeconds !== undefined && judgedAt(now, vehicle.timestampSeconds) >= vehicle.timestampSeconds && judgedAt(now, vehicle.timestampSeconds) - vehicle.timestampSeconds <= data.coverage.thresholds.vehiclePositions.realtimeSeconds)
       .sort((a, b) => parsed.kind === 'stop' ? order[a.currentStatus ?? 'IN_TRANSIT_TO'] - order[b.currentStatus ?? 'IN_TRANSIT_TO'] || b.timestampSeconds! - a.timestampSeconds! : 0)
       .slice(0, args.limit).map(vehicle => {
         const route = routes.find(route => route.providerId === vehicle.routeId), at = stopRef(vehicle.stopId), previous = stopRef(vehicle.previousStopId);
@@ -82,7 +82,7 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
           stopStatus: at !== null && vehicle.currentStatus ? STOP_STATUS[vehicle.currentStatus] : null, stopRef: at, stopName: stopName(at),
           previousStopRef: previous, previousStopName: stopName(previous), ...coordinates,
           bearing: vehicle.bearing ?? null, speedMetersPerSecond: vehicle.speedMetersPerSecond ?? null,
-          observedAt: localTime(new Date(vehicle.timestampSeconds! * 1000).toISOString(), coverageTimezone(data)), ageSeconds: now - vehicle.timestampSeconds! };
+          observedAt: localTime(new Date(vehicle.timestampSeconds! * 1000).toISOString(), coverageTimezone(data)), ageSeconds: judgedAt(now, vehicle.timestampSeconds) - vehicle.timestampSeconds! };
       });
     const meta = metadata(parsed.coverage, data, new Date(now * 1000).toISOString());
     const available = fresh && (parsed.kind !== 'trip' || vehicles.length > 0);
