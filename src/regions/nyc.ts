@@ -53,7 +53,7 @@ export const NYC_COVERAGE = {
     { kind: 'service_alerts', url: new URL(`${mta}/camsys%2Fmnr-alerts`), weight: 1, minIntervalSeconds: 60, maxBytes: 4_000_000, timeoutMs: 10_000 },
   ] },
   ...busFeeds],
-  agencyTimezones: {}, supportedModes: ['subway', 'rail', 'bus'],
+  agencyTimezones: {}, timezone: 'America/New_York', supportedModes: ['subway', 'rail', 'bus'],
   // Montauk, New Haven and Poughkeepsie included.
   bounds: [-74.3, 40.45, -71.8, 41.8],
   capabilities: { schedules: true, planning: true, realtimeDepartures: true, alerts: true, vehicles: true, accessibility: true },

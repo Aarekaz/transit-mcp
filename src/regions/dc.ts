@@ -31,7 +31,7 @@ export const DC_COVERAGE = {
     { kind: 'vehicle_positions', url: new URL(`${wmata}/bus-gtfsrt-vehiclepositions.pb`), weight: 2, minIntervalSeconds: 60, maxBytes: 4_000_000, timeoutMs: 10_000 },
     { kind: 'service_alerts', url: new URL(`${wmata}/bus-gtfsrt-alerts.pb`), weight: 1, minIntervalSeconds: 120, maxBytes: 4_000_000, timeoutMs: 10_000 },
   ] }],
-  agencyTimezones: {}, supportedModes: ['subway', 'bus'],
+  agencyTimezones: {}, timezone: 'America/New_York', supportedModes: ['subway', 'bus'],
   bounds: [-77.6, 38.6, -76.7, 39.3],
   // Step-free: GTFS wheelchair_boarding (every station) plus live elevator outages. The
   // publisher's pathways.txt is excluded (validator errors), so access is per station.

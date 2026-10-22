@@ -132,8 +132,10 @@ describe('regional v2 snapshot service', () => {
     } finally { upstream.mockRestore(); vi.useRealTimers(); }
   });
 
-  it('sleeps while nobody reads, and a read wakes it and polls before answering', async () => {
-    const f = await setup(); vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
+  it('overnight, sleeps while nobody reads, and a read wakes it and polls before answering', async () => {
+    const f = await setup(); vi.useFakeTimers();
+    // 03:00 in San Francisco: outside service hours, so polling is on demand.
+    const night = NOW - 5 * 3600; vi.setSystemTime(night * 1000);
     await f.db.storage.delete('readAt');
     let alarm: number | null = null;
     vi.spyOn(f.db.storage, 'getAlarm').mockImplementation(async () => alarm);
@@ -152,13 +154,33 @@ describe('regional v2 snapshot service', () => {
       expect(alarm).not.toBeNull();
       // Ten quiet minutes later it stops again.
       upstream.mockClear(); alarm = null;
-      vi.setSystemTime((NOW + 601) * 1000);
+      vi.setSystemTime((night + 601) * 1000);
       await f.hub.alarm();
       expect(upstream).not.toHaveBeenCalled();
       expect(alarm).toBeNull();
     } finally { upstream.mockRestore(); vi.useRealTimers(); }
   });
 
+
+  it('through local service hours, keeps polling unread and starts polling on the cron check', async () => {
+    const f = await setup(); vi.useFakeTimers(); vi.setSystemTime(NOW * 1000); // 08:00 in San Francisco
+    await f.db.storage.delete('readAt');
+    let alarm: number | null = null;
+    vi.spyOn(f.db.storage, 'getAlarm').mockImplementation(async () => alarm);
+    vi.spyOn(f.db.storage, 'setAlarm').mockImplementation(async value => { alarm = Number(value); });
+    const bytes = transit_realtime.FeedMessage.encode({ header: { gtfsRealtimeVersion: '2.0', timestamp: NOW }, entity: [] }).finish();
+    const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(bytes));
+    try {
+      // The five-minute cron health check starts the day's polling without any reader.
+      await f.hub.fetch(new Request('https://hub/health'));
+      expect(alarm).not.toBeNull();
+      // Unread, the alarm still polls and schedules the next one.
+      alarm = null;
+      await f.hub.alarm();
+      expect(upstream).toHaveBeenCalled();
+      expect(alarm).not.toBeNull();
+    } finally { upstream.mockRestore(); vi.useRealTimers(); }
+  });
   it('schedules each feed by its attempt deadline so request duration cannot extend the cadence', async () => {
     const f = await setup(); vi.useFakeTimers(); vi.setSystemTime(NOW * 1000);
     let nextAlarm = 0;
@@ -431,5 +453,20 @@ describe('regional v2 snapshot service', () => {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try { await old.alarm(); expect(upstream).not.toHaveBeenCalled(); }
     finally { upstream.mockRestore(); warning.mockRestore(); }
+  });
+});
+
+describe('local service hours', () => {
+  it('runs 06:00 to 23:00 in the region\'s own clock', async () => {
+    const { inServiceHours } = await import('../../src/transit/gtfs/realtime/region-feed-hub');
+    const at = (iso: string) => Date.parse(iso);
+    // New York is UTC-4 in October.
+    expect(inServiceHours('America/New_York', at('2026-10-21T09:59:00Z'))).toBe(false);
+    expect(inServiceHours('America/New_York', at('2026-10-21T10:00:00Z'))).toBe(true);
+    expect(inServiceHours('America/New_York', at('2026-10-22T02:59:00Z'))).toBe(true);
+    expect(inServiceHours('America/New_York', at('2026-10-22T03:00:00Z'))).toBe(false);
+    // The same instant is a different hour in San Francisco (UTC-7).
+    expect(inServiceHours('America/Los_Angeles', at('2026-10-21T10:00:00Z'))).toBe(false);
+    expect(inServiceHours(undefined, at('2026-10-21T16:00:00Z'))).toBe(false);
   });
 });

@@ -43,6 +43,7 @@ export const SFBAY_COVERAGE = {
   feeds: [{ id: 'sf511', realtime: SFBAY_REGION.realtime.feeds }],
   // Populated from actual agency IDs by the schedule compiler, not feed IDs.
   agencyTimezones: {},
+  timezone: 'America/Los_Angeles',
   supportedModes: ['tram', 'subway', 'rail', 'bus', 'ferry', 'cable_tram', 'trolleybus'],
   bounds: SFBAY_REGION.bounds,
   capabilities: { schedules: true, realtimeDepartures: true, alerts: true, vehicles: true, planning: true, accessibility: true },

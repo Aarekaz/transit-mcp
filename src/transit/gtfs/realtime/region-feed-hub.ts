@@ -18,6 +18,14 @@ export const PAST_CALL_SECONDS = 600;
 
 /** Coordinators poll only while someone reads them: a read keeps one polling this long. */
 export const READER_IDLE_SECONDS = 600;
+/** Local hours a region's coordinators keep polling unread, so riders' first questions are
+ * live (simulated: ~4% cold answers, about half the plan's Durable Object time). */
+export const SERVICE_HOURS = { start: 6, end: 23 } as const;
+export function inServiceHours(timezone: string | undefined, nowMs: number): boolean {
+  if (!timezone) return false;
+  const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: timezone, hour: 'numeric', hourCycle: 'h23' }).format(nowMs));
+  return hour >= SERVICE_HOURS.start && hour < SERVICE_HOURS.end;
+}
 /** A read that finds its feed out of date may spend this long, in all, on the poll it starts
  * (fetching, and for named stops a focused match) before answering with what it holds. Below
  * the Worker's 30 s read deadline; one budget, so a slow step can borrow from a fast one. */
@@ -299,7 +307,11 @@ export class RegionFeedHub implements DurableObject {
     const queuedMs = Math.max(0, Date.now() - (Number(url.searchParams.get('sent')) || Date.now()));
     const source = this.#source;
     if (!source) return Response.json({ error: 'inactive_coordinator' }, { status: 409 });
-    if (url.pathname === '/health') return new Response(null, { status: 204 });
+    if (url.pathname === '/health') {
+      // The cron's five-minute check starts the day's polling once local service hours begin.
+      if (inServiceHours(source.coverage.timezone, Date.now()) && ingestionActive(source, this.#env) && await this.#state.storage.getAlarm() == null) await this.#state.storage.setAlarm(Date.now() + 1_000);
+      return new Response(null, { status: 204 });
+    }
     if (url.pathname === '/touch') {
       await this.#wake();
       await this.#fresh(url.searchParams.get('kind') as RealtimeFeedKind);
@@ -355,9 +367,10 @@ export class RegionFeedHub implements DurableObject {
     const source = this.#source;
     if (!source) return;
     const nowSeconds = Math.floor(Date.now() / 1_000);
-    // Nobody has read for a while: stop and schedule nothing. The next read wakes it.
+    // Outside local service hours, nobody has read for a while: stop and schedule nothing. The
+    // next read, or the cron's check once service hours begin, wakes it.
     const readAt = Math.max(this.#readAt, await this.#state.storage.get<number>(READ_AT_KEY) ?? 0);
-    if (Date.now() - readAt > READER_IDLE_SECONDS * 1000) return;
+    if (!inServiceHours(source.coverage.timezone, Date.now()) && Date.now() - readAt > READER_IDLE_SECONDS * 1000) return;
     const active = ingestionActive(source, this.#env);
     if (active) {
       for (const feed of source.feeds) {
