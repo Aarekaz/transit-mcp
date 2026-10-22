@@ -471,7 +471,8 @@ describe('global transit MCP boundary', () => {
     for (const [name, valid, invalid] of [
       // No selector lists the regions served.
       ['find_transit', [{}, { coverage: 'dc' }, { query: '91' }, { ref: ref('stop', 'A') }, { latitude: 37, longitude: -122 }], [{ ref: 'x', query: '91' }, { latitude: 37 }, { query: '91', extra: true }]],
-      ['get_service_status', [{ ref: ref('route', 'R') }, { coverage: 'sfbay' }], [{}, { ref: 'x', coverage: 'sfbay' }, { coverage: 'sfbay', extra: true }]],
+      // coverage is a closed list: region ids and their own names, nothing else.
+      ['get_service_status', [{ ref: ref('route', 'R') }, { coverage: 'sfbay' }, { coverage: 'Washington DC' }], [{}, { ref: 'x', coverage: 'sfbay' }, { coverage: 'sfbay', extra: true }, { coverage: 'Mars' }]],
     ] as const) {
       const check = validator.getValidator(result.tools.find((tool: any) => tool.name === name).inputSchema);
       for (const args of valid) expect(check(args).valid, `${name}: ${JSON.stringify(args)}`).toBe(true);
@@ -531,7 +532,10 @@ describe('global transit MCP boundary', () => {
     expect(result.structuredContent).toMatchObject({ status: 'unavailable', reasons: ['COVERAGE_UNAVAILABLE'], sources: [],
       attribution: [{ text: expect.stringContaining('511 SF Bay') }], coverages: [{ id: 'sfbay', available: false, capabilities: { planning: true } }] });
     expect(JSON.parse(result.content[0].text)).toEqual(result.structuredContent);
-    expect((await call(createMockEnv(), 'plan_trip', { coverage: 'future-network', origin: { query: 'A' }, destination: { query: 'B' } })).result.structuredContent.status).toBe('unavailable');
+    // An unknown region is refused with the list of real ones, so the model can correct it.
+    const unknown = (await call(createMockEnv(), 'plan_trip', { coverage: 'future-network', origin: { query: 'A' }, destination: { query: 'B' } })).result;
+    expect(unknown.isError).toBe(true);
+    expect(JSON.stringify(unknown.content)).toContain('Use one of: sfbay, dc, nyc');
   });
   it('plans named endpoints in one call, defaults to now and exposes verified legs with provenance', async () => {
     const { env } = await fixture(); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));

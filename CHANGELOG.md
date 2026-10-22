@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A timetable the post-publish canary rolled back comes back on its own once the live feed has moved onto it (`rollForwardSchedules`, every 5 minutes): providers publish the next timetable before the service day it starts.
 
 ### Changed
+- `coverage` is a closed list in every global tool's schema: `dc`, `nyc`, `sfbay`, or a region's own name ("SF", "Washington DC"), like the original tools' `city`. Models pick it from the list; anything else is refused with the valid ids.
 - Live data on a first question: coordinators poll only while read (10 minutes), and a cold read for a stop answers from the agency's document as soon as it arrives, matching only trips on routes through that stop; the whole snapshot follows from the same request. Coordinator reads have a 30 s deadline, after which a tool answers from the timetable, labelled.
 - Realtime snapshots are kept gzipped in each coordinator's own storage instead of R2 (which cost about 1.5 million writes a day).
 - Rider-facing times (departures, arrivals, vehicles, alert periods, outages) are local to the agency with their offset; provenance stamps stay UTC.

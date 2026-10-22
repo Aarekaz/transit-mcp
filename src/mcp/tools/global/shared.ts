@@ -24,7 +24,14 @@ import { serviceDateAtInstant } from '../../../transit/planner/service-day';
 import { parseGtfsTime } from '../../../transit/gtfs/static/time';
 
 export const boundedText = z.string().trim().min(1).max(256);
-export const coverageSchema = boundedText.describe('Runtime coverage name or identifier; use find_transit to inspect availability.');
+/** The region, as a closed list a model picks from (it knows Metro Center is DC), like the
+ * original tools' city: each region's id and its own names ("SF", "Washington DC"), mapped to
+ * the id. Anything else fails validation with the list, so the model can fix it. */
+const COVERAGE_IDS = getCoverages().map(coverage => coverage.id);
+const COVERAGE_NAMES = [...new Set(getCoverages().flatMap(coverage => [coverage.id, ...coverage.aliases]))] as [string, ...string[]];
+export const coverageSchema = z.enum(COVERAGE_NAMES, { error: () => `Use one of: ${COVERAGE_IDS.join(', ')}` })
+  .transform(name => getCoverage(name)?.id ?? name)
+  .describe(`Region: ${getCoverages().map(coverage => `${coverage.id} (${coverage.displayName})`).join(', ')}. Region names such as SF or Washington DC also work. Pick the region the place is in; where optional, leave it out only if the place could be in several.`);
 export const instantSchema = z.iso.datetime({ offset: true });
 export const coordinatesSchema = z.strictObject({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) });
 export const endpointSchema = z.union([z.strictObject({ ref: boundedText }), z.strictObject({ query: boundedText }), coordinatesSchema]);
