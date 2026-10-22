@@ -227,8 +227,13 @@ export class RealtimeSnapshotStore {
     return { ...base, payload: [...new Set(stopIds)].flatMap(stop => latest.byKey!.get(stop) ?? []) as T[] };
   }
 
-  /** Whether this coordinator has a snapshot of `kind`, in memory or stored. */
-  async holds(kind: RealtimeFeedKind): Promise<boolean> { return !!await this.#held(kind); }
+  /** Whether this coordinator has a snapshot of `kind`, in memory or stored, and (given a
+   * version) one matched against that timetable: an hourly-refreshed schedule (NYC) leaves an
+   * idle coordinator's snapshot pinned to the previous one. */
+  async holds(kind: RealtimeFeedKind, version?: StaticVersion): Promise<boolean> {
+    const held = await this.#held(kind);
+    return !!held && (!version || sameStaticVersion(held.snapshot.version, version));
+  }
 
   async warn(kind: RealtimeFeedKind, warning: string): Promise<void> {
     const latest = await this.#held(kind), stored = await this.storage.get<StoredSnapshot>(snapshotKey(kind));

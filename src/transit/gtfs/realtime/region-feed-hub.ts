@@ -258,7 +258,7 @@ export class RegionFeedHub implements DurableObject {
   async #due(source: RealtimeSource, spec: RealtimeFeedSpec, sinceAttempt: number): Promise<boolean> {
     if (sinceAttempt >= this.#intervals[spec.kind]!) return true;
     if (sinceAttempt < RETRY_EMPTY_SECONDS || !publishedKinds(source).has(spec.kind)) return false;
-    return !await this.#snapshots?.holds(spec.kind);
+    return !await this.#snapshots?.holds(spec.kind, this.#current?.version);
   }
 
   #pollOnce(source: RealtimeSource, spec: RealtimeFeedSpec, nowSeconds: number): Promise<unknown> {
@@ -335,6 +335,8 @@ export class RegionFeedHub implements DurableObject {
     await this.#wake();
     const woken = Date.now();
     const stops = url.searchParams.getAll('stop');
+    // Know the reader's timetable first: a snapshot matched against an older one is not held.
+    if (this.#current?.version.artifactVersion !== url.searchParams.get('artifact')) await this.#artifact();
     const focused = await this.#fresh(kind, kind === 'trip_updates' ? stops : []);
     const freshened = Date.now();
     const now = Number(url.searchParams.get('now')) || Math.floor(Date.now() / 1_000);
