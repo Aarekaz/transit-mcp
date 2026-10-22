@@ -49,10 +49,10 @@ export const candidateSchema = z.strictObject({ ref: z.string(), kind: z.enum(['
 export type Candidate = z.infer<typeof candidateSchema>;
 /** Per endpoint/query; two-endpoint elicitation is therefore at most 100 choices. */
 export const MAX_DISCOVERY_CANDIDATES = 50;
-export const errorSchema = z.strictObject({ code: z.enum(['ENTITY_NOT_FOUND', 'ENTITY_AMBIGUOUS', 'INVALID_TRANSIT_REF', 'INVALID_ITINERARY', 'TIME_OUTSIDE_WINDOW', 'SELECTION_DECLINED']),
+export const errorSchema = z.strictObject({ code: z.enum(['ENTITY_NOT_FOUND', 'ENTITY_AMBIGUOUS', 'INVALID_TRANSIT_REF', 'INVALID_ITINERARY', 'TIME_OUTSIDE_WINDOW', 'SELECTION_DECLINED', 'INVALID_ARGUMENTS']),
   message: z.string(), candidates: z.array(candidateSchema).max(2 * MAX_DISCOVERY_CANDIDATES) });
 export class TransitToolError extends Error {
-  constructor(readonly code: z.infer<typeof errorSchema>['code'], readonly candidates: Candidate[] = []) { super(code); }
+  constructor(readonly code: z.infer<typeof errorSchema>['code'], readonly candidates: Candidate[] = [], readonly hint?: string) { super(code); }
 }
 const messages = {
   ENTITY_NOT_FOUND: 'No matching transit entity was found. Use find_transit to choose a reference.',
@@ -61,12 +61,13 @@ const messages = {
   INVALID_ITINERARY: 'Pass an itinerary exactly as plan_trip returned it, without edits.',
   TIME_OUTSIDE_WINDOW: 'Narrow the search window or filters; the window must be between one second and seven days and within the candidate budget.',
   SELECTION_DECLINED: 'Transit entity selection was declined or cancelled.',
+  INVALID_ARGUMENTS: 'These arguments cannot be combined.',
 };
 export function errorResult(error: TransitToolError) {
   // Nothing matched, but names are close: offer them as suggestions, never as a match.
   const message = error.code === 'ENTITY_NOT_FOUND' && error.candidates.length
     ? 'No transit entity matches that name. The candidates are the closest names, not matches: confirm one with the rider (or retry with the official station name) before using it.'
-    : messages[error.code];
+    : error.hint ?? messages[error.code];
   return { ...complete(errorSchema.parse({ code: error.code, message: `${error.code}: ${message}`, candidates: error.candidates })), isError: true as const };
 }
 export function checkState(handler: ServerContext, tool: string): TransitRequestState | undefined {

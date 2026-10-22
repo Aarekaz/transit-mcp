@@ -466,17 +466,22 @@ describe('global transit MCP boundary', () => {
       inputResponses: { endpoints: { action: 'accept', content: { origin: ref('stop', 'A') } } } });
     expect(resumed.result.structuredContent.itineraries[0].artifactVersion).toBe(f.version.artifactVersion);
   });
-  it('advertises selector exclusivity and strict keys in the JSON schemas clients receive', async () => {
-    const { result } = await wire(createMockEnv(), 'tools/list', {}), validator = new AjvJsonSchemaValidator();
-    for (const [name, valid, invalid] of [
+  it('advertises flat input schemas, with selector exclusivity checked by the tool', async () => {
+    const env = createMockEnv(), { result } = await wire(env, 'tools/list', {}), validator = new AjvJsonSchemaValidator();
+    for (const [name, valid, invalid, combined] of [
       // No selector lists the regions served.
-      ['find_transit', [{}, { coverage: 'dc' }, { query: '91' }, { ref: ref('stop', 'A') }, { latitude: 37, longitude: -122 }], [{ ref: 'x', query: '91' }, { latitude: 37 }, { query: '91', extra: true }]],
+      ['find_transit', [{}, { coverage: 'dc' }, { query: '91' }, { ref: ref('stop', 'A') }, { latitude: 37, longitude: -122 }], [{ query: '91', extra: true }], [{ ref: 'x', query: '91' }, { latitude: 37 }]],
       // coverage is a closed list: region ids and their own names, nothing else.
-      ['get_service_status', [{ ref: ref('route', 'R') }, { coverage: 'sfbay' }, { coverage: 'Washington DC' }], [{}, { ref: 'x', coverage: 'sfbay' }, { coverage: 'sfbay', extra: true }, { coverage: 'Mars' }]],
+      ['get_service_status', [{ ref: ref('route', 'R') }, { coverage: 'sfbay' }, { coverage: 'Washington DC' }], [{ coverage: 'sfbay', extra: true }, { coverage: 'Mars' }], [{}, { ref: 'x', coverage: 'sfbay' }, { stop: 'Fulton St' }]],
     ] as const) {
-      const check = validator.getValidator(result.tools.find((tool: any) => tool.name === name).inputSchema);
+      const schema = result.tools.find((tool: any) => tool.name === name).inputSchema;
+      // Clients flatten a top-level union, often to one branch; a forbidden property hides it from the model.
+      expect(schema.type).toBe('object'); expect(schema.anyOf).toBeUndefined();
+      for (const property of Object.values<any>(schema.properties)) expect(property.not).toBeUndefined();
+      const check = validator.getValidator(schema);
       for (const args of valid) expect(check(args).valid, `${name}: ${JSON.stringify(args)}`).toBe(true);
       for (const args of invalid) expect(check(args).valid, `${name}: ${JSON.stringify(args)}`).toBe(false);
+      for (const args of combined) expect((await call(env, name, args)).result, `${name}: ${JSON.stringify(args)}`).toMatchObject({ isError: true, structuredContent: { code: 'INVALID_ARGUMENTS' } });
     }
   });
   it.each(['trip', 'itinerary'] as const)('limits %s alerts to authoritative route and stop scope plus network alerts', async selector => {
