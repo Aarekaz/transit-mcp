@@ -1,5 +1,5 @@
 import { formatTripInstanceRef, parseTransitRef, type TransitRef } from '../core/refs';
-import { sameStaticVersion, staticVersion } from '../gtfs/realtime/snapshot-store';
+import { CLOCK_TOLERANCE_SECONDS, judgedAt, sameStaticVersion, staticVersion } from '../gtfs/realtime/snapshot-store';
 import type { ScheduleShard, ScheduleStop, ScheduleTrip } from '../gtfs/static/schema';
 import { canonicalRecord } from '../gtfs/static/shards';
 import { isServiceActive, parseInstant, serviceDayOrigin } from './service-day';
@@ -76,9 +76,11 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
       !Number.isFinite(itinerary.maxWalkMetres) || itinerary.maxWalkMetres < 0 || itinerary.maxWalkMetres > 800 ||
       !Number.isInteger(itinerary.maxTransfers) || itinerary.maxTransfers < 0 || itinerary.maxTransfers > 4) reject('QUERY_LIMITS');
     const snapshot = source.realtime, stamp = snapshot?.producerTimestampSeconds;
+    // Judged as the planner judged it: data fetched while the question waited is new, not invalid.
+    const judged = judgedAt(now, stamp);
     const fresh = snapshot && sameStaticVersion(snapshot.version, version) && !snapshot.degraded && snapshot.payload !== null &&
-      stamp !== undefined && Number.isFinite(stamp) && stamp > 0 && stamp <= now && now - stamp <= (source.realtimeMaxAgeSeconds ?? 90) &&
-      Number.isFinite(snapshot.receivedAtSeconds) && snapshot.receivedAtSeconds >= stamp && snapshot.receivedAtSeconds <= now;
+      stamp !== undefined && Number.isFinite(stamp) && stamp > 0 && stamp <= judged && judged - stamp <= (source.realtimeMaxAgeSeconds ?? 90) &&
+      Number.isFinite(snapshot.receivedAtSeconds) && snapshot.receivedAtSeconds >= stamp && snapshot.receivedAtSeconds <= now + CLOCK_TOLERANCE_SECONDS;
     const rows = fresh ? snapshot.payload! : [];
     const { stopRows, pathwayConflict, canonicalPathways, complex, controlledComplexes } = stationGraph(source.shards);
     if (pathwayConflict) reject('PATHWAY_CONFLICT');

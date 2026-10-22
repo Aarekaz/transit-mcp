@@ -78,7 +78,10 @@ describe('NYC subway through the global tools with every MTA feed', () => {
     const plan = (await callTool(env, 'plan_trip', { origin: { ref: artifact.ref('stop', '127') }, destination: { ref: artifact.ref('stop', '132') }, maxWalkMetres: 0 })).structuredContent;
     vi.useRealTimers();
     expect(plan.reasons).not.toContain('REALTIME_UNAVAILABLE');
+    // The validator judges the live legs as the planner did; none is rejected for being new.
+    expect(plan.reasons).not.toContain('VALIDATOR_REJECTED');
     expect(plan.itineraries.length).toBeGreaterThan(0);
+    expect(plan.itineraries.some((itinerary: { legs: { status?: string }[] }) => itinerary.legs.some(leg => leg.status === 'realtime'))).toBe(true);
   });
 
   it('reports truthful NYC capabilities: live departures, alerts and train locations', async () => {

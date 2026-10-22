@@ -690,7 +690,7 @@ export async function trainCandidates(context: MetroMcpContext, data: TransitDat
   const maxAge = data.coverage.thresholds.vehiclePositions.realtimeSeconds;
   const candidates = new Map<string, Candidate>();
   for (const vehicle of feed.status === 'realtime' ? feed.payload ?? [] : []) {
-    const age = vehicle.timestampSeconds === undefined ? Infinity : now - vehicle.timestampSeconds;
+    const age = vehicle.timestampSeconds === undefined ? Infinity : judgedAt(now, vehicle.timestampSeconds) - vehicle.timestampSeconds;
     if (!vehicle.tripInstanceRef || age < 0 || age > maxAge || ![vehicle.vehicleId, vehicle.label, vehicle.trainId].some(id => id !== undefined && normalize(id) === number)) continue;
     const instance = parseTransitRef(vehicle.tripInstanceRef);
     if (!instance || instance.kind !== 'trip') continue;
