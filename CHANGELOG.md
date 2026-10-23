@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agency errors in the original tools say what the caller can do; `get_bus_predictions` validates the 7-digit stop ID.
 
 ### Fixed
+- Rechecking a planned trip (`get_service_status` with `itinerary`) judges it on current times: a train running a few seconds or minutes off keeps the journey valid as long as every change is still made. A missed change is `MISSED_CONNECTION` on that transfer. Before, any change in a predicted time failed the whole journey with `ADJUSTED_TIME`.
 - Journeys no longer walk back and forth between a station's co-located platforms (NYC's A27N to A27S and back) or hop to one on the way out; the same rides reached by different walks are one journey, the shortest kept.
 - A walk between two stations that share a name ("34 St-Penn Station" to "34 St-Penn Station") names each by its lines in `steps`.
 - Every time in a `plan_trip` itinerary is in the agency's local time with its offset; walks and journey totals were in UTC.

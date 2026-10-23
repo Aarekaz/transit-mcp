@@ -5,7 +5,7 @@ import { canonicalRecord } from '../gtfs/static/shards';
 import { isServiceActive, parseInstant, serviceDayOrigin } from './service-day';
 import type { Itinerary, JourneyEndpoint, TransitLeg, ValidationResult, ValidationSource } from './types';
 
-interface CheckedRide { index: number; leg: TransitLeg; trip: ScheduleTrip; shard: ScheduleShard; board: number; alight: number }
+interface CheckedRide { index: number; leg: TransitLeg; trip: ScheduleTrip; shard: ScheduleShard; board: number; alight: number; arrives: number }
 
 /** Stops, pathways and station complexes of a set of shards, derived from canonical data
  * only. Kept per shards array: one search validates every candidate against the same set. */
@@ -106,6 +106,10 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
       typeof leg === 'string' && typeof endpoint === 'string' && stop(endpoint)?.locationType === 1 && stop(leg)?.parentStationRef === endpoint;
     if (!endpointWithin(itinerary.legs[0]!.from, itinerary.origin) || !endpointWithin(itinerary.legs.at(-1)!.to, itinerary.destination)) reject('ENDPOINT');
     let previousTime = requested, walked = 0, changes = -1, realtime = true;
+    // A recheck asks whether the journey still works now: rides at their current times, walks
+    // as long as planned, each change still made. Times moving is news, not a broken journey.
+    const live = source.recheck && fresh;
+    let currentTime = requested;
     let previousRide: CheckedRide | undefined;
     const checked: CheckedRide[] = [];
     for (let index = 0; index < itinerary.legs.length; index++) {
@@ -120,6 +124,7 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
       previousTime = arrive;
       if (previous && !endpointEqual(previous.to, leg.from) && !(leg.kind === 'transit' && leg.continuation)) rejectTransfer('DISCONNECTED_LEGS', index - 1, index);
       if (!validEndpoint(leg.from) || !validEndpoint(leg.to)) reject('ENDPOINT');
+      if (live && leg.kind === 'walk') currentTime = Math.max(depart, currentTime) + (arrive - depart);
       if (leg.kind === 'walk') {
         if (!Number.isFinite(leg.distanceMetres) || leg.distanceMetres < 0) { reject('WALK_DISTANCE'); continue; }
         walked += leg.distanceMetres;
@@ -184,15 +189,20 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
       const departurePrediction = boardUpdate?.status === 'realtime' ? boardUpdate.departureTimeSeconds : undefined;
       const arrivalPrediction = alightUpdate?.status === 'realtime' ? alightUpdate.arrivalTimeSeconds : undefined;
       const predicted = departurePrediction !== undefined || arrivalPrediction !== undefined;
+      let leaves = depart, arrives = arrive;
       if (source.recheck && leg.status === 'realtime' && !fresh) {
         for (const reason of source.realtimeReasons?.length ? source.realtimeReasons : ['REALTIME_UNAVAILABLE']) reject(reason);
+      } else if (live) {
+        // As issued: a realtime leg names an observation no newer than this one.
+        if (leg.status === 'realtime' ? !(Number.isFinite(leg.realtimeTimestampSeconds) && leg.realtimeTimestampSeconds! > 0 && leg.realtimeTimestampSeconds! <= stamp!) : leg.realtimeTimestampSeconds !== undefined) reject('REALTIME_PROVENANCE');
+        leaves = departurePrediction === undefined ? scheduledDeparture : departurePrediction * 1000;
+        if (leaves < currentTime) { if (previous) rejectTransfer('MISSED_CONNECTION', index - 1, index); else reject('MISSED_CONNECTION'); }
+        currentTime = arrives = arrivalPrediction === undefined ? scheduledArrival : arrivalPrediction * 1000;
       } else {
         if (depart !== (departurePrediction === undefined ? scheduledDeparture : departurePrediction * 1000) || arrive !== (arrivalPrediction === undefined ? scheduledArrival : arrivalPrediction * 1000)) reject('ADJUSTED_TIME');
-        const observationValid = source.recheck ? leg.realtimeTimestampSeconds !== undefined && Number.isFinite(leg.realtimeTimestampSeconds) &&
-          leg.realtimeTimestampSeconds > 0 && leg.realtimeTimestampSeconds <= stamp! : leg.realtimeTimestampSeconds === stamp;
-        if (leg.status !== (predicted ? 'realtime' : 'scheduled_only') || (predicted ? !observationValid : leg.realtimeTimestampSeconds !== undefined)) reject('REALTIME_PROVENANCE');
+        if (leg.status !== (predicted ? 'realtime' : 'scheduled_only') || (predicted ? leg.realtimeTimestampSeconds !== stamp : leg.realtimeTimestampSeconds !== undefined)) reject('REALTIME_PROVENANCE');
       }
-      realtime &&= source.recheck && !fresh ? leg.status === 'realtime' : predicted;
+      realtime &&= source.recheck ? leg.status === 'realtime' : predicted;
       let lastScheduled = -Infinity, lastAdjusted = -Infinity;
       for (const call of trip.stopTimes.slice(board, alight + 1)) {
         const row = tripRows.find(row => row.stopSequence === call.sequence);
@@ -204,7 +214,7 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
           lastScheduled = schedule; lastAdjusted = actual;
         }
       }
-      const thisRide = { index, leg, trip, shard, board, alight };
+      const thisRide = { index, leg, trip, shard, board, alight, arrives };
       if (previousRide) {
         const prior = previousRide, matchesStop = (ref: TransitRef | undefined, actual: TransitRef) => !ref || ref === actual || ref === stop(actual)?.parentStationRef;
         const applicable = source.shards.flatMap(s => s.transfers).filter(rule => matchesStop(rule.fromStopRef, prior.leg.to) && matchesStop(rule.toStopRef, leg.from) &&
@@ -218,7 +228,7 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
         }
         const rules = buckets.get([...buckets.keys()].sort((a, b) => b - a)[0]!) ?? [];
         if (rules.some(rule => rule.transferType === 3)) rejectTransfer('TRANSFER_FORBIDDEN', prior.index, index);
-        if (rules.some(rule => depart - parseInstant(prior.leg.arrivalTime) < (rule.minTransferSeconds ?? 0) * 1000)) rejectTransfer('TRANSFER_MINIMUM', prior.index, index);
+        if (rules.some(rule => leaves - prior.arrives < (rule.minTransferSeconds ?? 0) * 1000)) rejectTransfer('TRANSFER_MINIMUM', prior.index, index);
         const terminal = prior.alight === prior.trip.stopTimes.length - 1 && board === 0 && previous?.kind === 'transit';
         const linked = rules.some(rule => rule.transferType === 4);
         let sameBlock = trip.blockId !== '' && trip.blockId === prior.trip.blockId && shard.feedId === prior.shard.feedId && leg.serviceDate === prior.leg.serviceDate && prior.leg.to === leg.from;
