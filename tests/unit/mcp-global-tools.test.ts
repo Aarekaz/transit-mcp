@@ -582,6 +582,21 @@ describe('global transit MCP boundary', () => {
     // One clock throughout: the agency's, walks included.
     for (const time of [itinerary.departureTime, itinerary.arrivalTime, ...itinerary.legs.flatMap((leg: any) => [leg.departureTime, leg.arrivalTime])]) expect(time).toMatch(/-07:00$/);
   });
+  it('reads a name a station and street corners share as the station, its corners included, unless a corner is named in full', async () => {
+    // A rail station, a bus stop at its door, and a bus stop on a far street named for it.
+    const input = plannerInput();
+    input.files['stops.txt'] += 'X,Bay Point,37.1,-122\nNEAR,Bay Point Rd & 1st St,37.1005,-122\nFAR,Elm St & Bay Point Rd,37.3,-122\n';
+    input.files['routes.txt'] += 'Q,A,Q,2\nBUS,A,9,3\n';
+    input.files['trips.txt'] += 'Q,D,QT,Bay Point,0,\nBUS,D,BT,Elm St,0,\n';
+    input.files['stop_times.txt'] += 'QT,09:00:00,09:00:00,C,1,0,0\nQT,09:20:00,09:20:00,X,2,0,0\nBT,09:00:00,09:00:00,NEAR,1,0,0\nBT,09:30:00,09:30:00,FAR,2,0,0\n';
+    const { env } = await fixture(false, input);
+    const board = (await call(env, 'get_departures', { stop: 'Bay', coverage: 'sfbay', at: at('08:59:00') })).result.structuredContent;
+    expect(board.code).toBeUndefined();
+    expect(new Set(board.departures.map((row: any) => row.stopName))).toEqual(new Set(['Bay Point', 'Bay Point Rd & 1st St']));
+    const corner = (await call(env, 'get_departures', { stop: 'Elm St & Bay Point Rd', coverage: 'sfbay', at: at('09:00:00') })).result.structuredContent;
+    expect(corner.code).toBeUndefined();
+    expect(corner.departures.every((row: any) => row.stopName === 'Elm St & Bay Point Rd')).toBe(true);
+  });
   it('finds a name a rider gives with its operator ("Ashby BART station") among that operator\'s stops', async () => {
     const input = plannerInput();
     input.files['agency.txt'] += 'BA,BART,https://bart.gov,America/Los_Angeles\n';
