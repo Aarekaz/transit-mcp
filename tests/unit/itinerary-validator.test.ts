@@ -27,6 +27,15 @@ describe('independent itinerary validation against canonical stop-times', () => 
     expect(await recheck('09:11:00')).toMatchObject({ valid: true, reasons: [] });
     expect(await recheck('09:13:00')).toMatchObject({ valid: false, reasons: ['MISSED_CONNECTION'], transferFailures: [{ fromLegIndex: 0, toLegIndex: 1, reasons: ['MISSED_CONNECTION'] }] });
   });
+  it('rechecks a leg observed in one feed against that feed, not the oldest feed of a combined read', async () => {
+    const f = await plannerFixture(), candidate = golden(f), leg = candidate.legs[0] as TransitLeg, now = Date.parse(f.query.now) / 1000;
+    leg.status = candidate.status = 'realtime'; leg.realtimeTimestampSeconds = now;
+    // A bus feed published 30 s before the rail feed this leg was read from.
+    const source = { ...f.source, recheck: true, realtime: { version: f.version, producerTimestampSeconds: now - 30, receivedAtSeconds: now - 30,
+      payload: [{ entityId: 'first', tripInstanceRef: leg.tripInstanceRef, stopId: 'A', stopSequence: 1, status: 'realtime' as const, departureTimeSeconds: Date.parse(at('09:00:00')) / 1000 }] } };
+    expect((await validateItinerary(candidate, source)).reasons).toContain('REALTIME_PROVENANCE');
+    expect(await validateItinerary(candidate, { ...source, realtimeNewestSeconds: now })).toMatchObject({ valid: true });
+  });
   it('requires the least authoritative transit leg for a mixed journey', async () => {
     const input = transferInput(); input.files['trips.txt'] = input.files['trips.txt'].replaceAll(',block', ',');
     const f = await plannerFixture(input), candidate = goldenTransfer(f), now = Date.parse(f.query.now) / 1000;

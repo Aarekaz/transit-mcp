@@ -194,7 +194,7 @@ export async function validateItinerary(itinerary: Itinerary, source: Validation
         for (const reason of source.realtimeReasons?.length ? source.realtimeReasons : ['REALTIME_UNAVAILABLE']) reject(reason);
       } else if (live) {
         // As issued: a realtime leg names an observation no newer than this one.
-        if (leg.status === 'realtime' ? !(Number.isFinite(leg.realtimeTimestampSeconds) && leg.realtimeTimestampSeconds! > 0 && leg.realtimeTimestampSeconds! <= stamp!) : leg.realtimeTimestampSeconds !== undefined) reject('REALTIME_PROVENANCE');
+        if (leg.status === 'realtime' ? !(Number.isFinite(leg.realtimeTimestampSeconds) && leg.realtimeTimestampSeconds! > 0 && leg.realtimeTimestampSeconds! <= (source.realtimeNewestSeconds ?? stamp!)) : leg.realtimeTimestampSeconds !== undefined) reject('REALTIME_PROVENANCE');
         leaves = departurePrediction === undefined ? scheduledDeparture : departurePrediction * 1000;
         if (leaves < currentTime) { if (previous) rejectTransfer('MISSED_CONNECTION', index - 1, index); else reject('MISSED_CONNECTION'); }
         currentTime = arrives = arrivalPrediction === undefined ? scheduledArrival : arrivalPrediction * 1000;

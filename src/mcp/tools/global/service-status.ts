@@ -192,11 +192,12 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       canonicalShards.push(...schedule.shards.map(item => item.shard));
       for (const leg of itinerary.legs) if (leg.kind === 'transit') addTrip(leg.tripInstanceRef, schedule.shards.map(item => item.shard), leg.boardSequence, leg.alightSequence,
         { start: Date.parse(leg.departureTime) / 1000, end: Date.parse(leg.arrivalTime) / 1000 });
-      const realtime = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', nowSeconds, handler.mcpReq.signal);
+      const realtime = await readFeed<NormalizedStopUpdate>(context, data, 'trip_updates', nowSeconds, handler.mcpReq.signal, [], legFeeds.length ? legFeeds : undefined);
+      const stamps = realtime.parts.flatMap(part => part.payload !== null && part.producerTimestampSeconds !== undefined ? [part.producerTimestampSeconds] : []);
       realtime.reasons.forEach(reason => resultReasons.add(reason));
       if (realtime) sources.push(...realtimeSource(data, realtime, 'trip_updates', nowSeconds));
       const validation = await validateItinerary(itinerary as Parameters<typeof validateItinerary>[0], { manifest: data.manifest, shards: schedule.shards.map(item => item.shard), now,
-        recheck: true, realtimeReasons: realtime.reasons,
+        recheck: true, realtimeReasons: realtime.reasons, ...(stamps.length ? { realtimeNewestSeconds: Math.max(...stamps) } : {}),
         realtimeMaxAgeSeconds: data.coverage.thresholds.tripUpdates.realtimeSeconds,
         realtime: realtime?.version && realtime.receivedAtSeconds !== undefined ? { ...realtime, payload: scheduledRealtimeRows(realtime.payload), version: realtime.version, receivedAtSeconds: realtime.receivedAtSeconds } : undefined }, handler.mcpReq.signal);
       journeyValid = validation.valid; journeyReasons = validation.reasons;
