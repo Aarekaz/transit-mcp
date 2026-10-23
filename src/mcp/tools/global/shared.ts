@@ -293,19 +293,34 @@ export function stopPlaces(data: TransitData, query: string): Place[] {
   // Entrances lead into a station; they are never where a journey boards.
   const boardable = (list: Candidate[]) => { const kept = list.filter(candidate => candidate.stopType !== 'entrance' && candidate.stopType !== 'other'); return kept.length ? kept : list; };
   const all = boardable(candidates(data, query, 'stop')), exact = all.filter(candidate => ambiguityCandidate(data, candidate, query)), matches = exact.length ? exact : all;
+  // A name no stop carries exactly, matching stations ("Embarcadero" BART) and street stops that
+  // only carry it as a cross street ("The Embarcadero & Folsom St"), means the stations: street
+  // stops join a station's place when beside it, and are never a place of their own.
+  const stationsFirst = !exact.length && matches.some(match => !streetStop(match));
+  const shown = (list: Candidate[]) => stationsFirst ? list.filter(match => !streetStop(match)) : list;
   const alias = exact.length > 0 && aliasStopNames(data, normalizeEntityName(query)).size > 0;
   const roots = matches.map(match => (stationOf(data, match.ref) ?? match.ref) as TransitRef);
   const complex = stationComplexes(data, roots.filter(root => stopsByRef(data).has(root)));
   const places: Place[] = [], placed = new Set<number>();
   for (const [at, seed] of matches.entries()) {
-    if (placed.has(at)) continue;
-    const group = matches.flatMap((match, other) => !placed.has(other) && (other === at || alias || complex.get(roots[at]!) !== undefined && complex.get(roots[at]!) === complex.get(roots[other]!) ||
-      metresBetween(seed.coordinates, match.coordinates) <= PLACE_RADIUS_METRES) ? [other] : []);
+    if (placed.has(at) || stationsFirst && streetStop(seed)) continue;
+    // Stops named for the seed and more (its gates, bays: "Ferry Building Gate G") belong to it a
+    // little further out; another stop of the same name is another station.
+    const named = normalizeEntityName(seed.name);
+    const group = matches.flatMap((match, other) => {
+      if (placed.has(other)) return [];
+      const metres = metresBetween(seed.coordinates, match.coordinates);
+      return other === at || alias || complex.get(roots[at]!) !== undefined && complex.get(roots[at]!) === complex.get(roots[other]!) ||
+        metres <= PLACE_RADIUS_METRES || metres <= 2 * PLACE_RADIUS_METRES && normalizeEntityName(match.name).startsWith(`${named} `) ? [other] : [];
+    });
     for (const other of group) placed.add(other);
-    places.push({ candidate: sameStation(data, group.map(other => matches[other]!))[0]!, members: [...new Set(group.map(other => roots[other]!))] });
+    places.push({ candidate: sameStation(data, shown(group.map(other => matches[other]!)))[0]!, members: [...new Set(group.map(other => roots[other]!))] });
   }
   return places;
 }
+const HEAVY_MODES = new Set(['subway', 'rail', 'ferry', 'monorail']);
+/** A stop named for the corner it stands on (not a named station), served only by street-running lines. */
+const streetStop = (candidate: Candidate) => !candidate.modes?.some(mode => HEAVY_MODES.has(mode)) && /&|\//.test(candidate.name) && !/\bstation\b/i.test(candidate.name);
 /** The stations a stop reference stands for: its whole complex. */
 export const refPlace = (data: TransitData, ref: string): TransitRef[] => [asTransitRef(ref), ...complexStations(data, ref).map(asTransitRef)];
 const metresBetween = (a: Candidate['coordinates'], b: Candidate['coordinates']) => {
