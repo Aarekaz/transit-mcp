@@ -40,6 +40,14 @@ export const SFBAY_COVERAGE = {
   displayName: SFBAY_REGION.displayName,
   aliases: reviewedAliases.coverageAliases.map(alias => alias.name),
   placeAliases: reviewedAliases.places,
+  // 511 SF Bay operator IDs (https://511.org/open-data/transit, operators endpoint).
+  operators: [
+    { names: ['BART'], agencies: ['BA'] }, { names: ['Caltrain'], agencies: ['CT'] }, { names: ['Muni', 'SFMTA'], agencies: ['SF'] },
+    { names: ['VTA'], agencies: ['SC'] }, { names: ['AC Transit'], agencies: ['AC'] }, { names: ['SamTrans'], agencies: ['SM'] },
+    { names: ['Golden Gate Transit'], agencies: ['GG'] }, { names: ['Golden Gate Ferry'], agencies: ['GF'] }, { names: ['SF Bay Ferry', 'Bay Ferry'], agencies: ['SB'] },
+    { names: ['Capitol Corridor', 'Amtrak'], agencies: ['AM'] }, { names: ['ACE'], agencies: ['CE'] }, { names: ['SMART'], agencies: ['SA'] },
+    { names: ['AirTrain'], agencies: ['SI'] },
+  ],
   feeds: [{ id: 'sf511', realtime: SFBAY_REGION.realtime.feeds }],
   // Populated from actual agency IDs by the schedule compiler, not feed IDs.
   agencyTimezones: {},

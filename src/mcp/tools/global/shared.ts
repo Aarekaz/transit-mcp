@@ -251,9 +251,44 @@ export function candidates(data: TransitData, query: string, kind?: string): Can
 /** Candidates with their rank, so results from several coverages can be merged in order. */
 export function rankedCandidates(data: TransitData, query: string, kind?: string): { entity: Candidate; rank: number[] }[] {
   const exact = rankedMatches(data, query, kind, false);
+  // "16th St Mission BART": no stop name begins so, so match the rest among that operator's stops.
+  if (!exact.some(item => item.rank[0]! <= 1) && kind !== 'route' && kind !== 'agency') {
+    const operator = operatorQuery(data, query);
+    const served = operator && rankedCandidates(data, operator.rest, kind).filter(item => operator.serves(item.entity));
+    if (served && served.length) return served;
+  }
   // Nothing by name: try misspellings, ranked after every real match.
   return exact.length || normalizeEntityName(query).length < 3 ? exact : rankedMatches(data, query, kind, true);
 }
+/** The operator a query names, and the rest of it; null unless something is left to match. */
+function operatorQuery(data: TransitData, query: string): { rest: string; serves: (entity: Candidate) => boolean } | null {
+  const words = normalizeEntityName(query).split(' ');
+  for (const operator of data.coverage.operators ?? []) for (const name of operator.names) {
+    const own = normalizeEntityName(name).split(' ');
+    const at = words.findIndex((_, start) => own.every((word, offset) => words[start + offset] === word));
+    if (at < 0) continue;
+    const rest = [...words.slice(0, at), ...words.slice(at + own.length)].join(' ');
+    if (!significant(rest).length) continue;
+    return { rest, serves: entity => entity.kind === 'stop' && (operator.feeds?.includes(entity.feed) ||
+      !!operator.agencies && stopAgencies(data, entity).some(agency => operator.agencies!.includes(agency))) };
+  }
+  return null;
+}
+/** Agency IDs whose lines serve a stop or its station's platforms. */
+function stopAgencies(data: TransitData, entity: Candidate): string[] {
+  const index = data.indexes.find(index => index.feedId === entity.feed);
+  if (!index) return [];
+  let agencies = stopAgencyCache.get(index);
+  if (!agencies) {
+    const routes = new Map(index.routes.map(route => [route.ref as string, parseTransitRef(route.agencyRef)?.id ?? '']));
+    agencies = new Map();
+    for (const stop of index.stops) for (const ref of [stop.ref, stop.parentStationRef].filter(Boolean) as string[])
+      agencies.set(ref, [...new Set([...agencies.get(ref) ?? [], ...(index.stopRoutes[stop.ref as TransitRef] ?? []).map(route => routes.get(route) ?? '')])]);
+    stopAgencyCache.set(index, agencies);
+  }
+  return agencies.get(entity.ref) ?? [];
+}
+const stopAgencyCache = new WeakMap<DiscoveryIndex, Map<string, string[]>>();
 export const compareRanks = (a: number[], b: number[]) => { for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) - (b[i] ?? 0); return 0; };
 function rankedMatches(data: TransitData, query: string, kind: string | undefined, fuzzy: boolean): { entity: Candidate; rank: number[] }[] {
   const normalized = normalizeEntityName(query), aliasStops = aliasStopNames(data, normalized);
@@ -292,7 +327,9 @@ export const PLACE_RADIUS_METRES = 400;
 export function stopPlaces(data: TransitData, query: string): Place[] {
   // Entrances lead into a station; they are never where a journey boards.
   const boardable = (list: Candidate[]) => { const kept = list.filter(candidate => candidate.stopType !== 'entrance' && candidate.stopType !== 'other'); return kept.length ? kept : list; };
-  const all = boardable(candidates(data, query, 'stop')), exact = all.filter(candidate => ambiguityCandidate(data, candidate, query)), matches = exact.length ? exact : all;
+  // Exact by the name the rider gave, or by it without an operator ("Pentagon Metrorail").
+  const operator = operatorQuery(data, query);
+  const all = boardable(candidates(data, query, 'stop')), exact = all.filter(candidate => ambiguityCandidate(data, candidate, query) || !!operator && ambiguityCandidate(data, candidate, operator.rest)), matches = exact.length ? exact : all;
   // A name no stop carries exactly, matching stations ("Embarcadero" BART) and street stops that
   // only carry it as a cross street ("The Embarcadero & Folsom St"), means the stations: street
   // stops join a station's place when beside it, and are never a place of their own.
