@@ -17,7 +17,7 @@ import type { ScheduleShard } from '../../../transit/gtfs/static/schema';
 import { AlertScopeLimitError, expandAlertScopes, matchesAlertSelector, resolveAlertSelector, type AlertScope } from '../../../transit/gtfs/realtime/alert-match';
 import { itinerarySchema } from './plan';
 import { blockedStations, currentOutage, outageStations, stationOf, type EquipmentOutage } from '../../../transit/accessibility/equipment';
-import { complete, MAX_DISCOVERY_CANDIDATES, closestStops, localTime, coverageTimezone, residentShards, TransitToolError, stopPlaces, ambiguousPlaces, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
+import { complete, candidates, exactCandidate, MAX_DISCOVERY_CANDIDATES, closestStops, localTime, coverageTimezone, residentShards, TransitToolError, stopPlaces, ambiguousPlaces, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
 
 /** Per-alert detail bound: a city-wide status call stays readable for a model. */
 export const ALERT_DETAIL_LIMIT = 20;
@@ -67,7 +67,7 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
     title: 'Transit service status', description: 'Check disruptions, delays, closures, elevator and escalator outages, or revalidate a chosen itinerary without replacing it. Scope by coverage, a station name with its coverage (stop), or an agency, route, stop or dated trip reference; a station covers its complex. Aggregate scopes include canonical service in the next 24 hours. equipment lists elevator/escalator outages: accessiblePath marks the step-free route, blocksStepFree marks stations step-free plan_trip avoids, and alternativeRoute is the agency\'s way around. Use get_vehicle_status for an observed vehicle location.',
     annotations: readOnlyLive('Transit service status'),
     // One flat object, as for find_transit: the allowed combinations are checked in the handler.
-    inputSchema: z.strictObject({ coverage: coverageSchema.optional(), ref: boundedText.optional().describe('Agency, route, stop or dated trip reference.'),
+    inputSchema: z.strictObject({ coverage: coverageSchema.optional(), ref: boundedText.optional().describe('Agency, route, stop or dated trip reference; or a line\'s name ("L", "Red Line") with coverage.'),
       stop: boundedText.optional().describe('Station name, e.g. "Fulton St", with coverage; a station covers its complex.'),
       itinerary: z.record(z.string(), z.unknown()).optional().describe('An itinerary exactly as plan_trip returned it; validated strictly against that contract.') }),
     outputSchema: z.strictObject({ ...resultShape, alerts: z.array(z.strictObject({ id: z.string(), agencyText: z.strictObject({ title: z.string(), description: z.string(), label: z.literal('agency_supplied') }),
@@ -80,6 +80,18 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       equipment: equipmentSchema.optional().describe('Elevator and escalator outages in scope, where the coverage publishes them.') }),
   }, async (args, handler) => guarded(handler, () => traced('get_service_status', async () => {
     checkState(handler);
+    // A line by name with its region ("L", "Red Line"): the line it names.
+    if (args.ref && !parseTransitRef(args.ref) && args.coverage !== undefined && !args.stop && !args.itinerary) {
+      const coverageId = getCoverage(args.coverage)?.id, named = coverageId ? await loadData(context, coverageId, handler.mcpReq.signal) : null;
+      const name = args.ref.replace(/\s+line$/i, ''), matched = named ? candidates(named, name, 'route').filter(line => exactCandidate(named, line, name)) : [];
+      // A line named exactly so ("1") over IDs and folded words that also match ("N" for North);
+      // one line copied into several feeds (NYC buses) is one line.
+      const shown = matched.filter(line => line.name.split(' ')[0]!.toLowerCase() === name.trim().toLowerCase());
+      const lines = (shown.length ? shown : matched).filter((line, at, list) => list.findIndex(other => other.name === line.name) === at);
+      if (lines.length > 1) throw new TransitToolError('ENTITY_AMBIGUOUS', lines.slice(0, MAX_DISCOVERY_CANDIDATES), `"${sanitizeTransitText(name, 80)}" names ${lines.length} lines (${lines.slice(0, 5).map(line => line.name).join('; ')}): pick one from the conversation and retry with its ref.`);
+      if (lines.length) args = { ref: lines[0]!.ref };
+      else throw new TransitToolError('ENTITY_NOT_FOUND', [], 'No line has that name here. Use find_transit to look it up, then pass its ref.');
+    }
     // Agents add the region to a ref or itinerary, which name their own: a matching one is redundant.
     if (args.coverage !== undefined && !args.stop && (args.ref ?? args.itinerary) !== undefined) {
       const own = args.ref ? parseTransitRef(args.ref)?.coverage : (args.itinerary as { coverageId?: unknown }).coverageId;

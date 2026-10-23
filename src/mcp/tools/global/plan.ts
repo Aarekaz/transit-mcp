@@ -43,7 +43,7 @@ type Reading = { endpoint: JourneyEndpoint; stops: TransitRef[]; label?: string 
 const MAX_READINGS = 3;
 
 export const planInput = z.strictObject({ origin: endpointSchema, destination: endpointSchema, coverage: coverageSchema.optional(), departAt: instantSchema.optional(),
-  windowSeconds: z.number().int().min(1).max(604800).default(7200), maxWalkMetres: z.number().min(0).max(800).default(800), maxTransfers: z.number().int().min(0).max(4).default(3),
+  windowSeconds: z.number().int().min(1).max(604800).default(7200), maxWalkMetres: z.number().min(0).default(800).describe('Walking allowed at each end and between rides; more than 800 is taken as 800.'), maxTransfers: z.number().int().min(0).max(4).default(3),
   accessibility: z.enum(['no_preference', 'step_free']).default('no_preference').describe('step_free: only platforms reachable without stairs, avoiding current elevator outages.'),
   routes: z.array(boundedText).min(1).max(4).optional().describe('Route refs (from find_transit) the journey may ride, e.g. the lines you would take: BART from SFO, then a Muni line. The server finds the actual trips, boarding stops, transfers and walks on only these routes and validates them. Works where full search is unavailable (SF Bay) and for buses.') });
 export function registerPlanTool(server: McpServer, context: MetroMcpContext): void {
@@ -53,8 +53,10 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext): v
     inputSchema: planInput,
     outputSchema: z.strictObject({ ...resultShape, itineraries: z.array(itinerarySchema).max(3), routeHints: routeHintsSchema.optional(),
       notice: z.string().optional().describe('Set when a name means several places: which, and how the trips are labelled.') }),
-  }, async (args, handler) => guarded(handler, () => traced('plan_trip', async () => {
+  }, async (input, handler) => guarded(handler, () => traced('plan_trip', async () => {
     checkState(handler);
+    // Agents ask for more walking than a validated journey allows: plan with the most there is.
+    const args = { ...input, maxWalkMetres: Math.min(800, input.maxWalkMetres) };
     const originCoverage = inferCoverage(args.origin), destinationCoverage = inferCoverage(args.destination);
     const coverageId = originCoverage ?? destinationCoverage ?? getCoverage(args.coverage ?? '')?.id ?? args.coverage;
     const noData = () => complete({ ...unavailable(coverageId), itineraries: [] });
@@ -271,5 +273,5 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext): v
     }) })).map(({ departureTime, arrivalTime, status, transfers, walkingMetres, legs, ...rest }) => ({ departureTime, arrivalTime, status, transfers, walkingMetres,
       ...(reading ? { reading } : {}), steps: riderSteps(legs), ...rest, legs })), ...(result.candidates.length ? {} : { routeHints: routeHints(data, resolved.origin!, resolved.destination!, walkMetres) }) };
     }
-  }), () => complete({ ...unavailable(args.coverage), itineraries: [] })));
+  }), () => complete({ ...unavailable(input.coverage), itineraries: [] })));
 }

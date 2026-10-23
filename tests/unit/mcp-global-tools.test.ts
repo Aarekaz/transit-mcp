@@ -448,7 +448,7 @@ describe('global transit MCP boundary', () => {
       // No selector lists the regions served.
       ['find_transit', [{}, { coverage: 'dc' }, { query: '91' }, { ref: ref('stop', 'A') }, { latitude: 37, longitude: -122 }], [{ query: '91', extra: true }], [{ ref: 'x', query: '91' }, { latitude: 37 }]],
       // coverage is a closed list: region ids and their own names, nothing else.
-      ['get_service_status', [{ ref: ref('route', 'R') }, { ref: ref('route', 'R'), coverage: 'sfbay' }, { coverage: 'sfbay' }, { coverage: 'Washington DC' }], [{ coverage: 'sfbay', extra: true }, { coverage: 'Mars' }], [{}, { ref: 'x', coverage: 'sfbay' }, { ref: ref('route', 'R'), coverage: 'dc' }, { stop: 'Fulton St' }]],
+      ['get_service_status', [{ ref: ref('route', 'R') }, { ref: ref('route', 'R'), coverage: 'sfbay' }, { coverage: 'sfbay' }, { coverage: 'Washington DC' }], [{ coverage: 'sfbay', extra: true }, { coverage: 'Mars' }], [{}, { ref: ref('route', 'R'), coverage: 'dc' }, { stop: 'Fulton St' }]],
     ] as const) {
       const schema = result.tools.find((tool: any) => tool.name === name).inputSchema;
       // Clients flatten a top-level union, often to one branch; a forbidden property hides it from the model.
@@ -596,6 +596,27 @@ describe('global transit MCP boundary', () => {
     const corner = (await call(env, 'get_departures', { stop: 'Elm St & Bay Point Rd', coverage: 'sfbay', at: at('09:00:00') })).result.structuredContent;
     expect(corner.code).toBeUndefined();
     expect(corner.departures.every((row: any) => row.stopName === 'Elm St & Bay Point Rd')).toBe(true);
+  });
+  it('finds a name a rider gives with its operator ("Ashby BART station") among that operator\'s stops', async () => {
+    const input = plannerInput();
+    input.files['agency.txt'] += 'BA,BART,https://bart.gov,America/Los_Angeles\n';
+    input.files['stops.txt'] += 'X,Ashby,37.1,-122\nY,Ashby Ave & Adeline St,37.3,-122\n';
+    input.files['routes.txt'] += 'Q,BA,Red,1\nBUS,A,9,3\n';
+    input.files['trips.txt'] += 'Q,D,QT,Ashby,0,\nBUS,D,BT,Adeline,0,\n';
+    input.files['stop_times.txt'] += 'QT,09:00:00,09:00:00,X,1,0,0\nQT,09:20:00,09:20:00,C,2,0,0\nBT,09:00:00,09:00:00,Y,1,0,0\nBT,09:30:00,09:30:00,C,2,0,0\n';
+    const { env } = await fixture(false, input);
+    const board = (await call(env, 'get_departures', { stop: 'Ashby BART station', coverage: 'sfbay', at: at('08:59:00') })).result.structuredContent;
+    expect(board.code).toBeUndefined();
+    expect(board.departures.map((row: any) => row.stopName)).toEqual(['Ashby']);
+  });
+  it('takes a line by name for its status, and more walking than a journey allows as the most it allows', async () => {
+    const { env } = await fixture(false);
+    const status = (await call(env, 'get_service_status', { coverage: 'sfbay', ref: 'R line' })).result;
+    expect(status.isError).toBeUndefined();
+    expect((await call(env, 'get_service_status', { coverage: 'sfbay', ref: 'Nope' })).result.structuredContent.code).toBe('ENTITY_NOT_FOUND');
+    const plan = (await call(env, 'plan_trip', { origin: { ref: ref('stop', 'A') }, destination: { ref: ref('stop', 'C') }, departAt: at('08:59:00'), maxWalkMetres: 1200 })).result;
+    expect(plan.isError).toBeUndefined();
+    expect(plan.structuredContent.itineraries[0].maxWalkMetres).toBe(800);
   });
   it('plans each place a name means, labelled, and asks a question a rider can answer elsewhere', async () => {
     const input = plannerInput(); input.files['stops.txt'] += 'FAR,Origin,37.5,-122\n';
