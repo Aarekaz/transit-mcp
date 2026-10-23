@@ -16,6 +16,18 @@ describe('depart-at transit routing', () => {
     expect(result.diagnostics.estimatedWorkingSetBytes).toBeLessThan(64 * 1024 * 1024);
   });
 
+  it('walks from where a ride ends without looping between co-located platforms', async () => {
+    // NYC publishes each direction as its own platform at the station's point (A27N, A27S).
+    const input = plannerInput();
+    input.files['stops.txt'] = 'stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station\nA,Origin,37,-122,0,\n' +
+      'C,Destination,37.04,-122,1,\nCN,Destination,37.04,-122,0,C\nCS,Destination,37.04,-122,0,C\n';
+    input.files['stop_times.txt'] = 'trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type\nT,09:00:00,09:00:00,A,1,0,0\nT,09:20:00,09:20:00,CN,2,0,0\n';
+    const f = await plannerFixture(input);
+    const result = await planJourney({ ...f.query, destination: { latitude: 37.0413, longitude: -122 }, maxWalkMetres: 800 });
+    expect(result.candidates).not.toHaveLength(0);
+    for (const candidate of result.candidates) expect(candidate.legs.map(leg => `${leg.kind}:${typeof leg.to === 'string' ? leg.to : 'point'}`)).toEqual(['transit:' + ref('stop', 'CN'), 'walk:point']);
+  });
+
   it('keeps a valid slower transfer when the faster direct candidate fails validation', async () => {
     const input = transferInput();
     input.files['trips.txt'] = input.files['trips.txt'].replaceAll(',block', ',') + 'R,D,V,Destination,0,\n';

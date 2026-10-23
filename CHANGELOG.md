@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agency errors in the original tools say what the caller can do; `get_bus_predictions` validates the 7-digit stop ID.
 
 ### Fixed
+- Journeys no longer walk back and forth between a station's co-located platforms (NYC's A27N to A27S and back) or hop to one on the way out; the same rides reached by different walks are one journey, the shortest kept.
+- A walk between two stations that share a name ("34 St-Penn Station" to "34 St-Penn Station") names each by its lines in `steps`.
+- Every time in a `plan_trip` itinerary is in the agency's local time with its offset; walks and journey totals were in UTC.
 - `find_transit` and `get_service_status` advertise one flat input object instead of a union. Clients flatten a top-level union, often to its last branch, so models were told `query`, `ref` and `stop` were never allowed. Combinations that don't fit (`ref` with `query`, `stop` without `coverage`…) now return `INVALID_ARGUMENTS`, saying what to send.
 - Elevator and escalator outages were counted once per timetable in a coverage (twice in DC, about nine times in NYC).
 - Live data fetched while a question waited was judged against the question's own clock and rejected; timestamps up to 120 s ahead now count as new.

@@ -553,6 +553,19 @@ describe('global transit MCP boundary', () => {
     }
     expect((await call(env, 'get_departures', { stop: 'Origin', coverage: 'sfbay', at: at('08:59:00') })).result.structuredContent.departures).toHaveLength(1);
   });
+  it('names a walk between two same-named stations by their lines, in local time', async () => {
+    // Two stations named "Origin" 300 m apart, like 34 St-Penn Station for the A and for the 1.
+    const input = plannerInput();
+    input.files['stops.txt'] += 'Y,Origin,37.0027,-122\n';
+    input.files['trips.txt'] += 'S,D,U,Destination,0,\n';
+    input.files['stop_times.txt'] += 'U,09:10:00,09:10:00,Y,1,0,0\nU,09:25:00,09:25:00,C,2,0,0\n';
+    const { env } = await fixture(false, input);
+    const result = (await call(env, 'plan_trip', { origin: { ref: ref('stop', 'A') }, destination: { ref: ref('stop', 'C') }, departAt: at('09:01:00'), maxWalkMetres: 800 })).result.structuredContent;
+    const itinerary = result.itineraries[0];
+    expect(itinerary.steps[0]).toMatchObject({ kind: 'walk', fromName: 'Origin (R)', toName: 'Origin (S)' });
+    // One clock throughout: the agency's, walks included.
+    for (const time of [itinerary.departureTime, itinerary.arrivalTime, ...itinerary.legs.flatMap((leg: any) => [leg.departureTime, leg.arrivalTime])]) expect(time).toMatch(/-07:00$/);
+  });
   it('plans each place a name means, labelled, and asks a question a rider can answer elsewhere', async () => {
     const input = plannerInput(); input.files['stops.txt'] += 'FAR,Origin,37.5,-122\n';
     const { env } = await fixture(false, input);
