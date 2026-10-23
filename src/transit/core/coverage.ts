@@ -64,6 +64,8 @@ export interface CoverageManifest {
   placeAliases?: readonly { aliases: readonly string[]; stopNames: readonly string[] }[];
   /** Names riders add for an operator ("16th St Mission BART"): its agency IDs or feeds. */
   operators?: readonly { names: readonly string[]; agencies?: readonly string[]; feeds?: readonly string[] }[];
+  /** Places riders add to say where a stop is ("14 St, Manhattan"): boroughs, cities, states. */
+  localities?: readonly string[];
   /** `planning: false` keeps a feed out of journey planning while it still serves departures,
    * vehicles and alerts: the planner cannot search it within an isolate's memory. */
   feeds: readonly { id: string; realtime: readonly RealtimeFeedSpec[]; planning?: false }[];

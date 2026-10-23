@@ -26,7 +26,7 @@ Endpoint: `https://transitmcp.com/mcp` (Streamable HTTP, no auth).
 | Where's my train? | `get_vehicle_status` with the ride's `tripInstanceRef`, a route `ref`, or a `stop` |
 | What regions or lines exist? Find a station or a train | `find_transit` |
 
-Pass the rider's own words ("Penn Station", "SFO", "the Times Square station"). There's no need to look anything up first. The server works out which stations a name means.
+Pass the rider's own words ("Penn Station", "SFO", "the Times Square station", "Canal St on the 6", "Metro Center DC"). There's no need to look anything up first. The server works out which stations a name means.
 
 ## Names that mean more than one place
 
