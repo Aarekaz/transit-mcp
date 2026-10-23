@@ -13,6 +13,7 @@ import { at, goldenTransfer, plannerInput, ref, transferInput } from '../helpers
 import { createMockEnv } from '../setup';
 import type { Env } from '../../src/types';
 import { EXPECTED_TOOL_NAMES } from '../fixtures/mcp-contracts';
+import { complete } from '../../src/mcp/tools/global/shared';
 
 const globals = ['find_transit', 'plan_trip', 'get_departures', 'get_service_status', 'get_vehicle_status'];
 async function wire(env: Env, method: string, params: Record<string, unknown>, elicitation = false) {
@@ -553,6 +554,17 @@ describe('global transit MCP boundary', () => {
     }
     expect((await call(env, 'get_departures', { stop: 'Origin', coverage: 'sfbay', at: at('08:59:00') })).result.structuredContent.departures).toHaveLength(1);
   });
+  it('puts the answer first and cites each source once, schedules only for feeds it names', () => {
+    const schedule = (feedId: string) => ({ feedId, kind: 'gtfs_schedule', producerTimestamp: null, ingestedAt: '2026-10-22T00:00:00.000Z', ageSeconds: null, scheduleVersion: feedId });
+    const live = { ...schedule('subway'), kind: 'trip_updates', ageSeconds: 5 };
+    const result = complete({ asOf: '2026-10-22T00:00:00.000Z', sources: [schedule('subway'), schedule('bus'), schedule('rail'), live, live], attribution: [], status: 'realtime',
+      itineraries: [{ steps: [], legs: [{ tripRef: 'tr:nyc:subway:trip:MQ', sources: [schedule('subway'), live, live] }] }] }).structuredContent as any;
+    expect(Object.keys(result)).toEqual(['asOf', 'status', 'itineraries', 'sources', 'attribution']);
+    expect(result.sources).toEqual([schedule('subway'), live]);
+    expect(result.itineraries[0].legs[0].sources).toEqual([schedule('subway'), live]);
+    // Naming no feed, a result keeps every schedule it was answered from.
+    expect(complete({ asOf: '', sources: [schedule('bus'), schedule('rail')], attribution: [], status: 'unavailable' }).structuredContent.sources).toHaveLength(2);
+  });
   it('names a walk between two same-named stations by their lines, in local time', async () => {
     // Two stations named "Origin" 300 m apart, like 34 St-Penn Station for the A and for the 1.
     const input = plannerInput();
@@ -563,6 +575,8 @@ describe('global transit MCP boundary', () => {
     const result = (await call(env, 'plan_trip', { origin: { ref: ref('stop', 'A') }, destination: { ref: ref('stop', 'C') }, departAt: at('09:01:00'), maxWalkMetres: 800 })).result.structuredContent;
     const itinerary = result.itineraries[0];
     expect(itinerary.steps[0]).toMatchObject({ kind: 'walk', fromName: 'Origin (R)', toName: 'Origin (S)' });
+    // The rider's view leads; the exact legs for rechecking follow.
+    expect(Object.keys(itinerary).slice(0, 6)).toEqual(['departureTime', 'arrivalTime', 'status', 'transfers', 'walkingMetres', 'steps']);
     // One clock throughout: the agency's, walks included.
     for (const time of [itinerary.departureTime, itinerary.arrivalTime, ...itinerary.legs.flatMap((leg: any) => [leg.departureTime, leg.arrivalTime])]) expect(time).toMatch(/-07:00$/);
   });

@@ -4,7 +4,7 @@ import { DecodedShardCache } from '../../../transit/planner/schedule-index';
 import { formatInstant } from '../../../transit/planner/service-day';
 import { z } from 'zod';
 import type { MetroMcpContext, MetroRequestState } from '../../context';
-import { complete } from '../../shared';
+import { complete as completeResult } from '../../shared';
 import { getCoverage, getCoverages, networkPlanning, planningWithheld, type CoverageManifest } from '../../../transit/core/coverage';
 import { getCoverageMode } from '../../../regions/manifest';
 import { formatEntityRef, parseTransitRef, type TransitRef } from '../../../transit/core/refs';
@@ -67,11 +67,25 @@ export function errorResult(error: TransitToolError) {
   const message = error.code === 'ENTITY_NOT_FOUND' && error.candidates.length
     ? 'No transit entity matches that name. The candidates are the closest names, not matches: confirm one with the rider (or retry with the official station name) before using it.'
     : error.hint ?? messages[error.code];
-  return { ...complete(errorSchema.parse({ code: error.code, message: `${error.code}: ${message}`, candidates: error.candidates })), isError: true as const };
+  return { ...completeResult(errorSchema.parse({ code: error.code, message: `${error.code}: ${message}`, candidates: error.candidates })), isError: true as const };
 }
 /** Global tools never ask the user for input, so request state sent to one is not its own. */
 export function checkState(handler: ServerContext): void {
   if (handler.mcpReq.requestState<MetroRequestState>()) throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Transit selection state does not match this request');
+}
+/** A tool result, answer first: provenance goes last, each source once, and a schedule only
+ * for feeds the answer names (a region publishes dozens; a subway answer cites the subway). */
+export function complete<Structured extends Record<string, unknown>>(structured: Structured) {
+  const once = (sources: SourceStatus[]) => [...new Map(sources.map(source => [JSON.stringify(source), source])).values()];
+  const dedupe = (value: unknown): unknown => Array.isArray(value) ? value.map(dedupe)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key === 'sources' && Array.isArray(item) ? once(item) : dedupe(item)])) : value;
+  const { asOf, sources, attribution, ...answer } = structured as Record<string, unknown>;
+  if (!Array.isArray(sources)) return completeResult(structured);
+  const body = dedupe(answer) as Record<string, unknown>, all = once(sources as SourceStatus[]), text = JSON.stringify(body);
+  const named = new Set([...[...text.matchAll(/"tr:[^:"]+:([^:"]+):/g)].map(match => match[1]), ...[...text.matchAll(/"feedId":"([^"]+)"/g)].map(match => match[1]),
+    ...all.filter(source => source.kind !== 'gtfs_schedule').map(source => source.feedId)]);
+  const cited = all.filter(source => source.kind !== 'gtfs_schedule' || named.has(source.feedId));
+  return completeResult({ asOf, ...body, sources: named.size ? cited : all, attribution } as unknown as Structured);
 }
 export function metadata(coverageId?: string, data?: TransitData, asOf = new Date().toISOString()) {
   return { asOf, sources: data ? scheduleSources(data) : [], attribution: [...(getCoverage(coverageId ?? '')?.attribution ?? [])] };

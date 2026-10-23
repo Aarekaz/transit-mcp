@@ -2,10 +2,10 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { traced } from '../../../transit/trace';
 import type { MetroMcpContext } from '../../context';
-import { complete, readOnlyLive } from '../../shared';
+import { readOnlyLive } from '../../shared';
 import { getCoverage, getCoverages } from '../../../transit/core/coverage';
 import { getCoverageMode } from '../../../regions/manifest';
-import { MAX_DISCOVERY_CANDIDATES, closestStops, compareRanks, rankedCandidates, ambiguityCandidate, describeCandidate, boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, effectiveCapabilities, entities, guarded, trainCandidates, inferCoverage, loadData, metadata, resultShape, unavailable, validRef, TransitToolError } from './shared';
+import { complete, MAX_DISCOVERY_CANDIDATES, closestStops, compareRanks, rankedCandidates, ambiguityCandidate, describeCandidate, boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, effectiveCapabilities, entities, guarded, trainCandidates, inferCoverage, loadData, metadata, resultShape, unavailable, validRef, TransitToolError } from './shared';
 
 export const entitySchema = candidateSchema.extend({ scheduleVersion: z.string(), resourceUri: z.string(), coordinates: coordinatesSchema.nullable(), routeRefs: z.array(z.string()),
   agencyRef: z.string().nullable(), mode: z.string().nullable(), patterns: z.array(z.strictObject({ id: z.string(), directionId: z.number().int().nullable(), stopRefs: z.array(z.string()) })),

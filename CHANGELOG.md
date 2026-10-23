@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A timetable the post-publish canary rolled back comes back on its own once the live feed has moved onto it (`rollForwardSchedules`, every 5 minutes): providers publish the next timetable before the service day it starts.
 
 ### Changed
+- Results lead with the answer: `sources` and `attribution` come last, each source appears once, and timetable sources cite only the feeds the answer names (a subway trip no longer lists every bus feed). `plan_trip` itineraries open with times, status, transfers, walking and `steps`; the exact `legs` follow.
 - A place name resolves to a place, not a stop. A name for one place (a station complex, stations within about 400 m, or every stop a reviewed alias names, such as SFO's terminals) plans from or to all its stations, and departure, vehicle and status boards cover all its stations in a network; `otherStations` lists the same place in other networks (the LIRR at Penn Station). A name for different places gets the best trip from each (up to three) in `plan_trip`, labelled in `reading` and explained in `notice`; the other tools return `ENTITY_AMBIGUOUS` with a question a rider can answer.
 - `plan_trip` no longer asks the user to choose stop IDs through elicitation. `SELECTION_DECLINED` is gone.
 - `coverage` is a closed list in every global tool's schema: `dc`, `nyc`, `sfbay`, or a region's own name ("SF", "Washington DC"), like the original tools' `city`. Models pick it from the list; anything else is refused with the valid ids.

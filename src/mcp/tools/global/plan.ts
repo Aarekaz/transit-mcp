@@ -3,7 +3,7 @@ import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import { z } from 'zod';
 import { traced } from '../../../transit/trace';
 import type { MetroMcpContext } from '../../context';
-import { complete, readOnlyLive } from '../../shared';
+import { readOnlyLive } from '../../shared';
 import { getCoverage, networkPlanning, planningFeedIds, planningWithheld } from '../../../transit/core/coverage';
 import { parseTransitRef } from '../../../transit/core/refs';
 import { planNetworkJourney } from '../../../transit/planner/network-plan';
@@ -13,7 +13,7 @@ import type { TransitRef } from '../../../transit/core/refs';
 import type { SourceStatus, VerificationReason } from '../../../transit/core/results';
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { DecodedShardCache } from '../../../transit/planner/schedule-index';
-import { MAX_DISCOVERY_CANDIDATES, closestStops, residentShards, TransitToolError, asTransitRef, boundedText, routeHints, routeHintsSchema, routeName, effectiveCapabilities, journeyAgencies, validRef, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, stopPlaces, refPlace, placeLabel, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, localTime, coverageTimezone, describeCandidate, type TransitData } from './shared';
+import { complete, MAX_DISCOVERY_CANDIDATES, closestStops, residentShards, TransitToolError, asTransitRef, boundedText, routeHints, routeHintsSchema, routeName, effectiveCapabilities, journeyAgencies, validRef, checkState, coordinatesSchema, coverageSchema, endpointSchema, guarded, inferCoverage, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, stopPlaces, refPlace, placeLabel, scheduledRealtimeRows, sourceSchema, stepFreeAccess, unavailable, localTime, coverageTimezone, describeCandidate, type TransitData } from './shared';
 
 const journeyEndpoint = z.union([z.string(), coordinatesSchema]);
 const transitLeg = z.strictObject({ kind: z.literal('transit'), from: z.string(), to: z.string(), tripRef: z.string(), tripInstanceRef: z.string(), serviceDate: z.string(), instanceStartSeconds: z.number(),
@@ -268,7 +268,8 @@ export function registerPlanTool(server: McpServer, context: MetroMcpContext): v
       const route = routes.find(route => route.ref === leg.routeRef)!;
       return { ...leg, mode: route.mode, agencyRef: route.agencyRef, intermediateStopCount: (sequences.get(leg.tripRef) ?? []).filter(sequence => sequence > leg.boardSequence && sequence < leg.alightSequence).length,
         transferRequired: candidate.legs.slice(0, index).some(prior => prior.kind === 'transit') && !leg.continuation, sources: meta.sources.filter(source => source.scheduleVersion === leg.scheduleVersion), validatorOutcome: 'valid' as const };
-    }) })).map(itinerary => ({ ...itinerary, steps: riderSteps(itinerary.legs), ...(reading ? { reading } : {}) })), ...(result.candidates.length ? {} : { routeHints: routeHints(data, resolved.origin!, resolved.destination!, walkMetres) }) };
+    }) })).map(({ departureTime, arrivalTime, status, transfers, walkingMetres, legs, ...rest }) => ({ departureTime, arrivalTime, status, transfers, walkingMetres,
+      ...(reading ? { reading } : {}), steps: riderSteps(legs), ...rest, legs })), ...(result.candidates.length ? {} : { routeHints: routeHints(data, resolved.origin!, resolved.destination!, walkMetres) }) };
     }
   }), () => complete({ ...unavailable(args.coverage), itineraries: [] })));
 }
