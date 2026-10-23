@@ -448,7 +448,7 @@ describe('global transit MCP boundary', () => {
       // No selector lists the regions served.
       ['find_transit', [{}, { coverage: 'dc' }, { query: '91' }, { ref: ref('stop', 'A') }, { latitude: 37, longitude: -122 }], [{ query: '91', extra: true }], [{ ref: 'x', query: '91' }, { latitude: 37 }]],
       // coverage is a closed list: region ids and their own names, nothing else.
-      ['get_service_status', [{ ref: ref('route', 'R') }, { coverage: 'sfbay' }, { coverage: 'Washington DC' }], [{ coverage: 'sfbay', extra: true }, { coverage: 'Mars' }], [{}, { ref: 'x', coverage: 'sfbay' }, { stop: 'Fulton St' }]],
+      ['get_service_status', [{ ref: ref('route', 'R') }, { ref: ref('route', 'R'), coverage: 'sfbay' }, { coverage: 'sfbay' }, { coverage: 'Washington DC' }], [{ coverage: 'sfbay', extra: true }, { coverage: 'Mars' }], [{}, { ref: 'x', coverage: 'sfbay' }, { ref: ref('route', 'R'), coverage: 'dc' }, { stop: 'Fulton St' }]],
     ] as const) {
       const schema = result.tools.find((tool: any) => tool.name === name).inputSchema;
       // Clients flatten a top-level union, often to one branch; a forbidden property hides it from the model.
