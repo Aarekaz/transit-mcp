@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Transit MCP · teaser</title>
+<style>
+  @font-face { font-family: 'Inter Tight'; font-weight: 500; src: url(https://cdn.jsdelivr.net/npm/@fontsource/inter-tight@5.1.0/files/inter-tight-latin-500-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'Inter Tight'; font-weight: 600; src: url(https://cdn.jsdelivr.net/npm/@fontsource/inter-tight@5.1.0/files/inter-tight-latin-600-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'Inter'; font-weight: 400; src: url(https://cdn.jsdelivr.net/npm/@fontsource/inter@5.1.0/files/inter-latin-400-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'Inter'; font-weight: 500; src: url(https://cdn.jsdelivr.net/npm/@fontsource/inter@5.1.0/files/inter-latin-500-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'Inter'; font-weight: 600; src: url(https://cdn.jsdelivr.net/npm/@fontsource/inter@5.1.0/files/inter-latin-600-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'Instrument Serif'; font-style: italic; src: url(https://cdn.jsdelivr.net/npm/@fontsource/instrument-serif@5.1.0/files/instrument-serif-latin-400-italic.woff2) format('woff2'); }
+  @font-face { font-family: 'JetBrains Mono'; font-weight: 400; src: url(https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.1.0/files/jetbrains-mono-latin-400-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'JetBrains Mono'; font-weight: 500; src: url(https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.1.0/files/jetbrains-mono-latin-500-normal.woff2) format('woff2'); }
+
+  :root {
+    --void: #05080f; --ink: #eef2f7; --muted: #8b97a8; --faint: #4a5568;
+    --accent: #ff6b1a; --live: #34d399; --glass: rgba(14, 21, 34, .72); --hair: rgba(255,255,255,.08);
+    --ui: 'Inter', system-ui, sans-serif; --display: 'Inter Tight', 'Inter', sans-serif;
+    --serif: 'Instrument Serif', Georgia, serif; --mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+  html, body { margin: 0; background: #000; }
+  body { display: grid; place-items: center; min-height: 100vh; }
+  #stage { position: relative; width: 1280px; height: 720px; overflow: hidden; background: var(--void); color: var(--ink); font-family: var(--ui); }
+  #stage canvas { position: absolute; inset: 0; width: 1280px; height: 720px; }
+  #glow { mix-blend-mode: screen; opacity: .85; }
+  #scene { will-change: filter; }
+  .vignette { position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(120% 90% at 62% 48%, transparent 40%, rgba(3,5,10,.55) 75%, rgba(3,5,10,.92) 100%); }
+  .grain { position: absolute; inset: -50%; opacity: .05; pointer-events: none; mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+
+  /* Chrome */
+  .brand { position: absolute; left: 48px; top: 40px; display: flex; align-items: center; gap: 12px; font: 600 17px/1 var(--display); letter-spacing: -.01em; }
+  .brand svg { width: 30px; height: 30px; }
+  .city { position: absolute; right: 44px; top: 36px; display: flex; align-items: center; gap: 10px; font: 500 12px/1 var(--mono); letter-spacing: .18em; color: var(--muted); text-transform: uppercase; }
+  .city .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 0 4px rgba(52,211,153,.14), 0 0 14px rgba(52,211,153,.8); }
+  .city b { color: var(--ink); font-weight: 500; }
+  .city .slot { position: relative; display: inline-block; height: 26px; overflow: hidden; width: 300px; }
+  .city .slot span { left: auto; right: 4px; top: 7px; display: inline-flex; align-items: center; gap: 10px; }
+  .city .slot span { position: absolute; left: 0; top: 1px; white-space: nowrap; }
+
+  /* Conversation card */
+  .card { position: absolute; left: 48px; bottom: 48px; width: 452px; padding: 22px 24px 22px; border-radius: 20px;
+    background: var(--glass); border: 1px solid var(--hair); backdrop-filter: blur(18px) saturate(140%);
+    box-shadow: 0 30px 80px -20px rgba(0,0,0,.7), inset 0 1px 0 rgba(255,255,255,.06); }
+  .label { font: 500 11px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--faint); }
+  .q { margin: 10px 0 18px; font: 500 23px/1.25 var(--ui); letter-spacing: -.015em; }
+  .q span { display: inline-block; white-space: pre; }
+  .tool { display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 14px; border-radius: 10px; background: rgba(0,0,0,.45); border: 1px solid var(--hair);
+    font: 400 13.5px/1 var(--mono); color: #c9d3e0; white-space: nowrap; overflow: hidden; }
+  .tool .fn { color: var(--accent); font-weight: 500; }
+  .tool .arg { color: var(--muted); }
+  .tool .spin { margin-left: auto; width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255,255,255,.12); border-top-color: var(--accent); }
+  .tool .ok { margin-left: auto; color: var(--live); font-size: 12px; }
+  .ans { margin-top: 16px; display: flex; align-items: flex-end; gap: 16px; }
+  .big { font: 600 52px/0.9 var(--display); letter-spacing: -.04em; }
+  .big small { font-size: 22px; letter-spacing: -.01em; color: var(--muted); font-weight: 500; margin-left: 4px; }
+  .detail { padding-bottom: 3px; }
+  .line-chip { display: inline-flex; align-items: center; gap: 8px; font: 500 15px/1.2 var(--ui); }
+  .bullet { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font: 700 13px/1 var(--ui); color: #fff; }
+  .bar { width: 26px; height: 6px; border-radius: 3px; }
+  .sub { margin-top: 5px; font: 400 13px/1.3 var(--ui); color: var(--muted); }
+  .status { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px; padding: 5px 10px; border-radius: 99px; font: 500 11px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+    color: var(--live); background: rgba(52,211,153,.1); border: 1px solid rgba(52,211,153,.22); }
+  .status i { width: 6px; height: 6px; border-radius: 50%; background: var(--live); }
+
+  /* End card */
+  .end { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; }
+  .end-inner { display: flex; flex-direction: column; align-items: center; }
+  .mark { width: 112px; height: 112px; }
+  .title { margin-top: 26px; font: 600 64px/1 var(--display); letter-spacing: -.035em; }
+  .tag { margin-top: 14px; font: 400 27px/1.2 var(--ui); color: #c3ccd8; letter-spacing: -.015em; }
+  .tag em { font: italic 400 38px/1 var(--serif); color: var(--accent); letter-spacing: 0; }
+  .url { margin-top: 30px; display: inline-flex; align-items: center; gap: 12px; padding: 13px 20px; border-radius: 12px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.12);
+    font: 500 18px/1 var(--mono); }
+  .url .pfx { color: var(--muted); }
+  .facts { margin-top: 22px; display: flex; gap: 22px; font: 500 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+  .facts span { display: inline-flex; align-items: center; gap: 8px; }
+  .facts span::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+  .clients { margin-top: 26px; display: flex; align-items: center; gap: 22px; font: 400 13px/1 var(--ui); color: var(--faint); }
+  .clients img { height: 20px; filter: brightness(0) invert(1); opacity: .55; }
+
+  .map-label { position: absolute; font: 500 11px/1 var(--mono); letter-spacing: .18em; color: var(--muted); text-transform: uppercase; transform: translate(-50%, 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="scene" width="1280" height="720"></canvas>
+  <canvas id="glow" width="640" height="360"></canvas>
+  <div class="vignette"></div>
+
+  <div class="map-label" id="ml0">New York · 26 lines</div>
+  <div class="map-label" id="ml1">Washington DC · 6 lines</div>
+  <div class="map-label" id="ml2">SF Bay Area · 14 lines</div>
+
+  <div id="chrome">
+    <div class="brand"><svg viewBox="0 0 240 240" aria-hidden="true">
+      <circle cx="120" cy="120" r="106" stroke="#F7FAFC" stroke-width="16" fill="none"/>
+      <path d="M68 68V108H92L120 136" stroke="#1687F8" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <path d="M68 172V144H92L120 136" stroke="#1EAD70" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <path d="M172 68V108H148L120 136" stroke="#F04455" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <path d="M172 172V144H148L120 136" stroke="#EAA21A" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <circle cx="120" cy="136" r="22" fill="#fff" stroke="#F7FAFC" stroke-width="11"/><circle cx="120" cy="136" r="6" fill="#102A43"/>
+    </svg>Transit MCP</div>
+    <div class="city"><span class="slot" id="cityslot"></span></div>
+  </div>
+
+  <div id="cards"></div>
+
+  <div class="end" id="end"><div class="end-inner">
+    <svg class="mark" viewBox="0 0 240 240" aria-hidden="true">
+      <circle id="ring" cx="120" cy="120" r="106" stroke="#F7FAFC" stroke-width="12" fill="none" pathLength="1" stroke-dasharray="1 1" transform="rotate(-90 120 120)"/>
+      <path class="leg" d="M68 68V108H92L120 136" stroke="#1687F8" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" fill="none" pathLength="1"/>
+      <path class="leg" d="M68 172V144H92L120 136" stroke="#1EAD70" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" fill="none" pathLength="1"/>
+      <path class="leg" d="M172 68V108H148L120 136" stroke="#F04455" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" fill="none" pathLength="1"/>
+      <path class="leg" d="M172 172V144H148L120 136" stroke="#EAA21A" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" fill="none" pathLength="1"/>
+      <g id="hub"><circle cx="120" cy="136" r="22" fill="#fff" stroke="#F7FAFC" stroke-width="9"/><circle cx="120" cy="136" r="6" fill="#102A43"/></g>
+    </svg>
+    <div class="title" id="etitle">Transit MCP</div>
+    <div class="tag" id="etag">Plug your LLM into <em>transit.</em></div>
+    <div class="url" id="eurl"><span class="pfx">https://</span>transitmcp.com/mcp</div>
+    <div class="facts" id="efacts"><span>Free</span><span>No API key</span><span>NYC · DC · SF Bay</span></div>
+    <div class="clients" id="eclients">Add it to
+      <img src="../../public/client-claude.svg" alt="">
+      <img src="../../public/client-openai.svg" alt="">
+      <img src="../../public/client-cursor.svg" alt="">
+      <img src="../../public/client-gemini.svg" alt="">
+    </div>
+  </div></div>
+  <div class="grain"></div>
+  <div id="fade" style="position:absolute;inset:0;background:#000;pointer-events:none"></div>
+</div>
+
+<script src="lines.js"></script>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js';
+
+const DURATION = 14;
+window.DURATION = DURATION;
+const W = 1280, H = 720;
+
+// ---------- easing ----------
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const span = (t, a, b) => clamp((t - a) / (b - a));
+const easeOut = x => 1 - Math.pow(1 - x, 3);
+const easeInOut = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const expoOut = x => x === 1 ? 1 : 1 - Math.pow(2, -10 * x);
+const lerp = (a, b, k) => a + (b - a) * k;
+
+// ---------- scene ----------
+const canvas = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true, alpha: false });
+renderer.setPixelRatio(1); renderer.setSize(W, H, false); renderer.setClearColor(0x05080f, 1);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, W / H, 0.1, 400);
+
+// Cities in a row; each fitted to about 11 units.
+const CITIES = [
+  { key: 'nyc', x: -17, hero: '1', size: 12, focus: [-73.975, 40.735], radius: 13 },
+  { key: 'dc', x: 0, hero: 'Red', size: 11, focus: [-77.03, 38.905], radius: 11.5 },
+  { key: 'sfbay', x: 17, hero: 'Yellow-N', size: 13, focus: [-122.31, 37.73], radius: 13 },
+];
+
+const lineVert = `
+  attribute float aSide; attribute float aAlong;
+  varying float vSide; varying float vAlong;
+  void main() { vSide = aSide; vAlong = aAlong; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+const lineFrag = `
+  uniform vec3 uColor; uniform float uProgress; uniform float uTime; uniform float uLen; uniform float uEmph; uniform float uHalo; uniform float uOpacity; uniform float uSeed;
+  varying float vSide; varying float vAlong;
+  void main() {
+    float r = uProgress * 1.06 - vAlong;
+    if (r < 0.0) discard;
+    float edge = 1.0 - abs(vSide);
+    float a = uHalo > 0.5 ? pow(edge, 2.2) * 0.22 : smoothstep(0.0, 0.55, edge);
+    float head = exp(-r * 26.0) * (1.0 - step(1.0, uProgress));
+    // Trains: short bright dashes riding the line, both ways.
+    float s = vAlong * uLen;
+    float d1 = fract(s / 2.6 - uTime * 0.42 + uSeed);
+    float d2 = fract(s / 3.4 + uTime * 0.31 + uSeed * 1.7);
+    float pulse = smoothstep(0.93, 1.0, d1) + smoothstep(0.95, 1.0, d2) * 0.8;
+    vec3 c = uColor * (0.62 + 1.25 * pulse + 2.2 * head) + vec3(1.0) * (0.35 * pulse + 0.9 * head) * uEmph;
+    gl_FragColor = vec4(c * uEmph, a * uOpacity);
+  }`;
+const stopVert = `
+  attribute float aAlong; uniform float uProgress; uniform float uSize; varying float vOn;
+  void main() { vOn = step(aAlong, uProgress * 1.06); vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_PointSize = uSize * (60.0 / -mv.z); gl_Position = projectionMatrix * mv; }`;
+const stopFrag = `
+  uniform vec3 uColor; uniform float uEmph; uniform float uOpacity; varying float vOn;
+  void main() { if (vOn < 0.5) discard; vec2 p = gl_PointCoord - 0.5; float d = length(p); if (d > 0.5) discard;
+    float ring = smoothstep(0.5, 0.36, d); float core = smoothstep(0.26, 0.12, d);
+    gl_FragColor = vec4(mix(uColor, vec3(1.0), core) * uEmph, ring * uOpacity * 0.9); }`;
+
+function project(lines, size) {
+  const all = lines.flatMap(line => line.coords);
+  const lat0 = all.reduce((s, c) => s + c[1], 0) / all.length;
+  const k = Math.cos(lat0 * Math.PI / 180);
+  const xs = all.map(c => c[0] * k), ys = all.map(c => c[1]);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const extent = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  const scale = size / extent;
+  return c => new THREE.Vector3((c[0] * k - cx) * scale, 0, -(c[1] - cy) * scale);
+}
+
+function ribbon(points, width, y) {
+  const n = points.length, pos = new Float32Array(n * 2 * 3), side = new Float32Array(n * 2), along = new Float32Array(n * 2), idx = [];
+  let total = 0; const acc = [0];
+  for (let i = 1; i < n; i++) { total += points[i].distanceTo(points[i - 1]); acc.push(total); }
+  for (let i = 0; i < n; i++) {
+    const a = points[Math.max(0, i - 1)], b = points[Math.min(n - 1, i + 1)];
+    const t = new THREE.Vector3().subVectors(b, a).normalize();
+    const nrm = new THREE.Vector3(-t.z, 0, t.x).multiplyScalar(width / 2);
+    for (const [j, s] of [[0, -1], [1, 1]]) {
+      const p = points[i].clone().addScaledVector(nrm, s);
+      pos.set([p.x, y, p.z], (i * 2 + j) * 3); side[i * 2 + j] = s; along[i * 2 + j] = acc[i] / total;
+    }
+    if (i < n - 1) idx.push(i * 2, i * 2 + 1, i * 2 + 2, i * 2 + 1, i * 2 + 3, i * 2 + 2);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('aSide', new THREE.BufferAttribute(side, 1)); g.setAttribute('aAlong', new THREE.BufferAttribute(along, 1));
+  g.setIndex(idx);
+  return { geometry: g, length: total, acc };
+}
+
+const cityObjects = CITIES.map((city, ci) => {
+  const group = new THREE.Group(); group.position.x = city.x; scene.add(group);
+  const data = window.LINES[city.key];
+  const toXZ = project(data, city.size);
+  const lines = data.map((line, li) => {
+    const raw = line.coords.map(toXZ);
+    const curve = new THREE.CatmullRomCurve3(raw, false, 'centripetal', 0.5);
+    const pts = curve.getPoints(Math.max(24, raw.length * 8));
+    const y = li * 0.0015;
+    const color = new THREE.Color('#' + (line.color || 'cccccc'));
+    if (city.key === 'sfbay' && /^(Local|Limited|Express)/.test(line.name)) color.set('#d63b48'); // Caltrain red
+    const uniforms = (halo) => ({ uColor: { value: color }, uProgress: { value: 0 }, uTime: { value: 0 }, uLen: { value: 0 }, uEmph: { value: 1 }, uHalo: { value: halo }, uOpacity: { value: 1 }, uSeed: { value: (li * 0.37) % 1 } });
+    const mats = [];
+    for (const [width, halo] of [[0.34, 1], [0.05, 0]]) {
+      const { geometry, length } = ribbon(pts, width, y);
+      const mat = new THREE.ShaderMaterial({ vertexShader: lineVert, fragmentShader: lineFrag, uniforms: uniforms(halo), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+      mat.uniforms.uLen.value = length;
+      group.add(new THREE.Mesh(geometry, mat)); mats.push(mat);
+    }
+    // Stations along the line, revealed as the line draws through them.
+    const { acc, length } = ribbon(raw, 0.01, 0);
+    const sg = new THREE.BufferGeometry();
+    sg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(raw.flatMap(p => [p.x, y + 0.01, p.z])), 3));
+    sg.setAttribute('aAlong', new THREE.BufferAttribute(new Float32Array(acc.map(a => a / length)), 1));
+    const smat = new THREE.ShaderMaterial({ vertexShader: stopVert, fragmentShader: stopFrag, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      uniforms: { uColor: { value: color }, uProgress: { value: 0 }, uSize: { value: 3.2 }, uEmph: { value: 1 }, uOpacity: { value: 1 } } });
+    group.add(new THREE.Points(sg, smat)); mats.push(smat);
+    const delay = (li / data.length) * 0.55;
+    return { name: line.name, mats, delay, hero: line.name === city.hero, curve };
+  });
+  const projected = data.flatMap(line => line.coords.map(toXZ));
+  const focus = toXZ(city.focus).add(new THREE.Vector3(city.x, 0, 0));
+  return { ...city, group, lines, index: ci, focus, project: toXZ, south: Math.max(...projected.map(p => p.z)) };
+});
+
+// A faint dot field the networks sit on.
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(140, 70), new THREE.ShaderMaterial({ transparent: true, depthWrite: false,
+  uniforms: { uOpacity: { value: 1 } },
+  vertexShader: `varying vec2 vW; void main(){ vec4 w = modelMatrix * vec4(position,1.0); vW = w.xz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+  fragmentShader: `uniform float uOpacity; varying vec2 vW; void main(){ vec2 g = abs(fract(vW / 0.6) - 0.5); float d = length(g); float dot = smoothstep(0.07, 0.02, d);
+    float fade = exp(-pow(abs(vW.y) / 14.0, 2.0)) * smoothstep(40.0, 18.0, abs(vW.x));
+    gl_FragColor = vec4(vec3(0.42, 0.52, 0.66), dot * 0.16 * fade * uOpacity); }` }));
+ground.rotation.x = -Math.PI / 2; ground.position.y = -0.02; scene.add(ground);
+
+// ---------- beams: light rising from the stations each answer names ----------
+const beamMat = () => new THREE.ShaderMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  uniforms: { uColor: { value: new THREE.Color() }, uK: { value: 0 } },
+  vertexShader: `varying float vY; void main(){ vY = uv.y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `uniform vec3 uColor; uniform float uK; varying float vY; void main(){ float a = pow(1.0 - vY, 2.4) * uK; gl_FragColor = vec4(mix(uColor, vec3(1.0), 0.35) * 1.6, a); }` });
+const rippleMat = () => new THREE.ShaderMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  uniforms: { uColor: { value: new THREE.Color() }, uK: { value: 0 }, uR: { value: 0 } },
+  vertexShader: `varying vec2 vP; void main(){ vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `uniform vec3 uColor; uniform float uK; uniform float uR; varying vec2 vP; void main(){ float d = length(vP); float ring = exp(-pow((d - uR) / 0.05, 2.0)) * (1.0 - uR / 1.6);
+    float core = exp(-pow(d / 0.16, 2.0)); gl_FragColor = vec4(uColor * 1.4, (ring * 0.9 + core * 0.8) * uK); }` });
+const PINS = [
+  { city: 0, color: '#D82233', at: [[-73.9968, 40.7377]] },
+  { city: 1, color: '#C80F2D', at: [[-77.0074, 38.8977], [-77.0219, 38.8983]] },
+  { city: 2, color: '#E8D21D', at: [[-122.3925, 37.6159], [-122.4079, 37.7844]] },
+];
+const beams = PINS.flatMap(pin => pin.at.map((c, j) => {
+  const city = cityObjects[pin.city], p = city.project(c);
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 2.4, 20, 1, true), beamMat());
+  beam.geometry.translate(0, 1.2, 0); beam.position.set(p.x, 0, p.z);
+  const ripple = new THREE.Mesh(new THREE.CircleGeometry(1.8, 64), rippleMat());
+  ripple.rotation.x = -Math.PI / 2; ripple.position.set(p.x, 0.02, p.z);
+  for (const m of [beam, ripple]) { m.material.uniforms.uColor.value.set(pin.color); city.group.add(m); }
+  return { pin, beam, ripple, j };
+}));
+function beamsAt(t) {
+  for (const { pin, beam, ripple, j } of beams) {
+    const beat = STORY[pin.city], local = t - beat.from - j * 0.18;
+    const up = expoOut(span(local, 1.8, 2.5)), out = 1 - easeInOut(span(t, beat.to - 0.4, beat.to));
+    beam.scale.y = Math.max(0.001, up); beam.material.uniforms.uK.value = up * out * 0.9;
+    const r = span(local, 1.8, 3.2);
+    ripple.material.uniforms.uR.value = r * 1.6; ripple.material.uniforms.uK.value = (r > 0 ? 1 : 0) * out;
+  }
+}
+
+// ---------- story ----------
+const STORY = [
+  { city: 0, from: 0.0, to: 3.7, place: 'New York',
+    q: 'Next uptown 1 train at 14 St?', fn: 'get_departures', args: 'stop: "14 St", coverage: "nyc"',
+    big: '2', unit: 'min', chip: '<span class="bullet" style="background:#D82233">1</span> Uptown · Van Cortlandt Park', sub: 'then 6 and 11 min · as of 3:40 PM' },
+  { city: 1, from: 3.7, to: 7.2, place: 'Washington DC',
+    q: 'Union Station to Chinatown?', fn: 'plan_trip', args: 'origin: "Union Station" …',
+    big: '4', unit: 'min ride', chip: '<span class="bar" style="background:#C80F2D"></span> Red Line toward Shady Grove', sub: 'leaves 3:45 PM · 2 stops · no transfers' },
+  { city: 2, from: 7.2, to: 10.6, place: 'SF Bay Area',
+    q: 'Fastest way from SFO to Powell St?', fn: 'plan_trip', args: 'origin: "SFO" …',
+    big: '31', unit: 'min', chip: '<span class="bar" style="background:#E8D21D"></span> BART Yellow toward Antioch', sub: 'leaves 12:51 PM · no transfers · all four terminals' },
+];
+
+const cardsEl = document.getElementById('cards');
+const cards = STORY.map(beat => {
+  const el = document.createElement('div'); el.className = 'card';
+  el.innerHTML = `<div class="label">You</div>
+    <div class="q">${beat.q.split(/(\s+)/).map(w => `<span>${w}</span>`).join('')}</div>
+    <div class="tool"><span class="fn">${beat.fn}</span><span class="arg"></span><span class="spin"></span><span class="ok">✓ 180 ms</span></div>
+    <div class="ans"><div class="big">${beat.big}<small>${beat.unit}</small></div>
+      <div class="detail"><div class="line-chip">${beat.chip}</div><div class="sub">${beat.sub}</div></div></div>
+    <div class="status"><i></i>Realtime</div>`;
+  cardsEl.appendChild(el);
+  return { el, words: [...el.querySelectorAll('.q span')], arg: el.querySelector('.arg'), spin: el.querySelector('.spin'), ok: el.querySelector('.ok'),
+    tool: el.querySelector('.tool'), ans: el.querySelector('.ans'), status: el.querySelector('.status'), big: el.querySelector('.big') };
+});
+const slot = document.getElementById('cityslot');
+const slotSpans = STORY.map(beat => { const s = document.createElement('span'); s.innerHTML = `<i class="dot"></i><b>${beat.place}</b> · live`; slot.appendChild(s); return s; });
+
+const show = (el, k, dy = 14, blur = 6) => { el.style.opacity = k; el.style.transform = `translateY(${(1 - k) * dy}px)`; el.style.filter = k < 1 ? `blur(${(1 - k) * blur}px)` : 'none'; };
+
+function storyAt(t) {
+  STORY.forEach((beat, i) => {
+    const c = cards[i], local = t - beat.from;
+    const inK = easeOut(span(local, 0.35, 0.95)), outK = easeInOut(span(t, beat.to - 0.45, beat.to - 0.05));
+    const k = inK * (1 - outK);
+    c.el.style.opacity = k; c.el.style.transform = `translateY(${(1 - inK) * 26 - outK * 18}px) scale(${0.98 + 0.02 * inK})`;
+    c.el.style.filter = k < 1 ? `blur(${(1 - k) * 8}px)` : 'none';
+    c.words.forEach((w, j) => show(w, easeOut(span(local, 0.45 + j * 0.035, 0.85 + j * 0.035)), 10, 5));
+    const typing = span(local, 1.05, 1.55);
+    show(c.tool, easeOut(span(local, 0.95, 1.25)), 8, 4);
+    c.arg.textContent = beat.args.slice(0, Math.round(beat.args.length * typing));
+    const done = local > 1.75;
+    c.spin.style.display = done ? 'none' : ''; c.ok.style.display = done ? '' : 'none';
+    c.spin.style.transform = `rotate(${local * 720}deg)`;
+    show(c.ans, expoOut(span(local, 1.8, 2.35)), 16, 8);
+    show(c.status, easeOut(span(local, 2.1, 2.5)), 8, 4);
+    // City label: slide the place name in, the previous one up and out.
+    const s = slotSpans[i], sin = easeOut(span(local, 0.1, 0.6)), sout = easeInOut(span(t, beat.to - 0.3, beat.to + 0.1));
+    s.style.transform = `translateY(${(1 - sin) * 16 - sout * 16}px)`; s.style.opacity = sin * (1 - sout);
+  });
+}
+
+// ---------- camera ----------
+// Each city's focal point sits right of centre, clear of the card.
+const shots = cityObjects.map(city => {
+  const azimuth = -0.3, right = new THREE.Vector3(Math.cos(azimuth), 0, -Math.sin(azimuth));
+  return { target: city.focus.clone().addScaledVector(right, -0.2 * city.radius), radius: city.radius, polar: 0.9, azimuth };
+});
+const wide = { target: new THREE.Vector3(0, 0, 2.5), radius: 60, polar: 0.58, azimuth: 0 };
+function cameraAt(t) {
+  // Hold on each city; glide to the next across its first half second; pull back to all three at the end.
+  let from = shots[0], to = shots[0], k = 0;
+  for (let i = 1; i < STORY.length; i++) if (t >= STORY[i].from - 0.25) { from = shots[i - 1]; to = shots[i]; k = easeInOut(span(t, STORY[i].from - 0.25, STORY[i].from + 0.55)); }
+  const last = STORY[STORY.length - 1].to;
+  if (t >= last - 0.25) { from = shots[2]; to = wide; k = easeInOut(span(t, last - 0.25, last + 1.1)); }
+  const target = from.target.clone().lerp(to.target, k);
+  const radius = lerp(from.radius, to.radius, k) + (to === wide ? 0 : Math.sin(Math.PI * k) * 3.5);
+  const polar = lerp(from.polar, to.polar, k);
+  const az = lerp(from.azimuth, to.azimuth, k) + (t - STORY[Math.min(2, Math.max(0, STORY.findIndex(b => t < b.to)))].from) * 0.05 * (to === wide ? 1 - k : 1);
+  camera.position.set(target.x + radius * Math.sin(polar) * Math.sin(az), radius * Math.cos(polar), target.z + radius * Math.sin(polar) * Math.cos(az));
+  camera.lookAt(target); camera.updateMatrixWorld();
+}
+
+// ---------- networks ----------
+function networksAt(t) {
+  cityObjects.forEach((city, ci) => {
+    const beat = STORY[ci];
+    const drawStart = ci === 0 ? 0.05 : beat.from - 0.55;
+    const heroK = easeInOut(span(t, beat.from + 1.75, beat.from + 2.2)) * (1 - easeInOut(span(t, beat.to - 0.3, beat.to + 0.3)));
+    city.lines.forEach(line => {
+      const p = easeInOut(span(t, drawStart + line.delay, drawStart + line.delay + 1.5));
+      const emph = line.hero ? 1 + 0.9 * heroK : 1 - 0.72 * heroK;
+      for (const mat of line.mats) {
+        mat.uniforms.uProgress.value = p; mat.uniforms.uEmph.value = emph;
+        if (mat.uniforms.uTime) mat.uniforms.uTime.value = t;
+      }
+    });
+  });
+}
+
+// ---------- labels under each city in the wide shot ----------
+const labels = [0, 1, 2].map(i => document.getElementById('ml' + i));
+function labelsAt(t) {
+  const k = easeOut(span(t, 10.9, 11.5)) * (1 - easeInOut(span(t, 11.7, 12.2)));
+  labels.forEach((el, i) => {
+    const p = new THREE.Vector3(CITIES[i].x, 0, cityObjects[i].south + 1.2).project(camera);
+    el.style.left = `${(p.x + 1) / 2 * W}px`; el.style.top = `${(1 - p.y) / 2 * H}px`;
+    el.style.opacity = k; el.style.transform = `translate(-50%, ${(1 - k) * 8}px)`;
+  });
+}
+
+// ---------- end card ----------
+const end = document.getElementById('end'), legs = [...document.querySelectorAll('.leg')], ring = document.getElementById('ring'), hub = document.getElementById('hub');
+const endParts = ['etitle', 'etag', 'eurl', 'efacts', 'eclients'].map(id => document.getElementById(id));
+const chrome = document.getElementById('chrome'), glowEl = document.getElementById('glow'), sceneEl = document.getElementById('scene');
+function endAt(t) {
+  const base = 11.75;
+  const scrim = easeInOut(span(t, base - 0.2, base + 0.6));
+  sceneEl.style.filter = scrim > 0 ? `blur(${scrim * 7}px) brightness(${1 - scrim * 0.62})` : 'none';
+  glowEl.style.filter = sceneEl.style.filter;
+  labels.forEach(l => l.style.filter = scrim > 0 ? `blur(${scrim * 4}px)` : 'none');
+  end.style.opacity = t > base - 0.1 ? 1 : 0;
+  ring.style.strokeDashoffset = 1 - easeInOut(span(t, base, base + 0.9));
+  legs.forEach((leg, i) => { leg.style.strokeDasharray = '1 1'; leg.style.strokeDashoffset = 1 - easeOut(span(t, base + 0.1 + i * 0.08, base + 0.75 + i * 0.08)); });
+  const h = expoOut(span(t, base + 0.6, base + 1.0)); hub.style.transform = `scale(${h})`; hub.style.transformOrigin = '120px 136px'; hub.style.opacity = h;
+  endParts.forEach((el, i) => show(el, easeOut(span(t, base + 0.35 + i * 0.12, base + 0.95 + i * 0.12)), 14, 8));
+  chrome.style.opacity = 1 - easeInOut(span(t, 10.4, 10.9));
+}
+
+// ---------- glow pass: a blurred copy of the scene, screened on top ----------
+const gctx = glowEl.getContext('2d');
+function glowPass() {
+  gctx.globalCompositeOperation = 'source-over'; gctx.filter = 'none'; gctx.clearRect(0, 0, 640, 360);
+  gctx.filter = 'blur(9px) saturate(160%)'; gctx.drawImage(canvas, 0, 0, 640, 360);
+}
+
+function seek(t) {
+  networksAt(t); beamsAt(t); cameraAt(t); storyAt(t); labelsAt(t); endAt(t);
+  ground.material.uniforms.uOpacity.value = 1;
+  renderer.render(scene, camera); glowPass();
+  // Fade in from black at the start and out at the end, so the loop has no seam.
+  document.getElementById('fade').style.opacity = Math.max(1 - span(t, 0, 0.45), span(t, DURATION - 0.4, DURATION));
+}
+window.seek = seek;
+
+await document.fonts.ready;
+await Promise.all([...document.images].map(img => img.complete ? null : new Promise(r => { img.onload = img.onerror = r; })));
+window.__ready = true;
+if (!location.search.includes('render')) {
+  const t0 = performance.now();
+  const loop = () => { seek(((performance.now() - t0) / 1000) % DURATION); requestAnimationFrame(loop); };
+  loop();
+} else seek(0);
+</script>
+</body>
+</html>
