@@ -35,8 +35,10 @@ export interface ValidationSource {
   /** Explicit observation time, independent of future requested departure. */
   now: string;
   realtimeMaxAgeSeconds?: number;
-  /** Rechecks allow an older observation only if current predictions still agree. */
+  /** Rechecks judge a journey on current predictions. */
   recheck?: boolean;
+  /** The newest feed in a combined snapshot: a leg's observation may be as new as its own feed. */
+  realtimeNewestSeconds?: number;
   realtimeReasons?: VerificationReason[];
   /** Step-free journeys board and alight only at these stops (accessible now, no
    * unrecovered elevator outage) and never ride a trip marked not wheelchair accessible. */

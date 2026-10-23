@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Rechecking a planned trip (`get_service_status` with `itinerary`) judges it on current times: a train running a few seconds or minutes off keeps the journey valid as long as every change is still made. A missed change is `MISSED_CONNECTION` on that transfer. Before, any change in a predicted time failed the whole journey with `ADJUSTED_TIME`.
+- A recheck reads live data only for the feeds the trip rides, and checks each leg against its own feed's observation time. Before, a Metrorail trip failed with `REALTIME_PROVENANCE` whenever the Metrobus feed was a few seconds older.
 - `get_service_status` accepts `coverage` beside a `ref` or `itinerary` when it names their own region, instead of refusing the call.
 - Journeys no longer walk back and forth between a station's co-located platforms (NYC's A27N to A27S and back) or hop to one on the way out; the same rides reached by different walks are one journey, the shortest kept.
 - A walk between two stations that share a name ("34 St-Penn Station" to "34 St-Penn Station") names each by its lines in `steps`.
