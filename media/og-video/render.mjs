@@ -1,6 +1,7 @@
-// Renders teaser.html frame by frame.
-//   node render.mjs --stills 1,3,5     → stills/t-<t>.png
-//   node render.mjs                    → public/og-video.mp4 (1280×720, 30 fps, silent)
+// Renders launch.html frame by frame.
+//   node render.mjs --stills 3,10,27         → stills/<cut>-<t>.png
+//   node render.mjs                          → out/transit-mcp-launch.mp4 (1920×1080, 30 fps, silent)
+//   node render.mjs --cut og                 → public/og-video.mp4 (1280×720)
 // Fonts and three.js load from jsDelivr, so rendering needs the network.
 import { chromium } from 'playwright';
 import { execFileSync } from 'node:child_process';
@@ -9,16 +10,17 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const FPS = 30, W = 1280, H = 720;
+const FPS = 30, W = 1920, H = 1080;
 const args = process.argv.slice(2);
-const stills = args.includes('--stills') ? args[args.indexOf('--stills') + 1] : null;
+const arg = name => args.includes(name) ? args[args.indexOf(name) + 1] : null;
+const cut = arg('--cut') ?? 'launch', stills = arg('--stills');
 
-const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--allow-file-access-from-files'] });
+const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
 const errors = [];
 page.on('pageerror', e => errors.push(String(e)));
 page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
-await page.goto(pathToFileURL(join(here, 'teaser.html')).href + '?render');
+await page.goto(`${pathToFileURL(join(here, 'launch.html')).href}?render&cut=${cut}`);
 await page.waitForFunction(() => window.__ready === true, null, { timeout: 60000 });
 const DURATION = await page.evaluate(() => window.DURATION);
 const stage = page.locator('#stage');
@@ -26,18 +28,22 @@ const shoot = async (t, path) => { await page.evaluate(t => window.seek(t), t); 
 
 if (stills) {
   const dir = join(here, 'stills'); mkdirSync(dir, { recursive: true });
-  for (const t of stills.split(',').map(Number)) await shoot(t, join(dir, `t-${t}.png`));
+  for (const t of stills.split(',').map(Number)) await shoot(t, join(dir, `${cut}-${t}.png`));
   console.log(`stills → ${dir}`);
 } else {
   const frames = join(here, 'frames'); rmSync(frames, { recursive: true, force: true }); mkdirSync(frames, { recursive: true });
   const N = Math.round(FPS * DURATION), t0 = Date.now();
   for (let f = 0; f < N; f++) {
     await shoot(f / FPS, join(frames, `${String(f).padStart(4, '0')}.png`));
-    if (f % 60 === 0) console.log(`frame ${f}/${N} ${((Date.now() - t0) / 1000).toFixed(0)}s`);
+    if (f % 90 === 0) console.log(`frame ${f}/${N} ${((Date.now() - t0) / 1000).toFixed(0)}s`);
   }
+  const og = cut === 'og';
+  const out = og ? join(here, '../../public/og-video.mp4') : join(here, 'out/transit-mcp-launch.mp4');
+  mkdirSync(dirname(out), { recursive: true });
   execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-framerate', String(FPS), '-i', join(frames, '%04d.png'),
-    '-c:v', 'libx264', '-preset', 'veryslow', '-crf', '21', '-tune', 'animation', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', join(here, '../../public/og-video.mp4')], { stdio: 'inherit' });
-  console.log('video → public/og-video.mp4');
+    ...(og ? ['-vf', 'scale=1280:720:flags=lanczos'] : []),
+    '-c:v', 'libx264', '-preset', 'veryslow', '-crf', og ? '22' : '17', '-tune', 'film', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out], { stdio: 'inherit' });
+  console.log(`video → ${out}`);
 }
 await browser.close();
 if (errors.length) { console.error('JS errors:\n' + errors.join('\n')); process.exit(1); }
