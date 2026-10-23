@@ -9,6 +9,7 @@ const wmata = 'https://api.wmata.com/gtfs';
 export const DC_COVERAGE = {
   id: 'dc', kind: 'region', displayName: 'Washington DC Metro and Metrobus',
   aliases: ['DC', 'Washington DC', 'Washington, DC', 'WMATA', 'DC Metro', 'Metrobus'],
+  operators: [{ names: ['Metro', 'Metrorail'], feeds: ['wmata'] }, { names: ['Metrobus'], feeds: ['wmata_bus'] }],
   placeAliases: [{ aliases: ['DCA', 'Reagan National Airport'], stopNames: ['Ronald Reagan Washington National Airport', 'Ronald Reagan Washington National Airport Metro Station'] },
     // WMATA's GTFS names the Silver Line airport station in full.
     { aliases: ['IAD', 'Dulles', 'Dulles Airport'], stopNames: ['Washington Dulles International Airport'] },
