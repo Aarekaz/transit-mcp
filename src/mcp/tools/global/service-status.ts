@@ -80,6 +80,12 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
       equipment: equipmentSchema.optional().describe('Elevator and escalator outages in scope, where the coverage publishes them.') }),
   }, async (args, handler) => guarded(handler, () => traced('get_service_status', async () => {
     checkState(handler);
+    // Agents add the region to a ref or itinerary, which name their own: a matching one is redundant.
+    if (args.coverage !== undefined && !args.stop && (args.ref ?? args.itinerary) !== undefined) {
+      const own = args.ref ? parseTransitRef(args.ref)?.coverage : (args.itinerary as { coverageId?: unknown }).coverageId;
+      if (getCoverage(args.coverage)?.id !== own) throw new TransitToolError('INVALID_ARGUMENTS', [], 'coverage names a different region than the ref or itinerary; leave it out.');
+      args = { ...args, coverage: undefined };
+    }
     // Exactly one scope; coverage stands alone or names a station's region.
     const scoped = [args.ref, args.stop, args.itinerary].filter(value => value !== undefined).length;
     if (scoped > 1 || (args.coverage !== undefined) !== (scoped === 0 || args.stop !== undefined))

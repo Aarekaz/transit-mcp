@@ -17,6 +17,16 @@ describe('independent itinerary validation against canonical stop-times', () => 
     leg.realtimeTimestampSeconds = now - 30; leg.scheduledDepartureTime = at('09:01:00');
     expect((await validateItinerary(candidate, { ...source, recheck: true })).reasons).toContain('SCHEDULED_TIME');
   });
+  it('rechecks a journey on current times: a delay that keeps the change is fine, one that misses it is not', async () => {
+    const input = transferInput(); input.files['trips.txt'] = input.files['trips.txt'].replaceAll(',block', ',');
+    const f = await plannerFixture(input), candidate = goldenTransfer(f), now = Date.parse(f.query.now) / 1000;
+    const first = candidate.legs[0] as TransitLeg;
+    // The first ride reaches the change at 09:10; the second leaves at 09:12.
+    const recheck = (arrives: string) => validateItinerary(candidate, { ...f.source, recheck: true, realtime: { version: f.version, producerTimestampSeconds: now, receivedAtSeconds: now,
+      payload: [{ entityId: 'first', tripInstanceRef: first.tripInstanceRef, stopId: 'B', stopSequence: 2, status: 'realtime' as const, arrivalTimeSeconds: Date.parse(at(arrives)) / 1000 }] } });
+    expect(await recheck('09:11:00')).toMatchObject({ valid: true, reasons: [] });
+    expect(await recheck('09:13:00')).toMatchObject({ valid: false, reasons: ['MISSED_CONNECTION'], transferFailures: [{ fromLegIndex: 0, toLegIndex: 1, reasons: ['MISSED_CONNECTION'] }] });
+  });
   it('requires the least authoritative transit leg for a mixed journey', async () => {
     const input = transferInput(); input.files['trips.txt'] = input.files['trips.txt'].replaceAll(',block', ',');
     const f = await plannerFixture(input), candidate = goldenTransfer(f), now = Date.parse(f.query.now) / 1000;

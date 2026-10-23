@@ -141,13 +141,15 @@ describe('global transit MCP boundary', () => {
     if (variant === 'changed') delay = 300;
     if (variant === 'mismatch') version = { ...f.version, artifactVersion: 'a'.repeat(64) };
     const result = (await call(f.env, 'get_service_status', { itinerary })).result.structuredContent;
-    expect(result.journeyValid).toBe(variant === 'same');
-    if (variant === 'same') expect(result.journeyReasons).toEqual([]);
-    else expect(result.journeyReasons).toContain(variant === 'changed' ? 'ADJUSTED_TIME' : variant === 'stale' ? 'REALTIME_STALE' : 'SCHEDULE_REALTIME_MISMATCH');
+    // A later train still makes a one-ride journey: the trip holds, at its new time.
+    const holds = variant === 'same' || variant === 'changed';
+    expect(result.journeyValid).toBe(holds);
+    if (holds) expect(result.journeyReasons).toEqual([]);
+    else expect(result.journeyReasons).toContain(variant === 'stale' ? 'REALTIME_STALE' : 'SCHEDULE_REALTIME_MISMATCH');
     expect(result.journeyReasons).not.toContain('REALTIME_PROVENANCE');
-    if (variant !== 'same') {
+    if (!holds) {
       expect(result.status).toBe('unavailable');
-      expect(result.reasons).toContain(variant === 'changed' ? 'VALIDATOR_REJECTED' : variant === 'stale' ? 'REALTIME_STALE' : 'SCHEDULE_REALTIME_MISMATCH');
+      expect(result.reasons).toContain(variant === 'stale' ? 'REALTIME_STALE' : 'SCHEDULE_REALTIME_MISMATCH');
     }
   });
   it.each(['stale', 'expired', 'missing', 'mismatch', 'degraded'] as const)('preserves %s realtime diagnostics through departures and planning', async variant => {
@@ -446,7 +448,7 @@ describe('global transit MCP boundary', () => {
       // No selector lists the regions served.
       ['find_transit', [{}, { coverage: 'dc' }, { query: '91' }, { ref: ref('stop', 'A') }, { latitude: 37, longitude: -122 }], [{ query: '91', extra: true }], [{ ref: 'x', query: '91' }, { latitude: 37 }]],
       // coverage is a closed list: region ids and their own names, nothing else.
-      ['get_service_status', [{ ref: ref('route', 'R') }, { coverage: 'sfbay' }, { coverage: 'Washington DC' }], [{ coverage: 'sfbay', extra: true }, { coverage: 'Mars' }], [{}, { ref: 'x', coverage: 'sfbay' }, { stop: 'Fulton St' }]],
+      ['get_service_status', [{ ref: ref('route', 'R') }, { ref: ref('route', 'R'), coverage: 'sfbay' }, { coverage: 'sfbay' }, { coverage: 'Washington DC' }], [{ coverage: 'sfbay', extra: true }, { coverage: 'Mars' }], [{}, { ref: 'x', coverage: 'sfbay' }, { ref: ref('route', 'R'), coverage: 'dc' }, { stop: 'Fulton St' }]],
     ] as const) {
       const schema = result.tools.find((tool: any) => tool.name === name).inputSchema;
       // Clients flatten a top-level union, often to one branch; a forbidden property hides it from the model.
