@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { traced } from '../../../transit/trace';
 import type { MetroMcpContext } from '../../context';
-import { complete, readOnlyLive } from '../../shared';
+import { readOnlyLive } from '../../shared';
 import { getScheduledDeparturePages, type ScheduledDeparture, type ScheduledDepartures } from '../../../transit/planner/departures';
 import type { NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
 import { formatEntityRef, parseTransitRef } from '../../../transit/core/refs';
@@ -10,7 +10,7 @@ import { DecodedShardCache } from '../../../transit/planner/schedule-index';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
 import { stopAccess } from '../../../transit/accessibility/equipment';
 import type { ScheduleTrip } from '../../../transit/gtfs/static/schema';
-import { MAX_DISCOVERY_CANDIDATES, closestStops, judgedAt, localTime, residentShards, TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, stopPlaces, ambiguousPlaces, describeCandidate, candidateSchema, stationAgencies, unavailable, validRef, type TransitData } from './shared';
+import { complete, MAX_DISCOVERY_CANDIDATES, closestStops, judgedAt, localTime, residentShards, TransitToolError, asTransitRef, boundedText, checkState, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, complexStations, routeName, stopPlaces, ambiguousPlaces, describeCandidate, candidateSchema, stationAgencies, unavailable, validRef, type TransitData } from './shared';
 import { getCoverage } from '../../../transit/core/coverage';
 
 const departureShape = { tripRef: z.string(), serviceDate: z.string(), routeRef: z.string(), routeName: z.string().describe('Public route name, e.g. "1", "A" or "Red".'),

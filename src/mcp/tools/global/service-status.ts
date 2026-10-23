@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { traced } from '../../../transit/trace';
 import type { MetroMcpContext } from '../../context';
-import { complete, readOnlyLive } from '../../shared';
+import { readOnlyLive } from '../../shared';
 import { getCoverage } from '../../../transit/core/coverage';
 import type { VerificationReason } from '../../../transit/core/results';
 import { safeAlertIdentifier, safeAlertSelector, type NormalizedAlert, type NormalizedStopUpdate } from '../../../transit/gtfs/realtime/decode';
@@ -17,7 +17,7 @@ import type { ScheduleShard } from '../../../transit/gtfs/static/schema';
 import { AlertScopeLimitError, expandAlertScopes, matchesAlertSelector, resolveAlertSelector, type AlertScope } from '../../../transit/gtfs/realtime/alert-match';
 import { itinerarySchema } from './plan';
 import { blockedStations, currentOutage, outageStations, stationOf, type EquipmentOutage } from '../../../transit/accessibility/equipment';
-import { MAX_DISCOVERY_CANDIDATES, closestStops, localTime, coverageTimezone, residentShards, TransitToolError, stopPlaces, ambiguousPlaces, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
+import { complete, MAX_DISCOVERY_CANDIDATES, closestStops, localTime, coverageTimezone, residentShards, TransitToolError, stopPlaces, ambiguousPlaces, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
 
 /** Per-alert detail bound: a city-wide status call stays readable for a model. */
 export const ALERT_DETAIL_LIMIT = 20;
