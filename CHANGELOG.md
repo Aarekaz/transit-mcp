@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - A name that matches no stop exactly but matches a station and street stops named for a cross street ("Embarcadero": the BART station and "The Embarcadero & Folsom St") means the station; street stops beside it join its place and are never offered as a separate choice. Stops named for a station and more ("San Francisco Ferry Building Gate G") join it up to 800 m away. SF "Chinatown" now finds Chinatown-Rose Pak; "Coney Island", "Millbrae", "Van Ness" and "West Portal" resolve directly; a full corner name still finds that corner.
+- Server instructions open by naming the regions served now and what each runs ("Live transit for the SF Bay Area (BART, Muni, Caltrain…), Washington DC (Metrorail, Metrobus) and New York (subway, LIRR, Metro-North, buses)"), so a model reaches for these tools rather than a web search; a dark region is never named.
 - A name a rider gives with its operator ("16th St Mission BART", "Penn Station LIRR", "Palo Alto Caltrain Station", "Pentagon Metrorail") matches the rest of the name among that operator's stops when no stop name starts that way. Each region lists its operators' names (`operators`: 511 operator IDs in SF Bay, feeds in NYC and DC).
 - `get_service_status` takes a line by name with its coverage (`ref: "L"`, `"Red Line"`): a line named exactly so wins over IDs that also match, and one line copied into several feeds is one line.
 - `plan_trip` takes `maxWalkMetres` above 800 as 800 instead of refusing the call.

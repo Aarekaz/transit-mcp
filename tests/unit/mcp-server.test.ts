@@ -34,7 +34,7 @@ describe('createMetroMcpServer', () => {
     expect(a.server).not.toBe(b.server);
   });
 
-  it('keeps dark server metadata limited to the registered DC and NYC surface', () => {
+  it('names only the regions served now in its instructions', () => {
     const dark = createMetroMcpServer(testContext()).server as unknown as {
       _instructions: string;
       _serverInfo: { description: string };
@@ -49,9 +49,12 @@ describe('createMetroMcpServer', () => {
     expect(dark._serverInfo.description).toBe(
       'Trips, departures, alerts and vehicles for NYC, DC and the SF Bay Area.',
     );
+    // Instructions name the regions served now: a dark one is never mentioned.
     expect(dark._instructions).not.toMatch(/San Francisco|SF Bay|sfbay|511/);
+    expect(dark._instructions).toMatch(/^Live transit for Washington DC \(Metrorail, Metrobus\) and New York \(subway, LIRR, Metro-North, buses\)\./);
+    expect(enabled._instructions).toMatch(/^Live transit for the SF Bay Area \(BART, Muni, Caltrain, every 511 operator\), Washington DC/);
+    expect(enabled._instructions.split('\n')[0]!.length).toBeLessThanOrEqual(512);
     expect(enabled._serverInfo.description).toBe(dark._serverInfo.description);
-    expect(enabled._instructions).toBe(dark._instructions);
   });
 
   it('fails construction when the request-state key is too short', () => {
