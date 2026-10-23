@@ -55,6 +55,10 @@ codex mcp add transit-mcp https://transitmcp.com/mcp
 }
 ```
 
+### Agent skill
+
+[`skills/transit-mcp/SKILL.md`](skills/transit-mcp/SKILL.md) teaches an agent which tool answers which question, how to handle a name that means several places, and how to keep a rider posted by rechecking a planned trip before they leave. Install it with your agent's skills tool (for example `npx skills add Aarekaz/transit-mcp`) or copy the file into its skills folder.
+
 `POST /mcp` is the recommended stateless Streamable HTTP endpoint. `POST` and `OPTIONS /sse` are a compatibility alias; legacy GET SSE, DELETE, session-message URLs, and slash variants return `405`.
 
 ## What it provides
