@@ -2,7 +2,7 @@ import type { Env } from '../../../types';
 import { getCoverageMode } from '../../../regions/manifest';
 import { canonicalJson, sha256 } from '../static/shards';
 import { archiveText, bandText, bandTextRows, buildServiceDate, rangedStopTimes, scanArchive, startBands, type ArchiveText, type EdgeSource, type FeedIdentity, type ScanResult, type TripRanges, type TripStarts } from '../static/edge-build';
-import { readZipDirectory, zipEntryStream } from '../static/zip';
+import { readZipDirectory, zipContentFingerprint, zipEntryStream } from '../static/zip';
 import type { ArtifactManifestV2 } from '../static/schema';
 import { StaticArtifactStore, readBoundedObject, staticVersion } from '../realtime/snapshot-store';
 import { getRealtimeSource, getRealtimeSources, publishedKinds } from '../realtime/sources';
@@ -17,7 +17,7 @@ export const BAND_SECONDS = 3 * 3600;
 /** `feedId` names a coverage's feed; omitted, the coverage's primary feed (runs started
  * before coverages held several feeds). */
 export interface RefreshParams { coverageId: string; feedId?: string; archiveSha256: string; retrievedAt: string }
-export interface SourceState { sha256?: string; etag?: string; checkedAt: number; retrievedAt?: string; restarts?: number }
+export interface SourceState { sha256?: string; etag?: string; checkedAt: number; retrievedAt?: string; restarts?: number; content?: string }
 /** A failed run for the current archive is retried this many times, then left for a human. */
 export const MAX_REFRESH_RESTARTS = 3;
 export interface StepRunner {
@@ -381,17 +381,19 @@ export async function checkStaticSources(env: Env, now: number): Promise<void> {
         if (!response.ok) throw new Error(`source_status_${response.status}`);
         const declared = Number(response.headers.get('content-length'));
         if (Number.isFinite(declared) && declared > policy.maxArchiveBytes) throw new Error('source_too_large');
-        let hash: string;
+        let hash: string, content: string | undefined;
         if (policy.stream && response.body) hash = await storeStreamedArchive(bucket, policy, response.body, declared, state.sha256);
         else {
           const bytes = new Uint8Array(await response.arrayBuffer());
           if (bytes.length > policy.maxArchiveBytes) throw new Error('source_too_large');
-          hash = await sha256(bytes);
+          content = (() => { try { return zipContentFingerprint(bytes); } catch { return undefined; } })();
+          // MTA re-zips unchanged tables about hourly: the same tables are the same archive.
+          hash = state.sha256 && content && content === state.content ? state.sha256 : await sha256(bytes);
           if (hash !== state.sha256) await putAbsent(bucket, keys.archive(hash), bytes);
         }
         next = { sha256: hash, etag: response.headers.get('etag') ?? undefined, checkedAt: now,
           retrievedAt: hash === state.sha256 ? state.retrievedAt : new Date(now).toISOString(),
-          ...(hash === state.sha256 && state.restarts ? { restarts: state.restarts } : {}) };
+          ...(hash === state.sha256 && state.restarts ? { restarts: state.restarts } : {}), ...(content ? { content } : {}) };
       }
       await bucket.put(keys.state, encode(next));
       // Start (or keep) a refresh until the published version came from this archive.

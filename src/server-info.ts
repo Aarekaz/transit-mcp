@@ -11,7 +11,7 @@ export function getServerInfo(baseUrl: string, timestamp = new Date().toISOStrin
     author: 'Anurag Dhungana',
     links: {
       author: 'https://anuragd.me',
-      github: 'https://github.com/Aarekaz/metro-mcp',
+      github: 'https://github.com/Aarekaz/transit-mcp',
       mcpServer: `${baseUrl}/mcp`,
       mcpServerLegacy: `${baseUrl}/sse`,
       website: baseUrl,

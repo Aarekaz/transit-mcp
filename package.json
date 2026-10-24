@@ -2,7 +2,7 @@
   "name": "transit-mcp",
   "version": "6.1.0",
   "type": "module",
-  "description": "MCP server for DC Metro, NYC Subway, and San Francisco Bay Area transit on Cloudflare Workers",
+  "description": "Free, anonymous MCP server for live transit in NYC, DC and the SF Bay Area: trip planning, departures, alerts and vehicles",
   "main": "src/index.ts",
   "scripts": {
     "dev": "bun run build:apps && wrangler dev",
@@ -64,6 +64,10 @@
     "real-time"
   ],
   "author": "Anurag Dhungana",
-  "homepage": "https://anuragd.me",
+  "homepage": "https://transitmcp.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Aarekaz/transit-mcp.git"
+  },
   "license": "MIT"
 }

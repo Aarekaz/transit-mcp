@@ -6,7 +6,7 @@
   "version": "6.1.0",
   "websiteUrl": "https://transitmcp.com",
   "repository": {
-    "url": "https://github.com/Aarekaz/metro-mcp",
+    "url": "https://github.com/Aarekaz/transit-mcp",
     "source": "github"
   },
   "icons": [

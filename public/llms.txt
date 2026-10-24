@@ -54,7 +54,7 @@ Public results come from official WMATA (DC Metro and Metrobus) and MTA (NYC Sub
 
 - [Transit MCP docs](https://transitmcp.com/docs/): client setup, HTTP endpoints, MCP tools, resources and prompts, and data sources.
 - [Agent skill (SKILL.md)](https://github.com/Aarekaz/transit-mcp/blob/main/skills/transit-mcp/SKILL.md): which tool answers which question, ambiguous names, and rechecking a trip.
-- [Source code on GitHub](https://github.com/Aarekaz/metro-mcp): MIT licensed.
+- [Source code on GitHub](https://github.com/Aarekaz/transit-mcp): MIT licensed.
 
 ## Policies
 
