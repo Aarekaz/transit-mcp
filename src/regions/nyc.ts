@@ -29,6 +29,7 @@ export const NYC_COVERAGE = {
   aliases: ['NYC', 'New York', 'New York City', 'NYC Subway', 'MTA Subway', 'MTA', 'LIRR', 'Long Island Rail Road', 'Metro-North', 'Metro-North Railroad'],
   // Railroad terminals and the subway stations beneath them, as each MTA GTFS names them.
   operators: [{ names: ['subway', 'MTA subway'], feeds: ['mta_subway'] }, { names: ['LIRR', 'Long Island Rail Road'], feeds: ['lirr'] }, { names: ['Metro-North', 'MNR'], feeds: ['mnr'] }],
+  localities: ['New York', 'New York City', 'NYC', 'NY', 'Manhattan', 'Lower Manhattan', 'Midtown', 'Brooklyn', 'Queens', 'Bronx', 'Staten Island'],
   placeAliases: [
     { aliases: ['Penn Station', 'Penn', 'New York Penn Station'], stopNames: ['Penn Station', '34 St-Penn Station'] },
     { aliases: ['Grand Central', 'Grand Central Terminal', 'Grand Central Madison'], stopNames: ['Grand Central', 'Grand Central-42 St'] },

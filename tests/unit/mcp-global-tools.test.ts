@@ -609,6 +609,24 @@ describe('global transit MCP boundary', () => {
     expect(board.code).toBeUndefined();
     expect(board.departures.map((row: any) => row.stopName)).toEqual(['Ashby']);
   });
+  it('finds a name a rider gives with where it is or the line serving it, and keeps a place in a name', async () => {
+    // Two stations named Canal, on the 6 and on the Q; an airport station, and a stop named "Airport".
+    const input = plannerInput();
+    input.files['stops.txt'] += 'X,Canal,37.1,-122\nY,Canal,37.3,-122\nOAK,Oakland International Airport,37.5,-122\nAIR,Airport,37.7,-122\n';
+    input.files['routes.txt'] += 'SIX,A,6,1\nQ,A,Q,1\n';
+    input.files['trips.txt'] += 'SIX,D,ST,Canal,0,\nQ,D,QT,Canal,0,\n';
+    input.files['stop_times.txt'] += 'ST,09:00:00,09:00:00,X,1,0,0\nST,09:10:00,09:10:00,OAK,2,0,0\nST,09:20:00,09:20:00,AIR,3,0,0\nQT,09:00:00,09:00:00,Y,1,0,0\nQT,09:20:00,09:20:00,C,2,0,0\n';
+    const { env } = await fixture(false, input);
+    const stops = async (stop: string) => {
+      const board = (await call(env, 'get_departures', { stop, coverage: 'sfbay', at: at('08:59:00') })).result.structuredContent;
+      return board.code ?? [...new Set(board.departures.map((row: any) => row.stopRef))];
+    };
+    expect(await stops('Canal on the 6')).toEqual([ref('stop', 'X')]);
+    expect(await stops('Canal Q train, uptown platform')).toEqual([ref('stop', 'Y')]);
+    // A locality says where, not which: both Canals are still in San Francisco.
+    expect(await stops('Canal, San Francisco')).toBe('ENTITY_AMBIGUOUS');
+    expect(await stops('Oakland Airport')).toEqual([ref('stop', 'OAK')]);
+  });
   it('takes a line by name for its status, and more walking than a journey allows as the most it allows', async () => {
     const { env } = await fixture(false);
     const status = (await call(env, 'get_service_status', { coverage: 'sfbay', ref: 'R line' })).result;

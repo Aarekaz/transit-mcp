@@ -254,8 +254,19 @@ export function rankedCandidates(data: TransitData, query: string, kind?: string
   // "16th St Mission BART": no stop name begins so, so match the rest among that operator's stops.
   if (!exact.some(item => item.rank[0]! <= 1) && kind !== 'route' && kind !== 'agency') {
     const operator = operatorQuery(data, query);
-    const served = operator && rankedCandidates(data, operator.rest, kind).filter(item => operator.serves(item.entity));
-    if (served && served.length) return served;
+    const served = operator ? rankedCandidates(data, operator.rest, kind).filter(item => operator.serves(item.entity)) : [];
+    // "14 St, Manhattan", "Pentagon on the Blue Line": the name without where it is, its
+    // direction or line, preferring stops on the line named. Words all in one stop's name
+    // ("Oakland Airport") are its name unless the rest is another stop's whole name ("Jamaica,
+    // Queens"); a locality before the name goes only when nothing else matches.
+    const named = exact.length > 0 && exact[0]!.rank[0]! <= 3;
+    const qualified = qualifiedQuery(data, query, !named && !served.length);
+    const found = qualified ? rankedCandidates(data, qualified.rest, kind) : [];
+    const onLine = qualified?.lines.length ? found.filter(item => servesLine(data, item.entity, qualified.lines)) : [];
+    const located = named && !found.some(item => item.rank[0] === 0) ? [] : onLine.length ? onLine : found;
+    // Whichever reading names a stop more closely: "Metro Center DC" is Metro Center in DC, not
+    // "Center" on Metro.
+    if (served.length || located.length) return !located.length || served.length && compareRanks(served[0]!.rank, located[0]!.rank) <= 0 ? served : located;
   }
   // Nothing by name: try misspellings, ranked after every real match.
   return exact.length || normalizeEntityName(query).length < 3 ? exact : rankedMatches(data, query, kind, true);
@@ -274,6 +285,55 @@ function operatorQuery(data: TransitData, query: string): { rest: string; serves
   }
   return null;
 }
+const TRAILING = new Set(['uptown', 'downtown', 'northbound', 'southbound', 'eastbound', 'westbound', 'inbound', 'outbound', 'platform', 'platforms', 'on', 'in', 'the', 'at', 'near']);
+const LINE_WORDS = new Set(['line', 'lines', 'train', 'trains']);
+const COLORS = new Set(['red', 'blue', 'orange', 'silver', 'green', 'yellow', 'purple', 'brown', 'gold']);
+/** A word that can name a line by itself: "1", "A", "7X", "N", "Red". */
+const lineLike = (word: string) => /^([a-z]|\d{1,3}|[a-z]\d|\d[a-z])$/.test(word) || COLORS.has(word);
+/** A query without what riders add after a stop's name (its locality, direction, platform, line:
+ * "14 St on the 1 line, uptown platform") or before it ("San Francisco 4th and King"); null
+ * unless something was taken off and a name is left. */
+function qualifiedQuery(data: TransitData, query: string, leading = true): { rest: string; lines: string[] } | null {
+  const normalized = normalizeEntityName(query);
+  let words = normalized.split(' ');
+  const places = (data.coverage.localities ?? []).map(name => normalizeEntityName(name).split(' ')).sort((a, b) => b.length - a.length);
+  const lines: string[] = [];
+  for (let changed = true; changed && words.length > 1;) {
+    const last = words.at(-1)!, on = words.lastIndexOf('on'), after = words.slice(on + 1).filter(word => word !== 'the');
+    const place = places.find(own => own.length < words.length && own.every((word, offset) => words[words.length - own.length + offset] === word));
+    let at = words.length - 1;
+    while (LINE_WORDS.has(last) && at > 1 && lineLike(words[at - 1]!)) at--;
+    if (TRAILING.has(last)) words.pop();
+    else if (at < words.length - 1) { lines.push(...words.slice(at, -1)); words = words.slice(0, at); }
+    else if (on > 0 && after.length && after.length <= 2 && after.every(lineLike)) { lines.push(...after); words = words.slice(0, on); }
+    else if (place) words = words.slice(0, -place.length);
+    else changed = false;
+  }
+  const lead = leading && places.find(own => own.length < words.length && own.every((word, offset) => words[offset] === word));
+  if (lead) words = words.slice(lead.length);
+  const rest = words.join(' ');
+  return rest !== normalized && significant(rest).length ? { rest, lines } : null;
+}
+/** Whether a line named by a rider ("1", "Red", "N") serves a stop or its station's platforms. */
+function servesLine(data: TransitData, entity: Candidate, lines: string[]): boolean {
+  const index = data.indexes.find(index => index.feedId === entity.feed);
+  if (!index || entity.kind !== 'stop') return false;
+  let names = stopLineCache.get(index);
+  if (!names) {
+    // A line's short name ("6", "Red-N" as Red); its long name only without one ("6 Avenue Express" is the D).
+    const routes = new Map(index.routes.map(route => {
+      const own = normalizeEntityName(route.shortName || route.longName);
+      return [route.ref as string, own ? [own, own.split(' ')[0]!] : []];
+    }));
+    names = new Map();
+    for (const stop of index.stops) for (const ref of [stop.ref, stop.parentStationRef].filter(Boolean) as string[])
+      names.set(ref, new Set([...names.get(ref) ?? [], ...(index.stopRoutes[stop.ref as TransitRef] ?? []).flatMap(route => routes.get(route) ?? [])]));
+    stopLineCache.set(index, names);
+  }
+  const own = names.get(entity.ref);
+  return !!own && lines.some(line => own.has(line));
+}
+const stopLineCache = new WeakMap<DiscoveryIndex, Map<string, Set<string>>>();
 /** Agency IDs whose lines serve a stop or its station's platforms. */
 function stopAgencies(data: TransitData, entity: Candidate): string[] {
   const index = data.indexes.find(index => index.feedId === entity.feed);
@@ -327,15 +387,17 @@ export const PLACE_RADIUS_METRES = 400;
 export function stopPlaces(data: TransitData, query: string): Place[] {
   // Entrances lead into a station; they are never where a journey boards.
   const boardable = (list: Candidate[]) => { const kept = list.filter(candidate => candidate.stopType !== 'entrance' && candidate.stopType !== 'other'); return kept.length ? kept : list; };
-  // Exact by the name the rider gave, or by it without an operator ("Pentagon Metrorail").
+  // Exact by the name the rider gave, or by it without an operator ("Pentagon Metrorail") or a
+  // locality, direction or line ("Metro Center, DC").
   const operator = operatorQuery(data, query);
-  const all = boardable(candidates(data, query, 'stop')), exact = all.filter(candidate => ambiguityCandidate(data, candidate, query) || !!operator && ambiguityCandidate(data, candidate, operator.rest)), matches = exact.length ? exact : all;
+  const forms = [query, operator?.rest, qualifiedQuery(data, query)?.rest, operator && qualifiedQuery(data, operator.rest)?.rest].filter((form): form is string => !!form);
+  const all = boardable(candidates(data, query, 'stop')), exact = all.filter(candidate => forms.some(form => ambiguityCandidate(data, candidate, form))), matches = exact.length ? exact : all;
   // A name no stop carries exactly, matching stations ("Embarcadero" BART) and street stops that
   // only carry it as a cross street ("The Embarcadero & Folsom St"), means the stations: street
   // stops join a station's place when beside it, and are never a place of their own.
   const stationsFirst = !exact.length && matches.some(match => !streetStop(match));
   const shown = (list: Candidate[]) => stationsFirst ? list.filter(match => !streetStop(match)) : list;
-  const alias = exact.length > 0 && aliasStopNames(data, normalizeEntityName(query)).size > 0;
+  const alias = exact.length > 0 && forms.some(form => aliasStopNames(data, normalizeEntityName(form)).size > 0);
   const roots = matches.map(match => (stationOf(data, match.ref) ?? match.ref) as TransitRef);
   const complex = stationComplexes(data, roots.filter(root => stopsByRef(data).has(root)));
   const places: Place[] = [], placed = new Set<number>();
