@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The docs page has a How it works section: two clocks (timetables built ahead, live data on top), how answers label themselves, what the server does and what the model does, keeping timetables fresh on a $5 plan, how the server checks itself, what runs where, and what gets recorded. Fig 1 is an interactive drawing of the idea, built with the [Anatomy](https://github.com/wheresryan22/anatomy) kit (`media/docs-figures/`): a rack of nine timetable cards, a live ticker that only reaches today's, and a reader whose dial shows the minutes to the next train. The page now starts from a real exchange (a question, the call, the actual response with its fields explained, and the reply), gives each of the five main tools a parameter table, and has a Using the results section: statuses, names and refs, the real ambiguous-name and no-match responses, routeHints, rechecking a trip, and limits.
+
 - Usage records count which regions and data feeds each answer drew on (`nyc`, `mta_subway`, `sf511`…). These are read from the transit references in the answer and kept only if they're on a fixed list, so what a rider asked is never recorded. A tool call is now recorded when its streamed response ends; before, it was recorded before the tool ran. The privacy page lists the new fields.
 
 - An uptime probe (`.github/workflows/uptime.yml`) calls production every five minutes the way a client does: `tools/list`, a `find_transit` lookup, the homepage and a byte range of the link-preview video. A failure that survives a retry opens an `outage` issue, with at most one comment an hour while it lasts, and the next passing run closes it.
