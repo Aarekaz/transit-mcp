@@ -9,6 +9,9 @@ import { getRealtimeSource, getRealtimeSources, publishedKinds } from '../realti
 import { MIN_ELIGIBLE_FOR_MATCH_RATE } from '../realtime/trip-match';
 import { getStaticSource, getStaticSources, isPrimaryFeed, type StaticSourcePolicy } from './policy';
 import { composeManifest } from '../static/compose';
+import { changesServiceOn } from './near-term';
+import { serviceDateAtInstant, shiftServiceDate } from '../../planner/service-day';
+import { parseTransitRef } from '../../core/refs';
 
 /** Edge schedule refresh. A cheap cron check notices a changed source; a Workflow then
  * rebuilds only from that archive, one service date per step, checks the result against
@@ -17,7 +20,9 @@ export const BAND_SECONDS = 3 * 3600;
 /** `feedId` names a coverage's feed; omitted, the coverage's primary feed (runs started
  * before coverages held several feeds). */
 export interface RefreshParams { coverageId: string; feedId?: string; archiveSha256: string; retrievedAt: string }
-export interface SourceState { sha256?: string; etag?: string; checkedAt: number; retrievedAt?: string; restarts?: number; content?: string }
+export interface SourceState { sha256?: string; etag?: string; checkedAt: number; retrievedAt?: string; restarts?: number; content?: string;
+  /** Whether this archive changes service near now, decided once per archive. */
+  nearTerm?: { sha256: string; changes: boolean } }
 /** A failed run for the current archive is retried this many times, then left for a human. */
 export const MAX_REFRESH_RESTARTS = 3;
 export interface StepRunner {
@@ -359,6 +364,31 @@ export async function rollForwardSchedules(env: Env, now: number): Promise<void>
   }));
 }
 
+/** A new archive that leaves service near now alone waits until the published one is
+ * `deferFarChangesSeconds` old. The judgement is made once per archive and kept in the
+ * source state; any failure to judge builds at once. */
+async function deferFarChange(bucket: R2Bucket, policy: StaticSourcePolicy, published: Awaited<ReturnType<StaticArtifactStore['current']>> | null,
+  publishedArchive: string | undefined, next: SourceState, now: number): Promise<boolean> {
+  const source = published?.manifest.sources.find(item => item.feedId === policy.feedId);
+  if (!policy.deferFarChangesSeconds || !published || !source || !publishedArchive || publishedArchive === next.sha256 || !next.sha256) return false;
+  if (now - Date.parse(source.retrievedAt) >= policy.deferFarChangesSeconds * 1000) return false;
+  const keys = sourceKeys(policy.coverageId, policy.feedId);
+  let changes = next.nearTerm?.sha256 === next.sha256 ? next.nearTerm.changes : undefined;
+  if (changes === undefined) {
+    try {
+      const timezone = Object.entries(published.manifest.agencyTimezones).find(([ref]) => parseTransitRef(ref)?.feed === policy.feedId)?.[1];
+      if (!timezone) return false;
+      const today = serviceDateAtInstant(now, timezone);
+      const [before, after] = await Promise.all([publishedArchive, next.sha256].map(sha => readBoundedObject(bucket, keys.archive(sha), policy.maxArchiveBytes)));
+      changes = await changesServiceOn(before!, after!, [shiftServiceDate(today, -1), today, shiftServiceDate(today, 1)]);
+    } catch { changes = true; }
+    next.nearTerm = { sha256: next.sha256, changes };
+    await bucket.put(keys.state, encode(next));
+  }
+  if (!changes) console.info(JSON.stringify({ event: 'schedule_refresh_deferred', coverage: policy.coverageId, feed: policy.feedId, archive: next.sha256.slice(0, 12) }));
+  return !changes;
+}
+
 export async function checkStaticSources(env: Env, now: number): Promise<void> {
   const bucket = env.TRANSIT_ARTIFACTS, workflow = env.TRANSIT_REFRESH;
   if (!bucket || !workflow) return;
@@ -393,7 +423,8 @@ export async function checkStaticSources(env: Env, now: number): Promise<void> {
         }
         next = { sha256: hash, etag: response.headers.get('etag') ?? undefined, checkedAt: now,
           retrievedAt: hash === state.sha256 ? state.retrievedAt : new Date(now).toISOString(),
-          ...(hash === state.sha256 && state.restarts ? { restarts: state.restarts } : {}), ...(content ? { content } : {}) };
+          ...(hash === state.sha256 && state.restarts ? { restarts: state.restarts } : {}),
+          ...(hash === state.sha256 && state.nearTerm ? { nearTerm: state.nearTerm } : {}), ...(content ? { content } : {}) };
       }
       await bucket.put(keys.state, encode(next));
       // Start (or keep) a refresh until the published version came from this archive.
@@ -405,7 +436,8 @@ export async function checkStaticSources(env: Env, now: number): Promise<void> {
       const today = new Date(now).toISOString().slice(0, 10).replaceAll('-', '');
       const windowEnd = published?.manifest.shards.filter(shard => shard.feedId === policy.feedId).reduce((end, shard) => shard.window.endDate > end ? shard.window.endDate : end, '');
       const rewindow = publishedArchive === next.sha256 && !!windowEnd && daysBetween(today, windowEnd) < Math.ceil(policy.windowDays / 2);
-      if (policy.build !== 'offline' && next.sha256 && next.retrievedAt && (publishedArchive !== next.sha256 || rewindow)) {
+      if (policy.build !== 'offline' && next.sha256 && next.retrievedAt && (publishedArchive !== next.sha256 || rewindow) &&
+        !await deferFarChange(bucket, policy, published, publishedArchive, next, now)) {
         // Instance IDs from before coverages held several feeds stay valid for the primary feed;
         // a rebuild of the same archive is one instance per day.
         const id = `refresh-${policy.coverageId}-${primary ? '' : `${policy.feedId}-`}${next.sha256.slice(0, 32)}${rewindow ? `-w${today}` : ''}`;

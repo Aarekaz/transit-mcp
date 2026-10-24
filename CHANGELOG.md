@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A new NYC subway timetable that changes only days ahead now waits up to six hours before it's built. Changes to yesterday, today or tomorrow are still built on the next check, because live predictions match today's trips. MTA republishes the timetable about hourly, mostly with planned work for the coming week, and every rebuild costs about 140 s of CPU. Which days a change touches is read from trips.txt and the calendars, once per archive, in about 100 ms. Anything that can't be placed that way (stops, calendars, a stop_times edit without a trips.txt change) is built at once.
+
 - A schedule archive whose tables are unchanged no longer triggers a rebuild. MTA re-uploads the subway timetable about hourly, sometimes with identical tables in a new zip, and each one set off a six-minute rebuild. Archives are now compared by each table's name, size and CRC-32 from the zip directory, with nothing decompressed.
 
 - The registry entry (`server.json`), `package.json`, `/info`, `llms.txt` and the site's links point at the current repository, `Aarekaz/transit-mcp`.
