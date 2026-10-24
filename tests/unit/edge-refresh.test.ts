@@ -306,6 +306,30 @@ describe('edge refresh workflow', () => {
     expect(created).toEqual([`refresh-nyc-${f.hash.slice(0, 32)}-w${new Date(Date.now()).toISOString().slice(0, 10).replaceAll('-', '')}`]);
   });
 
+  it('treats a re-zipped archive with the same tables as unchanged, and rebuilds when a table changes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW));
+    const db = memoryStorage(), files = NYC_FILES as Record<string, string>, created: string[] = [];
+    // The same tables in another order and compression: other bytes, same content.
+    const first = await zip(files), rezipped = await zip(Object.fromEntries(Object.entries(files).reverse()), 0);
+    const changed = await zip({ ...files, 'trips.txt': files['trips.txt']! + files['trips.txt']!.trim().split('\n').at(-1)!.replace(/^([^,]*,[^,]*,)([^,]*)/, '$1$2_added') + '\n' });
+    expect(await sha256(first)).not.toBe(await sha256(rezipped));
+    let served = first;
+    const env = { TRANSIT_ARTIFACTS: db.bucket, TRANSIT_COVERAGE_MODES: '{"nyc":"on"}', TRANSIT_REFRESH: {
+      create: async (options: { id: string }) => { if (created.includes(options.id)) throw new Error('instance already exists'); created.push(options.id); },
+      get: async () => ({ status: async () => ({ status: 'running' }), restart: async () => {} }) } } as unknown as Env;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => String(input instanceof Request ? input.url : input).includes('gtfs_supplemented')
+      ? new Response(served) : new Response(null, { status: 503 }));
+    vi.spyOn(console, 'info').mockImplementation(() => {}); vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const check = async (archive: Uint8Array, at: number) => { served = archive; await checkStaticSources(env, Date.now() + at * 10 * 60_000); };
+    await check(first, 0);
+    await check(rezipped, 1);
+    expect(created).toEqual([`refresh-nyc-${(await sha256(first)).slice(0, 32)}`]);
+    expect(await db.bucket.get(sourceKeys('nyc').archive(await sha256(rezipped)))).toBeNull();
+    await check(changed, 2);
+    expect(created).toHaveLength(2);
+    expect(created[1]).toBe(`refresh-nyc-${(await sha256(changed)).slice(0, 32)}`);
+  });
+
   it('restarts a failed refresh for the current archive a bounded number of times', async () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW));
     const db = memoryStorage(), archive = await zip(NYC_FILES as Record<string, string>);

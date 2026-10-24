@@ -1,7 +1,7 @@
 /** Minimal read-only ZIP access for published GTFS archives, using the platform's
  * streaming inflater. Unsupported features (ZIP64, encryption, other methods) fail
  * closed rather than being guessed. */
-export interface ZipEntry { name: string; method: 0 | 8; compressedSize: number; size: number; localOffset: number }
+export interface ZipEntry { name: string; method: 0 | 8; compressedSize: number; size: number; localOffset: number; crc32: number }
 
 const END_OF_CENTRAL_DIRECTORY = 0x06054b50, CENTRAL_HEADER = 0x02014b50, LOCAL_HEADER = 0x04034b50;
 
@@ -18,7 +18,7 @@ export function readZipDirectory(bytes: Uint8Array): Map<string, ZipEntry> {
   for (let index = 0; index < count; index++) {
     if (cursor + 46 > end || view.getUint32(cursor, true) !== CENTRAL_HEADER) throw new Error('Invalid ZIP directory');
     const flags = view.getUint16(cursor + 8, true), method = view.getUint16(cursor + 10, true);
-    const compressedSize = view.getUint32(cursor + 20, true), uncompressed = view.getUint32(cursor + 24, true);
+    const crc32 = view.getUint32(cursor + 16, true), compressedSize = view.getUint32(cursor + 20, true), uncompressed = view.getUint32(cursor + 24, true);
     const nameLength = view.getUint16(cursor + 28, true), extraLength = view.getUint16(cursor + 30, true), commentLength = view.getUint16(cursor + 32, true);
     const localOffset = view.getUint32(cursor + 42, true);
     const name = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(cursor + 46, cursor + 46 + nameLength));
@@ -27,11 +27,19 @@ export function readZipDirectory(bytes: Uint8Array): Map<string, ZipEntry> {
     const base = name.slice(name.lastIndexOf('/') + 1);
     if (!name.endsWith('/') && base) {
       if (entries.has(base)) throw new Error(`Ambiguous ZIP entry: ${base}`);
-      entries.set(base, { name, method: method as 0 | 8, compressedSize, size: uncompressed, localOffset });
+      entries.set(base, { name, method: method as 0 | 8, compressedSize, size: uncompressed, localOffset, crc32 });
     }
     cursor += 46 + nameLength + extraLength + commentLength;
   }
   return entries;
+}
+
+/** Identifies what an archive holds rather than its bytes: each table's name, size and
+ * CRC-32 from the central directory. A publisher that re-zips the same tables (new
+ * timestamps, new order) gets the same fingerprint, with nothing decompressed. */
+export function zipContentFingerprint(bytes: Uint8Array): string {
+  return [...readZipDirectory(bytes).entries()].sort(([a], [b]) => a.localeCompare(b))
+    .map(([base, entry]) => `${base}:${entry.size}:${entry.crc32.toString(16)}`).join('\n');
 }
 
 /** Streams one entry's bytes. The declared size is enforced. */
