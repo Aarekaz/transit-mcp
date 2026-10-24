@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Transit MCP · launch</title>
+<style>
+  @font-face { font-family: 'Inter Tight'; font-weight: 500; src: url(https://cdn.jsdelivr.net/npm/@fontsource/inter-tight@5.1.0/files/inter-tight-latin-500-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'Inter Tight'; font-weight: 600; src: url(https://cdn.jsdelivr.net/npm/@fontsource/inter-tight@5.1.0/files/inter-tight-latin-600-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'Inter'; font-weight: 400; src: url(https://cdn.jsdelivr.net/npm/@fontsource/inter@5.1.0/files/inter-latin-400-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'Inter'; font-weight: 500; src: url(https://cdn.jsdelivr.net/npm/@fontsource/inter@5.1.0/files/inter-latin-500-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'Instrument Serif'; font-style: italic; src: url(https://cdn.jsdelivr.net/npm/@fontsource/instrument-serif@5.1.0/files/instrument-serif-latin-400-italic.woff2) format('woff2'); }
+  @font-face { font-family: 'JetBrains Mono'; font-weight: 400; src: url(https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.1.0/files/jetbrains-mono-latin-400-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'JetBrains Mono'; font-weight: 500; src: url(https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.1.0/files/jetbrains-mono-latin-500-normal.woff2) format('woff2'); }
+
+  :root {
+    --ground: #07090d; --ink: #f1f3f6; --soft: #b3bcc8; --muted: #6f7a88;
+    --accent: #ff6b1a; --live: #5fd4a4; --shade: 7, 9, 13; --mark-ring: #f1f3f6;
+    --ui: 'Inter', system-ui, sans-serif; --display: 'Inter Tight', 'Inter', sans-serif;
+    --serif: 'Instrument Serif', Georgia, serif; --mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+  .light { --ground: #f3f0e9; --ink: #111a27; --soft: #3d4756; --muted: #8a8f97;
+    --accent: #e2540a; --live: #0f8a5f; --shade: 243, 240, 233; --mark-ring: #102a43; }
+  html, body { margin: 0; background: #000; }
+  body { display: grid; place-items: center; min-height: 100vh; }
+  #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; background: var(--ground); color: var(--ink); font-family: var(--ui);
+    font-feature-settings: 'tnum' 1; }
+  #stage canvas { position: absolute; inset: 0; width: 1920px; height: 1080px; }
+  #bloom { mix-blend-mode: screen; opacity: .3; }
+  .light #bloom { display: none; }
+  .shade { position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(90deg, rgba(var(--shade), .94) 0%, rgba(var(--shade), .72) 28%, rgba(var(--shade), 0) 55%),
+                radial-gradient(140% 110% at 70% 50%, transparent 50%, rgba(var(--shade), .75) 100%); }
+  .grain { position: absolute; inset: -50%; opacity: .07; pointer-events: none; mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+  .light .grain { mix-blend-mode: multiply; opacity: .09; }
+
+  .layer { position: absolute; inset: 0; pointer-events: none; }
+  .statement { position: absolute; left: 168px; top: 50%; transform: translateY(-50%); width: 1500px; font: italic 400 100px/1.08 var(--serif); letter-spacing: -.012em; }
+  .statement .w, .payoff .w { display: inline-block; white-space: pre; }
+  .statement .dim { color: var(--muted); }
+
+  .vignette { position: absolute; left: 168px; top: 0; bottom: 0; width: 900px; display: flex; flex-direction: column; justify-content: center; }
+  .place { margin-bottom: 26px; font: 600 40px/1 var(--display); letter-spacing: .04em; color: var(--soft); }
+  .ask { font: 500 48px/1.2 var(--ui); letter-spacing: -.022em; min-height: 58px; }
+  .caret { display: inline-block; width: 3px; height: 48px; margin-left: 5px; vertical-align: -7px; background: var(--accent); }
+  .answer { margin-top: 56px; display: flex; align-items: flex-end; gap: 34px; }
+  .big { font: 600 196px/.78 var(--display); letter-spacing: -.06em; }
+  .big small { font: 500 52px/1 var(--display); letter-spacing: -.02em; color: var(--soft); margin-left: 12px; }
+  .facts { padding-bottom: 6px; }
+  .route { display: flex; align-items: center; gap: 14px; font: 500 28px/1.2 var(--ui); letter-spacing: -.012em; white-space: nowrap; }
+  .bullet { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; font: 700 21px/1 var(--ui); color: #fff; }
+  .bar { width: 38px; height: 8px; border-radius: 4px; }
+  .then { margin-top: 12px; font: 400 22px/1.3 var(--ui); color: var(--muted); }
+  .tool { margin-top: 48px; font: 400 18px/1 var(--mono); color: var(--muted); letter-spacing: .02em; }
+  .tool b { font-weight: 500; color: var(--soft); }
+
+  .caption { position: absolute; left: 168px; bottom: 76px; font: 500 14px/1 var(--mono); letter-spacing: .2em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+  .caption span { display: inline-flex; align-items: center; gap: 12px; }
+  .caption i { width: 7px; height: 7px; border-radius: 50%; background: var(--live); }
+  .caption .sched i { background: var(--muted); }
+
+  .payoff { position: absolute; left: 168px; bottom: 140px; font: italic 400 92px/1.05 var(--serif); letter-spacing: -.01em; }
+
+  .end { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; }
+  .end-inner { display: flex; flex-direction: column; align-items: center; }
+  .mark { width: 136px; height: 136px; }
+  .title { margin-top: 40px; font: 600 108px/1 var(--display); letter-spacing: -.048em; }
+  .regions { margin-top: 26px; font: 600 30px/1 var(--display); letter-spacing: .14em; color: var(--ink); }
+  .url { margin-top: 30px; font: 400 30px/1 var(--mono); color: var(--soft); letter-spacing: -.01em; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="scene" width="1920" height="1080"></canvas>
+  <canvas id="bloom" width="960" height="540"></canvas>
+  <div class="shade" id="shade"></div>
+  <div class="layer" id="statements"></div>
+  <div class="layer" id="vignettes"></div>
+  <div class="layer" id="captions"></div>
+  <div class="layer"><div class="payoff" id="payoff"></div></div>
+  <div class="end" id="end"><div class="end-inner">
+    <svg class="mark" viewBox="0 0 240 240" aria-hidden="true">
+      <circle id="ring" cx="120" cy="120" r="106" stroke="var(--mark-ring)" stroke-width="12" fill="none" pathLength="1" stroke-dasharray="1 1" transform="rotate(-90 120 120)"/>
+      <path class="leg" d="M68 68V108H92L120 136" stroke="#1687F8" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" fill="none" pathLength="1" stroke-dasharray="1 1"/>
+      <path class="leg" d="M68 172V144H92L120 136" stroke="#1EAD70" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" fill="none" pathLength="1" stroke-dasharray="1 1"/>
+      <path class="leg" d="M172 68V108H148L120 136" stroke="#F04455" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" fill="none" pathLength="1" stroke-dasharray="1 1"/>
+      <path class="leg" d="M172 172V144H148L120 136" stroke="#EAA21A" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" fill="none" pathLength="1" stroke-dasharray="1 1"/>
+      <g id="hub"><circle cx="120" cy="136" r="22" fill="#fff" stroke="var(--mark-ring)" stroke-width="9"/><circle cx="120" cy="136" r="6" fill="#102A43"/></g>
+    </svg>
+    <div class="title" id="e1">Transit MCP</div>
+    <div class="url" id="e2">transitmcp.com/mcp</div>
+    <div class="regions" id="e3">NY &nbsp;·&nbsp; DC &nbsp;·&nbsp; SF</div>
+  </div></div>
+  <div class="grain"></div>
+  <div id="fade" style="position:absolute;inset:0;background:var(--ground);pointer-events:none"></div>
+</div>
+
+<script src="lines.js"></script>
+<script src="live.js"></script>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js';
+
+const W = 1920, H = 1080;
+const params = new URLSearchParams(location.search);
+const CUT = params.get('cut') || 'launch', LIGHT = params.get('theme') === 'light';
+if (LIGHT) document.getElementById('stage').classList.add('light');
+
+// ---------- the cut ----------
+// Each city: its answer's line draws (or arrives in colour from the last city), the city grows around it
+// in grey, the question is asked and answered; then the grey falls away and the colour carries on.
+const CUTS = {
+  launch: {
+    duration: 32,
+    statements: [{ from: 0.5, to: 4.6, parts: [['Your AI knows the subway map.', ''], ['It has no idea when the next train comes.', 'dim']] },
+                 { from: 5.5, to: 8.2, parts: [['Now it does.', '']] }],
+    lineFrom: 4.5,
+    cities: [{ arrive: 7.4, ask: 9.0, leave: 14.4, pace: 1 }, { arrive: 15.2, ask: 15.9, leave: 19.8, pace: 0.8 }, { arrive: 20.6, ask: 21.2, leave: 24.6, pace: 0.66 }],
+    payoff: { from: 24.4, words: 26.4, to: 28.6 },
+    end: 28.6,
+  },
+  og: {
+    duration: 16,
+    statements: [],
+    lineFrom: 0,
+    cities: [{ arrive: 0.6, ask: 0.8, leave: 3.9, pace: 0.5 }, { arrive: 4.4, ask: 4.6, leave: 7.2, pace: 0.5 }, { arrive: 7.7, ask: 7.9, leave: 10.5, pace: 0.5 }],
+    payoff: { from: 10.3, words: 10.6, to: 11.8 },
+    end: 11.8,
+  },
+};
+const T = CUTS[CUT];
+window.DURATION = T.duration;
+
+// ---------- easing ----------
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const span = (t, a, b) => clamp((t - a) / (b - a));
+const easeOut = x => 1 - Math.pow(1 - x, 3);
+const easeInOut = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const expoOut = x => x === 1 ? 1 : 1 - Math.pow(2, -10 * x);
+const lerp = (a, b, k) => a + (b - a) * k;
+const show = (el, k, dy = 18, blur = 10) => { el.style.opacity = k; el.style.transform = `translateY(${(1 - k) * dy}px)`; el.style.filter = k < 1 ? `blur(${(1 - k) * blur}px)` : 'none'; };
+
+// ---------- scene ----------
+const canvas = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1); renderer.setSize(W, H, false); renderer.setClearColor(LIGHT ? 0xf3f0e9 : 0x07090d, 1);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(24, W / H, 0.1, 500);
+
+const LIVE = window.LIVE;
+// The line each answer rode; BART's are drawn once per colour, under their northbound name.
+const heroOf = (key, route) => key === 'sfbay' ? route.replace(/-[NS]$/, '') + '-N' : route;
+const CITIES = [
+  { key: 'nyc', x: -17, size: 12, focus: [-73.975, 40.74], radius: 16, pins: [[-73.9968, 40.7377]], place: 'NY' },
+  { key: 'dc', x: 0, size: 11, focus: [-77.03, 38.905], radius: 14, pins: [[-77.0074, 38.8977], [-77.0219, 38.8983]], place: 'DC' },
+  { key: 'sfbay', x: 17, size: 13, focus: [-122.36, 37.69], radius: 17, pins: [[-122.3925, 37.6159], [-122.4079, 37.7844]], place: 'SF' },
+].map(city => ({ ...city, live: LIVE[city.key], hero: heroOf(city.key, LIVE[city.key].route) }));
+
+const lineVert = `attribute float aSide; attribute float aAlong; varying float vSide; varying float vAlong;
+  void main() { vSide = aSide; vAlong = aAlong; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+const lineFrag = `
+  uniform vec3 uColor; uniform vec3 uInk; uniform float uProgress; uniform float uTime; uniform float uLen; uniform float uColorK; uniform float uLight; uniform float uHalo; uniform float uSeed; uniform float uTrains; uniform float uLightTheme;
+  varying float vSide; varying float vAlong;
+  void main() {
+    float r = uProgress * 1.03 - vAlong;
+    if (r < 0.0) discard;
+    float edge = 1.0 - abs(vSide);
+    float a = uHalo > 0.5 ? pow(edge, 2.6) * 0.16 : smoothstep(0.0, 0.6, edge);
+    float s = vAlong * uLen;
+    float d1 = fract(s / 3.1 - uTime * 0.26 + uSeed), d2 = fract(s / 4.3 + uTime * 0.2 + uSeed * 1.9);
+    float train = (smoothstep(0.968, 1.0, d1) + smoothstep(0.976, 1.0, d2)) * uTrains;
+    vec3 base = mix(uInk, uColor, uColorK);
+    if (uLightTheme > 0.5) {
+      float ink = mix(0.22, 1.0, uColorK);
+      gl_FragColor = vec4(mix(base, vec3(1.0), train * 0.7), a * ink * uLight);
+    } else {
+      vec3 c = base * mix(0.8, 1.0, uColorK) + vec3(1.0) * train * 0.8;
+      gl_FragColor = vec4(c * uLight, a * (uHalo > 0.5 ? uColorK : 1.0) * clamp(uLight, 0.0, 1.0));
+    }
+  }`;
+
+function project(lines, size) {
+  const all = lines.flatMap(line => line.coords);
+  const lat0 = all.reduce((s, c) => s + c[1], 0) / all.length, k = Math.cos(lat0 * Math.PI / 180);
+  const xs = all.map(c => c[0] * k), ys = all.map(c => c[1]);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const scale = size / Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  return c => new THREE.Vector3((c[0] * k - cx) * scale, 0, -(c[1] - cy) * scale);
+}
+function ribbon(points, width, y) {
+  const n = points.length, pos = new Float32Array(n * 6), side = new Float32Array(n * 2), along = new Float32Array(n * 2), idx = [];
+  let total = 0; const acc = [0];
+  for (let i = 1; i < n; i++) { total += points[i].distanceTo(points[i - 1]); acc.push(total); }
+  for (let i = 0; i < n; i++) {
+    const a = points[Math.max(0, i - 1)], b = points[Math.min(n - 1, i + 1)];
+    const t = new THREE.Vector3().subVectors(b, a).normalize(), nrm = new THREE.Vector3(-t.z, 0, t.x).multiplyScalar(width / 2);
+    for (const [j, s] of [[0, -1], [1, 1]]) {
+      const p = points[i].clone().addScaledVector(nrm, s);
+      pos.set([p.x, y, p.z], (i * 2 + j) * 3); side[i * 2 + j] = s; along[i * 2 + j] = acc[i] / total;
+    }
+    if (i < n - 1) idx.push(i * 2, i * 2 + 1, i * 2 + 2, i * 2 + 1, i * 2 + 3, i * 2 + 2);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('aSide', new THREE.BufferAttribute(side, 1)); g.setAttribute('aAlong', new THREE.BufferAttribute(along, 1)); g.setIndex(idx);
+  return { geometry: g, length: total };
+}
+const blending = LIGHT ? THREE.NormalBlending : THREE.AdditiveBlending;
+const INK = LIGHT ? new THREE.Color(0x1b2533) : new THREE.Color(0x5d6673);
+
+const cities = CITIES.map((city, ci) => {
+  const group = new THREE.Group(); group.position.x = city.x; scene.add(group);
+  const data = window.LINES[city.key], toXZ = project(data, city.size);
+  const lines = data.map((line, li) => {
+    const raw = line.coords.map(toXZ);
+    const curve = new THREE.CatmullRomCurve3(raw, false, 'centripetal', 0.5);
+    const pts = curve.getPoints(Math.max(32, raw.length * 10));
+    const color = new THREE.Color('#' + (line.color || 'cccccc'));
+    if (city.key === 'sfbay' && /^(Local|Limited|Express)/.test(line.name)) color.set('#d63b48');
+    if (LIGHT && color.getHSL({}).l > 0.6) color.offsetHSL(0, 0, -0.18);
+    const hero = line.name === city.hero;
+    const layers = LIGHT ? [[hero ? 0.085 : 0.04, 0]] : [[0.42, 1], [hero ? 0.075 : 0.032, 0]];
+    const mats = layers.map(([width, halo]) => {
+      const { geometry, length } = ribbon(pts, width, li * 0.001 + (hero ? 0.05 : 0));
+      const mat = new THREE.ShaderMaterial({ vertexShader: lineVert, fragmentShader: lineFrag, transparent: true, depthWrite: false, blending,
+        uniforms: { uColor: { value: color }, uInk: { value: INK }, uProgress: { value: 0 }, uTime: { value: 0 }, uLen: { value: length }, uColorK: { value: 0 },
+          uLight: { value: 1 }, uHalo: { value: halo }, uSeed: { value: (li * 0.37) % 1 }, uTrains: { value: 0 }, uLightTheme: { value: LIGHT ? 1 : 0 } } });
+      group.add(new THREE.Mesh(geometry, mat));
+      return mat;
+    });
+    return { name: line.name, mats, hero, delay: (li / data.length) * 1.1, curve, color };
+  });
+  const heroLine = lines.find(line => line.hero);
+  // The train in the answer: a point of the line's colour gliding into the station.
+  const bead = new THREE.Mesh(new THREE.CircleGeometry(0.17, 32), new THREE.ShaderMaterial({ transparent: true, depthWrite: false, blending,
+    uniforms: { uColor: { value: heroLine.color }, uK: { value: 0 }, uLightTheme: { value: LIGHT ? 1 : 0 } },
+    vertexShader: `varying vec2 vP; void main(){ vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `uniform vec3 uColor; uniform float uK; uniform float uLightTheme; varying vec2 vP; void main(){ float d = length(vP) / 0.17;
+      float core = smoothstep(0.34, 0.26, d), halo = exp(-d * d * 4.0) * 0.5;
+      vec3 c = uLightTheme > 0.5 ? uColor : mix(uColor, vec3(1.0), core * 0.7) * 1.4;
+      gl_FragColor = vec4(c, (uLightTheme > 0.5 ? core : core + halo) * uK); }` }));
+  bead.rotation.x = -Math.PI / 2; group.add(bead);
+  const rings = city.pins.map(c => {
+    const p = toXZ(c);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.15, 0.172, 64), new THREE.MeshBasicMaterial({ color: LIGHT ? 0x111a27 : 0xffffff, transparent: true, opacity: 0, depthWrite: false }));
+    ring.rotation.x = -Math.PI / 2; ring.position.set(p.x, 0.06, p.z); group.add(ring);
+    return { ring, p };
+  });
+  const samples = 500; let best = 0, bestD = Infinity;
+  for (let i = 0; i <= samples; i++) { const d = heroLine.curve.getPointAt(i / samples).distanceTo(rings[0].p); if (d < bestD) { bestD = d; best = i / samples; } }
+  const focus = toXZ(city.focus).add(new THREE.Vector3(city.x, 0, 0));
+  return { ...city, group, lines, heroLine, bead, rings, arrive: best, focus, beat: T.cities[ci] };
+});
+
+// ---------- copy ----------
+const word = (text, cls = '') => `<span class="w ${cls}">${text}</span>`;
+const statementsEl = document.getElementById('statements');
+const statements = T.statements.map(s => {
+  const el = document.createElement('div'); el.className = 'statement';
+  el.innerHTML = s.parts.map(([text, cls]) => text.split(/(\s+)/).map(w => word(w, cls)).join('')).join('<br>');
+  statementsEl.appendChild(el);
+  let part = 0; const words = [];
+  for (const node of el.children) { if (node.tagName === 'BR') { part++; continue; } words.push({ el: node, part }); }
+  return { ...s, words };
+});
+
+const vigEl = document.getElementById('vignettes'), capEl = document.getElementById('captions');
+cities.forEach(city => {
+  if (!city.beat) return;
+  const l = city.live, hex = city.heroLine.color.getHexString();
+  const mark = city.key === 'nyc' ? `<span class="bullet" style="background:#${hex}">${l.route}</span>` : `<span class="bar" style="background:#${hex}"></span>`;
+  const el = document.createElement('div'); el.className = 'vignette';
+  el.innerHTML = `<div class="place">${city.place}</div><div class="ask"><span class="typed"></span><span class="caret"></span></div>
+    <div class="answer"><div class="big">${l.big}<small>${l.unit}</small></div>
+      <div class="facts"><div class="route">${mark}${l.routeLabel}</div><div class="then">${l.then}</div></div></div>
+    <div class="tool">↳ <b>${l.tool}</b></div>`;
+  vigEl.appendChild(el);
+  const cap = document.createElement('div'); cap.className = 'caption';
+  const live = l.status === 'realtime';
+  cap.innerHTML = `<span class="${live ? '' : 'sched'}"><i></i>${live ? 'Live' : 'Timetable'} · ${l.day}, ${l.asOf} ${l.zone}</span>`;
+  capEl.appendChild(cap);
+  const q = s => el.querySelector(s);
+  Object.assign(city, { el, cap, placeEl: q('.place'), typed: q('.typed'), caret: q('.caret'), big: q('.big'), facts: q('.facts'), tool: q('.tool') });
+});
+
+const payoffEl = document.getElementById('payoff');
+payoffEl.innerHTML = 'Every line. Every train. Live.'.split(/(\s+)/).map(w => word(w)).join('');
+const payoffWords = [...payoffEl.children];
+
+// ---------- per frame ----------
+function statementsAt(t) {
+  for (const s of statements) {
+    const out = easeInOut(span(t, s.to - 0.6, s.to));
+    s.words.forEach(({ el, part }, i) => { const start = s.from + part * 1.4 + i * 0.06; show(el, easeOut(span(t, start, start + 0.75)) * (1 - out), 22, 12); });
+  }
+}
+
+function citiesAt(t) {
+  const P = T.payoff;
+  cities.forEach((city, ci) => {
+    const b = city.beat, prev = T.cities[ci - 1];
+    const heroDraw = !b ? [P.from - 0.6, P.from + 0.8] : ci === 0 ? [T.lineFrom, T.lineFrom + 2.4] : [prev.leave - 0.2, prev.leave + 1.0];
+    const greyDraw = !b ? [P.from - 0.6, P.from + 1.2] : [b.arrive - 0.4, b.arrive + 2.0];
+    const answered = b ? easeInOut(span(t, b.ask + 1.9 * b.pace, b.ask + 2.5 * b.pace)) * (1 - easeInOut(span(t, b.leave - 0.6, b.leave))) : 0;
+    // Leaving: the grey falls away first, the colour a beat later; the payoff brings everything back.
+    const greyGone = b ? easeInOut(span(t, b.leave - 0.7, b.leave)) : 0, heroGone = b ? easeInOut(span(t, b.leave + 0.5, b.leave + 1.1)) : 0;
+    const back = easeInOut(span(t, P.from - 0.3, P.from + 0.8));
+    const wave = easeInOut(span(t, P.words - 1.6 + ci * 0.35, P.words - 0.6 + ci * 0.35));
+    city.lines.forEach(line => {
+      const [a, z] = line.hero ? heroDraw : greyDraw, d = line.hero ? 0 : line.delay;
+      const p = easeInOut(span(t, a + d, z + d));
+      const light = lerp((line.hero ? 1 : 1 - 0.45 * answered) * (1 - (line.hero ? heroGone : greyGone)), 1, back);
+      for (const m of line.mats) {
+        m.uniforms.uProgress.value = p; m.uniforms.uTime.value = t; m.uniforms.uColorK.value = line.hero ? 1 : wave;
+        m.uniforms.uLight.value = light; m.uniforms.uTrains.value = wave * 0.9;
+      }
+    });
+    if (!b) return;
+    const bk = easeOut(span(t, b.ask + 1.9 * b.pace, b.ask + 3.9 * b.pace));
+    const p = city.heroLine.curve.getPointAt(clamp(city.arrive - 0.14 * (1 - bk), 0, 1));
+    city.bead.position.set(p.x, 0.08, p.z); city.bead.material.uniforms.uK.value = answered;
+    city.rings.forEach((r, j) => {
+      const k = easeOut(span(t, b.ask + (2.1 + j * 0.25) * b.pace, b.ask + (2.8 + j * 0.25) * b.pace)) * (1 - easeInOut(span(t, b.leave - 0.6, b.leave)));
+      r.ring.material.opacity = k * 0.85; const s = 1.5 - 0.5 * k; r.ring.scale.set(s, s, s);
+    });
+    // Copy: the question, a silence, the answer.
+    const out = 1 - easeInOut(span(t, b.leave - 0.7, b.leave - 0.15));
+    city.el.style.opacity = t > b.ask - 0.2 ? out : 0;
+    const typing = span(t, b.ask, b.ask + 1.2 * b.pace);
+    city.typed.textContent = city.live.ask.slice(0, Math.round(city.live.ask.length * typing));
+    city.caret.style.opacity = typing < 1 ? 1 : (Math.floor((t - b.ask) * 2.2) % 2 ? 0 : 1) * (1 - span(t, b.ask + 2.0 * b.pace, b.ask + 2.1 * b.pace));
+    show(city.placeEl, easeOut(span(t, b.ask - 0.2, b.ask + 0.4)), 12, 6);
+    show(city.big, expoOut(span(t, b.ask + 1.9 * b.pace, b.ask + 2.6 * b.pace)), 34, 18);
+    show(city.facts, easeOut(span(t, b.ask + 2.15 * b.pace, b.ask + 2.75 * b.pace)), 16, 8);
+    show(city.tool, easeOut(span(t, b.ask + 2.5 * b.pace, b.ask + 3.0 * b.pace)), 6, 4);
+    city.cap.style.opacity = easeOut(span(t, b.arrive, b.arrive + 0.8)) * out;
+  });
+}
+
+// ---------- camera ----------
+const shotFor = city => {
+  const azimuth = -0.26, right = new THREE.Vector3(Math.cos(azimuth), 0, -Math.sin(azimuth));
+  const shot = { target: city.focus.clone().addScaledVector(right, -0.18 * city.radius), radius: city.radius, polar: 0.98, azimuth };
+  return () => shot;
+};
+// The opening: low and close, riding just behind the head of the first line as it draws.
+const ride = t => {
+  const c = cities[0], k = easeInOut(span(t, T.lineFrom, T.lineFrom + 2.4));
+  const head = c.heroLine.curve.getPointAt(clamp(k * 0.92 + 0.04, 0, 1)).add(new THREE.Vector3(c.x, 0, 0));
+  return { target: head, radius: 6.5, polar: 1.12, azimuth: -0.15 };
+};
+const wideShot = { target: new THREE.Vector3(1.2, 0, 5.2), radius: 66, polar: 0.66, azimuth: 0 }, wide = () => wideShot;
+const keys = [[0, ride], [T.lineFrom + 1.4, ride]];
+T.cities.forEach((b, i) => keys.push([b.arrive + 0.6, shotFor(cities[i])], [b.leave - 0.2, shotFor(cities[i])]));
+keys.push([T.payoff.from + 1.6, wide], [T.duration, wide]);
+function cameraAt(t) {
+  let i = 0; while (i < keys.length - 2 && t > keys[i + 1][0]) i++;
+  const [t0, fa] = keys[i], [t1, fb] = keys[i + 1], a = fa(t), b = fb(t);
+  const k = fa === fb ? 0 : easeInOut(span(t, t0, t1));
+  const target = a.target.clone().lerp(b.target, k);
+  const radius = lerp(a.radius, b.radius, k), polar = lerp(a.polar, b.polar, k), az = lerp(a.azimuth, b.azimuth, k) + t * 0.01;
+  camera.position.set(target.x + radius * Math.sin(polar) * Math.sin(az), radius * Math.cos(polar), target.z + radius * Math.sin(polar) * Math.cos(az));
+  camera.lookAt(target); camera.updateMatrixWorld();
+}
+
+function payoffAt(t) {
+  const P = T.payoff, out = 1 - easeInOut(span(t, P.to - 0.5, P.to));
+  payoffWords.forEach((w, i) => show(w, easeOut(span(t, P.words + i * 0.09, P.words + 0.8 + i * 0.09)) * out, 20, 12));
+}
+
+const legs = [...document.querySelectorAll('.leg')], ring = document.getElementById('ring'), hub = document.getElementById('hub');
+const endParts = ['e1', 'e2', 'e3'].map(id => document.getElementById(id));
+const sceneEl = document.getElementById('scene'), bloomEl = document.getElementById('bloom');
+function endAt(t) {
+  const e = T.end, scrim = easeInOut(span(t, e - 0.3, e + 0.9));
+  const filter = scrim > 0 ? `blur(${scrim * 12}px) ${LIGHT ? `opacity(${1 - scrim * 0.8})` : `brightness(${1 - scrim * 0.72})`}` : 'none';
+  sceneEl.style.filter = bloomEl.style.filter = filter;
+  document.getElementById('end').style.opacity = t > e ? 1 : 0;
+  ring.style.strokeDashoffset = 1 - easeInOut(span(t, e + 0.2, e + 1.3));
+  legs.forEach((leg, i) => { leg.style.strokeDashoffset = 1 - easeOut(span(t, e + 0.4 + i * 0.1, e + 1.1 + i * 0.1)); });
+  const h = expoOut(span(t, e + 1.0, e + 1.5)); hub.style.transformOrigin = '120px 136px'; hub.style.transform = `scale(${h})`; hub.style.opacity = h;
+  endParts.forEach((el, i) => { const d = Math.min(i, 1) * 0.3; show(el, easeOut(span(t, e + 0.8 + d, e + 1.6 + d)), 18, 10); });
+  const open = easeInOut(span(t, T.payoff.from - 0.4, T.payoff.from + 0.8));
+  document.getElementById('shade').style.opacity = (1 - scrim) * (1 - 0.7 * open);
+}
+
+const bctx = bloomEl.getContext('2d');
+function post() { if (LIGHT) return; bctx.filter = 'none'; bctx.clearRect(0, 0, 960, 540); bctx.filter = 'blur(12px)'; bctx.drawImage(canvas, 0, 0, 960, 540); }
+
+function seek(t) {
+  citiesAt(t); cameraAt(t); statementsAt(t); payoffAt(t); endAt(t);
+  renderer.render(scene, camera); post();
+  document.getElementById('fade').style.opacity = Math.max(1 - span(t, 0, 0.5), span(t, T.duration - 0.7, T.duration));
+}
+window.seek = seek;
+
+await document.fonts.ready;
+window.__ready = true;
+if (!params.has('render')) {
+  const t0 = performance.now();
+  const loop = () => { seek(((performance.now() - t0) / 1000) % T.duration); requestAnimationFrame(loop); };
+  loop();
+} else seek(0);
+</script>
+</body>
+</html>
