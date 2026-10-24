@@ -7,7 +7,7 @@ import type { Env } from './types';
  * and per tools/call request:
  *
  *   indexes: ['']                      (never a session or user identifier)
- *   blobs:   [method, toolName, clientName, environment, statusClass]
+ *   blobs:   [method, toolName, clientName, environment, statusClass, coverage, feeds]
  *   doubles: [durationMs]
  *
  * The transport is stateless and never issues Mcp-Session-Id, and MCP
@@ -39,6 +39,9 @@ export function recordMcpUsage(env: Env, telemetry: TelemetryInput): void {
         safe.clientName ?? 'unclassified',
         telemetryCategory(env.ENVIRONMENT, TELEMETRY_ENVIRONMENTS),
         safe.statusClass ?? '',
+        // Which regions and static feeds the answer used ("nyc", "mta_bus_m+mta_subway").
+        safe.coverage ?? '',
+        safe.feeds ?? '',
       ],
       doubles: [safe.durationMs ?? 0],
     });

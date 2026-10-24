@@ -10,7 +10,7 @@ import { handleMcpRequest } from './mcp/http-handler';
 import { handlePublicRequest } from './public-handler';
 import { anonymousMcpRateLimitResponse } from './rate-limit';
 import { normalizeMcpRoute } from './route-normalizer';
-import { serializeTelemetry, type TelemetryInput } from './telemetry';
+import { requestTelemetry, serializeTelemetry, type TelemetryInput } from './telemetry';
 import type { Env } from './types';
 import { bootstrapRegionalFeedHub } from './transit/gtfs/realtime/bootstrap';
 import { checkStaticSources, rollForwardSchedules } from './transit/gtfs/refresh/refresh';
@@ -63,7 +63,7 @@ function withCorrelationId(response: Response, correlationId: string): Response 
 }
 
 export default {
-  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const startedAt = performance.now();
     const telemetry: TelemetryInput = { correlationId: crypto.randomUUID() };
     const normalized = normalizeMcpRoute(request);
@@ -88,9 +88,9 @@ export default {
             response = await anonymousMcpRateLimitResponse(
               normalized.request,
               env.MCP_RATE_LIMITER,
-            ) ?? await handleMcpRequest(normalized.request, env, config, telemetry);
+            ) ?? await requestTelemetry.run(telemetry, () => handleMcpRequest(normalized.request, env, config, telemetry));
           } else {
-            response = await handleMcpRequest(normalized.request, env, config, telemetry);
+            response = await requestTelemetry.run(telemetry, () => handleMcpRequest(normalized.request, env, config, telemetry));
           }
         } else {
           response = await handlePublicRequest(request, env, config);
@@ -105,13 +105,20 @@ export default {
 
     telemetry.durationMs = Math.max(0, performance.now() - startedAt);
     telemetry.status = response.status;
-    recordMcpUsage(env, telemetry);
+    const streamed = telemetry.mcpMethod === 'tools/call' && response.body !== null;
+    if (!streamed) recordMcpUsage(env, telemetry);
     const correlationId = typeof telemetry.correlationId === 'string'
       ? telemetry.correlationId
       : crypto.randomUUID();
     const secured = addSecurityHeadersAuto(withCorrelationId(response, correlationId));
     console.info(serializeTelemetry(telemetry));
-    return secured;
+    if (!streamed) return secured;
+    if (!secured.body) { recordMcpUsage(env, telemetry); return secured; }
+    // A tool runs while its response streams: count the call once the body has ended (or
+    // the client went away), when the answer's regions and feeds are known.
+    const { readable, writable } = new TransformStream();
+    ctx.waitUntil(secured.body.pipeTo(writable).catch(() => {}).finally(() => recordMcpUsage(env, telemetry)));
+    return new Response(readable, secured);
   },
   scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
     ctx.waitUntil(bootstrapRegionalFeedHub(env));
