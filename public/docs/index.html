@@ -596,6 +596,25 @@
     .tool-table td:first-child code { font-size: 12.5px; }
     .tool-table td:nth-child(2) { color: var(--ink); white-space: nowrap; }
     .tool-table td:last-child { color: var(--ink-2); }
+
+    .steps { display: grid; gap: 14px; margin-top: 4px; counter-reset: step; }
+    .step { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 12px; align-items: start; }
+    .step::before { counter-increment: step; content: counter(step); display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--ink); color: var(--on-ink); font-size: 12px; font-weight: 600; margin-top: 2px; }
+    .step > div { min-width: 0; }
+    .step p { color: var(--ink-2); margin-bottom: 8px; }
+    .rider { font-size: 15px; color: var(--ink) !important; font-weight: 500; }
+    .field-notes { display: grid; grid-template-columns: minmax(0, 200px) minmax(0, 1fr); gap: 8px 16px; margin-top: 14px; font-size: 13.5px; color: var(--ink-2); }
+    .field-notes dt code, .tool-blurb code, .params code { font-size: 12.5px; color: var(--ink); background: var(--soft); border-radius: 5px; padding: 1px 4px; }
+    @media (max-width: 620px) { .field-notes { grid-template-columns: 1fr; } .field-notes dd { margin-bottom: 6px; } }
+    .params table { min-width: 560px; }
+    .params td:first-child { white-space: nowrap; }
+    .params td:nth-child(2) { color: var(--ink-3); white-space: nowrap; font-size: 12px; }
+    .tool-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 30px 0 8px; }
+    .tool-head h3 { margin: 0; font-family: var(--font-mono); font-size: 16px; }
+    .tool-head span { color: var(--ink-3); font-size: 13px; }
+    .tool-blurb { color: var(--ink-2); max-width: 740px; margin-bottom: 10px; font-size: 14px; }
+    .block { margin-top: 12px; }
+    .code-block.wrap pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   </style>
 </head>
 <body>
@@ -630,7 +649,7 @@
         </aside>
         <div class="hero-actions">
           <a class="primary-action" href="#connect">Connect your client</a>
-          <a class="secondary-action" href="#how">How it works</a>
+          <a class="secondary-action" href="#first-answer">See a real answer</a>
         </div>
       </div>
       <aside class="status-panel" aria-label="Server summary">
@@ -645,11 +664,12 @@
     <div class="layout">
       <aside class="toc" aria-label="Page sections">
         <a href="#connect" aria-current="true">Connect</a>
-        <a href="#how">How it works</a>
+        <a href="#first-answer">Your first answer</a>
         <a href="#tools">Tools</a>
+        <a href="#results">Using the results</a>
+        <a href="#how">Under the hood</a>
         <a href="#data">Data sources</a>
-        <a href="#endpoints">HTTP endpoints</a>
-        <a href="#resources">Resources and prompts</a>
+        <a href="#reference">Older tools and endpoints</a>
         <a href="#pairs-well-with">Pairs well with</a>
       </aside>
 
@@ -657,11 +677,8 @@
         <section id="connect">
           <h2>Connect an MCP client</h2>
           <p class="section-copy">The endpoint is anonymous Streamable HTTP. No login is required, and no token or OAuth flow is required either. If your client sends an old <code>Authorization</code> header, it's ignored.</p>
-          <div class="code-block">
-            <div class="code-title">
-              <span>Claude Desktop / Cursor config</span>
-              <button class="copy-button" type="button">Copy</button>
-            </div>
+          <div class="code-block block">
+            <div class="code-title"><span>Claude Desktop / Cursor config</span><button class="copy-button" type="button">Copy</button></div>
             <pre><code>{
   "mcpServers": {
     "transit-mcp": {
@@ -681,7 +698,7 @@
             </div>
             <div class="info-card">
               <h3>Anything else</h3>
-              <p>Name <code>transit-mcp</code>, URL <code>https://transitmcp.com/mcp</code>, transport <code>streamable-http</code>. It's also in the ChatGPT and Claude directories and the official MCP Registry as <code>com.transitmcp/transit-mcp</code>.</p>
+              <p>Name <code>transit-mcp</code>, URL <code>https://transitmcp.com/mcp</code>, transport <code>streamable-http</code>. It's also listed in the ChatGPT and Claude directories, and in the official MCP Registry as <code>com.transitmcp/transit-mcp</code>.</p>
             </div>
             <div class="info-card">
               <h3>Agent skill</h3>
@@ -690,10 +707,167 @@
           </div>
         </section>
 
-        <section id="how">
-          <h2>How it works</h2>
+        <section id="first-answer">
+          <h2>Your first answer</h2>
+          <p class="section-copy">One question from start to finish. The response is what the server actually returned on Saturday, October 24, trimmed to the fields that matter.</p>
+          <div class="steps">
+            <div class="step"><div>
+              <p>A rider asks:</p>
+              <p class="rider">"When's the next train from 14 St on the 1 to Times Square?"</p>
+            </div></div>
+            <div class="step"><div>
+              <p>The agent calls <code>get_departures</code> with the rider's own words, without looking anything up first. <code>toStop</code> keeps only trains that go on to Times Square, so the 1, 2 and 3 all count.</p>
+              <div class="code-block block">
+            <div class="code-title"><span>tools/call</span><button class="copy-button" type="button">Copy</button></div>
+            <pre><code>{
+  "name": "get_departures",
+  "arguments": {
+    "coverage": "nyc",
+    "stop": "14 St on the 1",
+    "toStop": "Times Sq-42 St",
+    "limit": 2
+  }
+}</code></pre>
+          </div>
+            </div></div>
+            <div class="step"><div>
+              <p>The server answers:</p>
+              <div class="code-block block">
+            <div class="code-title"><span>structuredContent, trimmed</span><button class="copy-button" type="button">Copy</button></div>
+            <pre><code>{
+  "status": "realtime",
+  "asOf": "2026-10-24T16:45:47.520Z",
+  "departures": [
+    {
+      "routeName": "2",
+      "headsign": "Wakefield-241 St",
+      "stopName": "14 St",
+      "scheduledTime": "2026-10-24T12:45:30-04:00",
+      "predictedTime": "2026-10-24T12:50:15-04:00",
+      "status": "realtime",
+      "arrival": {
+        "stopName": "Times Sq-42 St",
+        "scheduledTime": "2026-10-24T12:49:00-04:00",
+        "predictedTime": "2026-10-24T12:53:45-04:00"
+      },
+      "stepFree": "accessible",
+      "tripInstanceRef": "tr:nyc:mta_subway:trip:TDBTMi0y…:20261024:MTI6MDk6MzA"
+    }
+  ],
+  "sources": [
+    { "feedId": "mta_subway", "kind": "trip_updates", "ageSeconds": 22.5 }
+  ]
+}</code></pre>
+          </div>
+              <dl class="field-notes">
+                <dt><code>status</code></dt><dd><code>realtime</code> means live predictions were applied. The other values are <code>scheduled_only</code> (timetable only) and <code>unavailable</code>. Each departure has its own status too, because one train can be tracked live while the next one isn't.</dd>
+                <dt><code>scheduledTime</code>, <code>predictedTime</code></dt><dd>Local time with the agency's offset. This 2 train was due at 12:45 and is predicted at 12:50. <code>predictedTime</code> is <code>null</code> when there's no live prediction for that train.</dd>
+                <dt><code>arrival</code></dt><dd>When the train gets to <code>toStop</code>.</dd>
+                <dt><code>asOf</code>, <code>sources</code></dt><dd>When the answer was read (in UTC), and how old each feed was. The live feed here was 22 seconds old.</dd>
+                <dt><code>tripInstanceRef</code></dt><dd>This exact run of this train. Pass it to <code>get_vehicle_status</code> later to ask whether it's on time.</dd>
+                <dt><code>stepFree</code></dt><dd><code>accessible</code>, <code>not_accessible</code> or <code>unknown</code> for the station you board at.</dd>
+              </dl>
+            </div></div>
+            <div class="step"><div>
+              <p>The agent replies:</p>
+              <p class="rider">"A 2 train leaves 14 St at 12:50, about five minutes late, and gets to Times Sq-42 St at 12:54. That's live from the MTA as of 12:45."</p>
+            </div></div>
+          </div>
+        </section>
+
+        <section id="tools">
+          <h2>Tools</h2>
+          <p class="section-copy">There are 18 Model Context Protocol tools. All of them are read-only and return structured content, plus the same thing as JSON text for older clients. These five handle nearly everything, in all three regions. <code>coverage</code> is <code>nyc</code>, <code>dc</code> or <code>sfbay</code>, and you can leave it out whenever a name or ref already says the region.</p>
+
+          <div class="tool-head"><h3>plan_trip</h3><span>"Penn Station to JFK"</span></div>
+          <p class="tool-blurb">Real itineraries from the timetable, with live times where there are some. A separate validator checks every leg before anything comes back. Each itinerary also has plain <code>steps</code> (walk here, ride this, get off there) for reading out to a rider.</p>
+          <div class="table-wrap params"><table><thead><tr><th>Argument</th><th>Type</th><th>What it does</th></tr></thead><tbody><tr><td><code>origin</code></td><td>object, required</td><td><code>{"query": "Penn Station"}</code>, <code>{"ref": …}</code> or <code>{"latitude": …, "longitude": …}</code></td></tr><tr><td><code>destination</code></td><td>object, required</td><td>Same shapes as <code>origin</code>.</td></tr><tr><td><code>departAt</code></td><td>string</td><td>ISO time to leave. Defaults to now.</td></tr><tr><td><code>accessibility</code></td><td>string</td><td><code>step_free</code>: only platforms reachable without stairs, avoiding elevators that are out right now.</td></tr><tr><td><code>maxWalkMetres</code></td><td>number</td><td>Walking at each end and between rides. Capped at 800.</td></tr><tr><td><code>maxTransfers</code></td><td>integer</td><td>The most changes you'll accept.</td></tr><tr><td><code>routes</code></td><td>array</td><td>Route refs from <code>find_transit</code>, up to four, to plan along only those lines. Use it after a <code>routeHints</code> answer.</td></tr></tbody></table></div>
+
+          <div class="tool-head"><h3>get_departures</h3><span>"Next train from 14 St to Times Square"</span></div>
+          <p class="tool-blurb">The next trains or buses at a place. A name covers the whole place: all four stations at Times Sq-42 St, or stations a short walk apart. In New York, rerouted trains and trains missing from the timetable show up too, marked as observed.</p>
+          <div class="table-wrap params"><table><thead><tr><th>Argument</th><th>Type</th><th>What it does</th></tr></thead><tbody><tr><td><code>stop</code></td><td>string</td><td>A station name. Or give <code>stopRef</code>.</td></tr><tr><td><code>toStop</code></td><td>string</td><td>Only trips that go on to this stop, each with its arrival time there. Or give <code>toStopRef</code>.</td></tr><tr><td><code>at</code></td><td>string</td><td>ISO time to look from. Defaults to now.</td></tr><tr><td><code>windowSeconds</code></td><td>integer</td><td>How far ahead to look, up to 604800 (seven days).</td></tr><tr><td><code>routeRefs</code></td><td>array</td><td>Only these lines, as refs from <code>find_transit</code>.</td></tr><tr><td><code>selection</code></td><td>string</td><td><code>first</code> (the default) or <code>last</code>, for the last train of the night.</td></tr><tr><td><code>limit</code></td><td>integer</td><td>1 to 100, default 20.</td></tr></tbody></table></div>
+
+          <div class="tool-head"><h3>find_transit</h3><span>"Which Union Station?"</span></div>
+          <p class="tool-blurb">Finds stations, lines, agencies and train numbers, and says what each one is (a station, a platform or a street stop, with its modes and lines). Called with no arguments, it lists the regions and what each one supports. You rarely need it first, since the other tools all take names.</p>
+          <div class="table-wrap params"><table><thead><tr><th>Argument</th><th>Type</th><th>What it does</th></tr></thead><tbody><tr><td><code>query</code></td><td>string</td><td>A name: station, stop, line, agency or train number. Leave out <code>coverage</code> to search every region.</td></tr><tr><td><code>ref</code></td><td>string</td><td>Inspect one thing exactly: a stop's lines, a line's stops, a trip's calls.</td></tr><tr><td><code>latitude, longitude</code></td><td>number</td><td>Stops near a point.</td></tr><tr><td><code>limit</code></td><td>integer</td><td>How many candidates to return.</td></tr></tbody></table></div>
+
+          <div class="tool-head"><h3>get_service_status</h3><span>"Is the Red Line OK?"</span></div>
+          <p class="tool-blurb">Alerts, plus elevator and escalator outages, for a station, a line or a whole region. It also rechecks a planned trip before the rider leaves.</p>
+          <div class="table-wrap params"><table><thead><tr><th>Argument</th><th>Type</th><th>What it does</th></tr></thead><tbody><tr><td><code>ref</code></td><td>string</td><td>A line's name (<code>"L"</code>, <code>"Red Line"</code>) with <code>coverage</code>, or a stop, route, agency or dated trip ref.</td></tr><tr><td><code>stop</code></td><td>string</td><td>A station name. A station covers its whole complex.</td></tr><tr><td><code>itinerary</code></td><td>object</td><td>An itinerary exactly as <code>plan_trip</code> returned it. The answer says whether the journey still holds, and which change would be missed if not.</td></tr></tbody></table></div>
+
+          <div class="tool-head"><h3>get_vehicle_status</h3><span>"Where's my train?"</span></div>
+          <p class="tool-blurb">Where trains are on a line, on one trip, or at a station. Each train reports the station it's at or heading to, the one it last served, and where it's going. DC trains report GPS. MTA reports stations instead, so an NYC train between stations has no position rather than a made-up one.</p>
+          <div class="table-wrap params"><table><thead><tr><th>Argument</th><th>Type</th><th>What it does</th></tr></thead><tbody><tr><td><code>ref</code></td><td>string</td><td>A route ref, a <code>tripInstanceRef</code> from a departure or itinerary, or a stop ref.</td></tr><tr><td><code>stop</code></td><td>string</td><td>A station name. Or give <code>ref</code>.</td></tr><tr><td><code>limit</code></td><td>integer</td><td>How many trains to return.</td></tr></tbody></table></div>
+        </section>
+
+        <section id="results">
+          <h2>Using the results</h2>
           <div class="prose">
-            <p>The short version: the server reads timetables it built ahead of time and corrects them with live data. The model you're talking to never guesses a time. It gets one from the server, with a label saying where it came from.</p>
+            <h3>Say where the answer came from</h3>
+            <p>Every result says whether it's <code>realtime</code>, <code>scheduled_only</code> or <code>unavailable</code>, and when it was read (<code>asOf</code>). Pass that on to the rider. "Scheduled for 12:45" and "arriving at 12:50" are different promises, and someone standing on a platform should know which one they're getting. When there's no live data, the server says <code>scheduled_only</code>. It never passes a timetable off as live.</p>
+
+            <h3>Use the rider's words, not IDs</h3>
+            <p>Every tool takes names, and the server does the matching. "Street" and "St" are the same, "42nd Street Times Square" finds Times Sq-42 St, small typos still land, and DC stations answer to WMATA's own names ("Chinatown", "Convention Center"). A city or a line after the name narrows it down: "Powell St, SF", "14 St on the 1", "Metro Center DC". Refs like <code>tr:nyc:mta_subway:stop:NjI2</code> are for follow-up calls. They're opaque, so don't try to build one yourself.</p>
+
+            <h3>When a name is two places</h3>
+            <p>New York has five different 86 St stations. Ask for "86 St" and the server won't guess. It returns <code>ENTITY_AMBIGUOUS</code> with the candidates, described so a rider can choose:</p>
+          </div>
+          <div class="code-block block wrap">
+            <div class="code-title"><span>get_departures · stop: 86 St · isError: true</span><button class="copy-button" type="button">Copy</button></div>
+            <pre><code>{
+  "code": "ENTITY_AMBIGUOUS",
+  "message": "\"86 St\" is 5 different places: 86 St (4, 5, 6, 6X subway); 86 St (A, B, C, D subway); 86 St (1, 2 subway); 86 St (N, W subway); 86 St (R subway). Pick one from the conversation, or ask the rider which; then retry with that candidate's ref or a more specific name.",
+  "candidates": [
+    { "ref": "tr:nyc:mta_subway:stop:NjI2", "name": "86 St", "stopType": "station", "routeNames": ["4", "5", "6", "6X"] },
+    { "ref": "tr:nyc:mta_subway:stop:QTIw", "name": "86 St", "stopType": "station", "routeNames": ["A", "B", "C", "D"] },
+    …
+  ]
+}</code></pre>
+          </div>
+          <div class="prose">
+            <p style="margin-top: 14px;">Pick one from the conversation (the rider mentioned the 1 earlier, say), or ask them: "the 1, the 4/5/6, or the A/B/C/D?". Then call again with that candidate's <code>ref</code> or a more specific name. A name that covers one place, like Times Sq-42 St's four stations or SFO, never comes back as a question. <code>plan_trip</code> doesn't return this error at all; it plans the best trip from each candidate and labels them.</p>
+
+            <h3>When nothing matches</h3>
+            <p>A name that matches nothing comes back with an empty <code>candidates</code> list, and the closest names in <code>suggestions</code>. Here's "Galery Plaza" in DC:</p>
+          </div>
+          <div class="code-block block wrap">
+            <div class="code-title"><span>find_transit · coverage: dc · query: Galery Plaza</span><button class="copy-button" type="button">Copy</button></div>
+            <pre><code>{
+  "candidates": [],
+  "suggestions": [
+    { "ref": "tr:dc:wmata:stop:U1ROX0IwMV9GMDE", "name": "Gallery Place", "modes": ["subway"], "routeNames": ["Green", "Red", "Yellow"] },
+    { "ref": "tr:dc:wmata_bus:stop:MTgxMjU", "name": "Galway Dr+Galway Pl", "modes": ["bus"], "routeNames": ["M52"] },
+    …
+  ]
+}</code></pre>
+          </div>
+          <div class="prose">
+            <p style="margin-top: 14px;">Suggestions are never treated as a match. Check with the rider ("Gallery Place?") before using one. If nothing fits, try the official station name, a nearby landmark, or coordinates.</p>
+
+            <h3>When plan_trip finds nothing</h3>
+            <p>It returns <code>routeHints</code>: the lines near each end, and any <code>direct</code> lines that serve both. Pick the lines you'd ride (your own knowledge of the network helps here) and call again with up to four of them in <code>routes</code>. The server then finds the real trips, stops, transfers and walks on those lines, and validates them like any other itinerary. This is also how bus trips get planned.</p>
+
+            <h3>Before the rider leaves</h3>
+            <p>Plans go stale. Call <code>get_service_status</code> with the <code>itinerary</code> exactly as <code>plan_trip</code> returned it, and plan again if it no longer holds. For "is my train on time?", call <code>get_vehicle_status</code> with the ride's <code>tripInstanceRef</code>.</p>
+
+            <h3>Limits worth knowing</h3>
+            <ul>
+              <li>Live data covers trains that are running. Ask about tomorrow and you get the timetable, labelled as such.</li>
+              <li>Timetables cover yesterday, today and the next seven days, and departures look at most seven days ahead.</li>
+              <li>In the older tools, a <code>null</code> <code>minutesAway</code> means unknown, not zero.</li>
+              <li>Bay Area live data refreshes every couple of minutes rather than every 30 seconds, because 511 SF Bay gives one hourly request budget to cover every operator.</li>
+              <li>The first question after a quiet spell can take a few seconds longer while a timetable loads. It's slowest in the Bay Area.</li>
+              <li>The Cloudflare Rate Limit binding allows roughly 300 requests per 60-second window per source-IP key per Cloudflare location. Clients behind shared egress IPs share one count, and enforcement is eventually consistent.</li>
+              <li>Each MCP request runs in a request-scoped stateless runtime. It does not support resumability or server push, so if a call drops, make it again.</li>
+              <li>Fares, platform numbers (other than LIRR and Metro-North tracks) and turn-by-turn walking directions aren't in the data. Itineraries say where to walk, not how. Don't make the rest up.</li>
+            </ul>
+          </div>
+        </section>
+
+        <section id="how">
+          <h2>Under the hood</h2>
+          <div class="prose">
+            <p>The short version: the server reads timetables it built ahead of time and corrects them with live data. Fig 1 is that idea as a machine. Try cutting the feed.</p>
           </div>
           <div class="how-figure">
 <!-- fig:rack-reader -->
@@ -895,20 +1069,12 @@ if (still.matches) { touring = false; }
           </div>
           <div class="prose">
             <h3>Two clocks</h3>
-            <p>Every agency publishes two things. A timetable (GTFS) says what's supposed to run. A live feed (GTFS-realtime) says what's actually running. One changes a few times a day, the other every few seconds, so the server handles them separately.</p>
-            <p><strong>The timetable is built ahead.</strong> When an agency publishes a new one, a background job turns it into small pieces: one set per service day, nine days of them, cut into three-hour bands. Nine because it's yesterday (for trains still running after midnight), today and the week ahead. A question about the 1 train at 9 a.m. reads one or two of those pieces, about a megabyte, instead of a whole city's schedule.</p>
-            <p><strong>The live feed never stops.</strong> One coordinator per feed polls it (every 30 seconds for the subway) and keeps the latest snapshot in memory. When a question comes in, the live predictions are matched onto timetable trips, one trip at a time.</p>
-            <p>Live data only exists for trains that are running. Ask about Thursday and you get the timetable, and the answer tells you so. That's the whole of Fig 1.</p>
-
-            <h3>Answers say what they are</h3>
-            <p>Every result carries a status: <code>realtime</code>, <code>scheduled_only</code> or <code>unavailable</code>, plus <code>asOf</code>, the time the data was read. If a stop's live feed is down, you get the timetable marked <code>scheduled_only</code>, not a timetable passed off as live. Agents are told to pass the label on, so a rider hears "scheduled" when that's all there is.</p>
-
-            <h3>The server owns facts, the model owns meaning</h3>
-            <p>An agent passes the rider's own words: "Penn Station", "14 St on the 1", "Powell St, SF". Turning those into stations is the server's job. Matching is tuned for how people type: "Street" and "St" are the same, small typos still land, and a city or a line after the name narrows it down.</p>
-            <p>When one name really is two places (New York has several 86 St stations), the server doesn't pick. It sends back a question a person can answer, in place names, not IDs. The model does the part it's good at: working out from the conversation which one you meant, then saying the answer in plain words.</p>
+            <p>Every agency publishes two things. A timetable (GTFS) says what's supposed to run. A live feed (GTFS-realtime) says what's actually running. One changes a few times a day and the other every few seconds, so the server handles them separately.</p>
+            <p><strong>The timetable is built ahead.</strong> When an agency publishes a new one, a background job turns it into small pieces: one set per service day, nine days of them, cut into three-hour bands. Nine days covers yesterday (for trains still running after midnight), today and the week ahead. A question about the 1 train at 9 a.m. reads one or two of those pieces, about a megabyte, instead of a whole city's schedule.</p>
+            <p><strong>The live feed is read all the time.</strong> One coordinator per feed polls it (every 30 seconds for the subway) and keeps the latest snapshot in memory. When a question comes in, the live predictions are matched onto timetable trips, one trip at a time.</p>
 
             <h3>Fresh timetables on a $5 plan</h3>
-            <p>This runs on Cloudflare's $5 Workers plan, and building timetables is the expensive part: a rebuild of the NYC subway takes a couple of minutes of CPU. MTA republishes that timetable roughly every hour, mostly to add planned work for the coming week. Rebuilding every time would use up the plan on its own. So:</p>
+            <p>This runs on Cloudflare's $5 Workers plan, and building timetables is the expensive part: rebuilding the NYC subway takes a couple of minutes of CPU. MTA republishes that timetable roughly every hour, mostly to add planned work for the coming week. Rebuilding every time would use up the whole plan on its own. So the server does three things:</p>
             <ul>
               <li>If an upload's tables haven't changed, it's skipped. The server compares each table's checksum from the zip's directory, without unzipping anything. MTA does sometimes upload the same tables again.</li>
               <li>A change that touches yesterday, today or tomorrow is built on the next check, within five minutes. Live trains are matched to today's trips by ID, so those can't wait.</li>
@@ -919,7 +1085,7 @@ if (still.matches) { touring = false; }
             <h3>Checking its own work</h3>
             <ul>
               <li>Every itinerary goes through a separate validator before it's returned: real trips, real stops, transfers you can actually make.</li>
-              <li>A new timetable is checked before it goes live. If live trains match it worse than the one it replaced, it's rolled back.</li>
+              <li>A new timetable is checked before it goes live. One that would remove most of a day's service is refused. If live trains match it worse than the one it replaced, it's rolled back.</li>
               <li>Every other day the server calls its own tools the way an agent would. If anything fails, it checks again every hour until it passes. The latest result is at <a href="/health/deep"><code>/health/deep</code></a>.</li>
               <li>From outside Cloudflare, a GitHub Action calls the endpoint every five minutes and opens an issue if it stays down.</li>
             </ul>
@@ -930,55 +1096,24 @@ if (still.matches) { touring = false; }
             <table>
               <thead><tr><th>Piece</th><th>Job</th></tr></thead>
               <tbody>
-                <tr><td>Worker</td><td>The front door. Serves the site and the MCP endpoint and runs the tools. Each MCP request runs in a request-scoped stateless runtime, so it does not support resumability or server push. The inactive <code>MetroMcpAgent</code> rollback class and <code>v1</code> migration remain for rollback.</td></tr>
-                <tr><td>Durable Objects</td><td>One coordinator per live feed. Polls the agency and keeps the latest snapshot in memory, so a question never waits on the agency.</td></tr>
-                <tr><td>R2</td><td>The timetable pieces. Each is named by its own checksum and checked on every read.</td></tr>
-                <tr><td>Workflows</td><td>Timetable builds, one step per service day, so a big feed never has to fit in one request.</td></tr>
-                <tr><td>Rate limiting</td><td>The Cloudflare Rate Limit binding allows roughly 300 requests per 60-second window per source-IP key per Cloudflare location. Clients behind shared egress IPs share one count, and enforcement is eventually consistent.</td></tr>
-                <tr><td>Analytics Engine</td><td>Usage counts. See below.</td></tr>
+                <tr><td>Worker</td><td>The front door. Serves the site and the MCP endpoint, and runs the tools.</td></tr>
+                <tr><td>Durable Objects</td><td>One coordinator per live feed. Each polls its agency and keeps the latest snapshot in memory, so a question never waits on the agency.</td></tr>
+                <tr><td>R2</td><td>The timetable pieces. Each one is named after its own checksum and checked on every read.</td></tr>
+                <tr><td>Workflows</td><td>Timetable builds, one step per service day, so a big feed never has to fit in a single request.</td></tr>
+                <tr><td>Analytics Engine</td><td>Usage counts, described below.</td></tr>
+                <tr><td>Rollback</td><td>The inactive <code>MetroMcpAgent</code> rollback class and <code>v1</code> migration stay deployed, so the previous server can be brought back quickly.</td></tr>
               </tbody>
             </table>
           </div>
           <div class="prose">
             <h3>What gets recorded</h3>
-            <p>One record per tool call: the tool, a rough category for the client software, how long it took, whether it worked, and which regions and feeds the answer drew on (<code>nyc</code>, <code>mta_subway</code>). Never what you asked, never your IP. The <a href="/privacy/">privacy page</a> has the full list.</p>
-          </div>
-        </section>
-
-        <section id="tools">
-          <h2>Tools</h2>
-          <p class="section-copy">There are 18 Model Context Protocol tools. Every one is read-only and returns structured content, plus the same thing as JSON text for older clients. Start with these five. They work in all three regions.</p>
-          <div class="table-wrap">
-            <table class="tool-table">
-              <thead><tr><th>Tool</th><th>Ask it</th><th>Good to know</th></tr></thead>
-              <tbody>
-                <tr><td><code>plan_trip</code></td><td>Penn Station to JFK</td><td>Real itineraries from the timetable, with live times where there are some, and every leg validated. Add <code>accessibility: "step_free"</code> to avoid stairs and stations with a broken elevator right now. If it can't find a trip, it returns <code>routeHints</code>: the agent picks lines and asks again with <code>routes</code>.</td></tr>
-                <tr><td><code>get_departures</code></td><td>Next uptown 1 at 14 St</td><td>A name covers the whole place, like all four stations at Times Sq-42 St. <code>toStop</code> keeps only trains that reach a destination. In New York, rerouted trains and trains missing from the timetable show up, marked as observed.</td></tr>
-                <tr><td><code>find_transit</code></td><td>Which Union Station?</td><td>Finds stations, lines and train numbers. Leave out <code>coverage</code> and it searches every region. With no arguments it lists the regions and what each supports. Closest names come back as <code>suggestions</code> and are never treated as a match.</td></tr>
-                <tr><td><code>get_service_status</code></td><td>Is the Red Line OK?</td><td>Alerts, elevator and escalator outages, and a recheck of a planned trip before you leave: pass the itinerary back exactly as <code>plan_trip</code> returned it.</td></tr>
-                <tr><td><code>get_vehicle_status</code></td><td>Where's my train?</td><td>Trains on a line, on a trip or at a station. DC trains report GPS. MTA reports stations, so an NYC train between stations has no position rather than a made-up one.</td></tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="prose" style="margin-top: 18px;">
-            <p>Names work the way people say them. "King Street" finds King St-Old Town, "42nd Street Times Square" finds Times Sq-42 St, and DC stations answer to WMATA's own names ("Chinatown", "Convention Center"). Times are in the agency's local time with its offset, such as <code>18:32-04:00</code>.</p>
-            <p>New York covers the subway, the Long Island Rail Road, Metro-North and buses. Washington covers Metrorail and Metrobus. The Bay Area covers every operator in 511 SF Bay's regional feed: BART, Muni, Caltrain, AC Transit, VTA, SamTrans, the ferries and more, with attribution to 511 SF Bay and its operators. Trips change between modes on foot at places like Penn Station, Grand Central and Atlantic Terminal, and LIRR and Metro-North departures show the track.</p>
-          </div>
-          <div class="grid" style="margin-top: 18px;">
-            <div class="tool-card">
-              <h3>The 13 older DC/NYC tools</h3>
-              <p>They're still there, and still read WMATA's and MTA's APIs directly: <code>search_stations</code>, <code>get_all_stations</code>, <code>get_stations_by_line</code>, <code>get_station_predictions</code>, <code>get_incidents</code>, <code>get_elevator_incidents</code>, <code>get_bus_predictions</code>, <code>get_bus_routes</code>, <code>get_bus_stops</code>, <code>get_bus_positions</code>, <code>get_train_positions</code> (DC), and <code>get_route_info</code>, <code>get_station_transfers</code> (NYC). New agents should use the five above. The Transit Board app view covers these older tools only.</p>
-            </div>
-            <div class="tool-card">
-              <h3>Hints for clients</h3>
-              <p>Ambiguous station names can trigger MCP elicitation where the client supports it. <code>get_all_stations</code> sends progress notifications if you pass a progress token. Every tool is annotated read-only, idempotent and open-world.</p>
-            </div>
+            <p>One record per tool call: the tool, a rough category for the client software, how long it took, whether it worked, and which regions and feeds the answer drew on (<code>nyc</code>, <code>mta_subway</code>). Never what you asked, and never your IP. The <a href="/privacy/">privacy page</a> has the full list.</p>
           </div>
         </section>
 
         <section id="data">
           <h2>Data sources</h2>
-          <p class="section-copy">Everything comes from the agencies' official feeds. The five main tools use each agency's GTFS timetable, built as described above, plus GTFS-realtime feeds polled every 30 seconds to a few minutes. The 511 SF Bay feed shares one hourly request budget across every operator, so the Bay Area refreshes more slowly than New York or DC. The first question after a quiet spell can take a few seconds longer while a timetable loads, longest in the Bay Area.</p>
+          <p class="section-copy">Everything comes from the agencies' official feeds. The five main tools use each agency's GTFS timetable, built as described under the hood, plus GTFS-realtime feeds polled every 30 seconds to a few minutes. The 511 SF Bay feed shares one hourly request budget across every operator, so the Bay Area refreshes more slowly than New York or DC. The first question after a quiet spell can take a few seconds longer while a timetable loads, longest in the Bay Area.</p>
           <div class="source-grid">
             <article class="source-card">
               <header>
@@ -1039,23 +1174,23 @@ if (still.matches) { touring = false; }
           </div>
         </section>
 
-        <section id="endpoints">
-          <h2>HTTP endpoints</h2>
-          <p class="section-copy">One Worker serves the site and the MCP API. All of it is public.</p>
-          <div class="endpoint-list">
-            <div class="endpoint"><span class="method">POST</span><code>/mcp</code><p>The MCP endpoint, anonymous Streamable HTTP.</p></div>
-            <div class="endpoint"><span class="method">POST/OPTIONS</span><code>/sse</code><p>Stateless alias for <code>/mcp</code>. <code>GET /sse</code> returns <code>405</code>; it isn't a persistent stream.</p></div>
-            <div class="endpoint"><span class="method">GET</span><code>/info</code><p>A JSON summary: regions, station counts, capabilities and the MCP endpoint.</p></div>
-            <div class="endpoint"><span class="method">GET</span><code>/health/deep</code><p>The latest self-check: each tool call it made, how long it took, and what failed. <code>200</code> when it passed recently, <code>503</code> otherwise.</p></div>
-            <div class="endpoint"><span class="method">GET</span><code>/llms.txt</code><p>A plain-text summary for agents.</p></div>
-            <div class="endpoint"><span class="method">GET</span><code>/</code>, <code>/docs/</code><p>The landing page and this page.</p></div>
-          </div>
-        </section>
-
-        <section id="resources">
-          <h2>Resources and prompts</h2>
-          <p class="section-copy">Clients that support more of MCP can read resources directly and use prompt templates instead of writing their own instructions. These belong to the older DC/NYC tools.</p>
+        <section id="reference">
+          <h2>Older tools and endpoints</h2>
+          <p class="section-copy">The 13 older tools came first and cover only DC and NYC. They call WMATA's and MTA's APIs directly, and they're still here for clients that use them. New agents should use the five tools above. The Transit Board app view only covers these older tools.</p>
           <div class="table-wrap">
+            <table>
+              <thead><tr><th>Region</th><th>Tools</th></tr></thead>
+              <tbody>
+                <tr><td>DC and NYC</td><td><code>search_stations</code>, <code>get_all_stations</code>, <code>get_stations_by_line</code>, <code>get_station_predictions</code>, <code>get_incidents</code></td></tr>
+                <tr><td>DC only</td><td><code>get_elevator_incidents</code>, <code>get_bus_predictions</code>, <code>get_bus_routes</code>, <code>get_bus_stops</code>, <code>get_bus_positions</code>, <code>get_train_positions</code></td></tr>
+                <tr><td>NYC only</td><td><code>get_route_info</code>, <code>get_station_transfers</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="note">Ambiguous station names in these tools can trigger MCP elicitation where the client supports it, and <code>get_all_stations</code> sends progress notifications if you pass a progress token. Every tool is annotated read-only, idempotent and open-world.</p>
+
+          <h3 style="margin-top: 28px;">Resources and prompts</h3>
+          <div class="table-wrap" style="margin-top: 10px;">
             <table>
               <thead><tr><th>Type</th><th>Name</th><th>What it does</th></tr></thead>
               <tbody>
@@ -1067,6 +1202,16 @@ if (still.matches) { touring = false; }
                 <tr><td>Prompt</td><td><code>accessibility-check</code></td><td>Uses DC elevator outages to flag problems along a route.</td></tr>
               </tbody>
             </table>
+          </div>
+
+          <h3 id="endpoints" style="margin-top: 28px;">HTTP endpoints</h3>
+          <div class="endpoint-list" style="margin-top: 10px;">
+            <div class="endpoint"><span class="method">POST</span><code>/mcp</code><p>The MCP endpoint, anonymous Streamable HTTP.</p></div>
+            <div class="endpoint"><span class="method">POST/OPTIONS</span><code>/sse</code><p>Stateless alias for <code>/mcp</code>. <code>GET /sse</code> returns <code>405</code>; it isn't a persistent stream.</p></div>
+            <div class="endpoint"><span class="method">GET</span><code>/info</code><p>A JSON summary: regions, station counts, capabilities and the MCP endpoint.</p></div>
+            <div class="endpoint"><span class="method">GET</span><code>/health/deep</code><p>The latest self-check: each tool call it made, how long it took, and what failed. <code>200</code> when it passed recently, <code>503</code> otherwise.</p></div>
+            <div class="endpoint"><span class="method">GET</span><code>/llms.txt</code><p>A plain-text summary for agents.</p></div>
+            <div class="endpoint"><span class="method">GET</span><code>/</code>, <code>/docs/</code><p>The landing page and this page.</p></div>
           </div>
         </section>
 
