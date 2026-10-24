@@ -54,6 +54,8 @@ describe('public route characterization', () => {
     expect(whole.status).toBe(200);
     expect(whole.headers.get('accept-ranges')).toBe('bytes');
     expect((await whole.arrayBuffer()).byteLength).toBe(10);
+    const head = await worker.fetch(new Request('https://transitmcp.com/og-video.mp4', { method: 'HEAD' }), env, executionContext());
+    expect(head.status).toBe(200);
   });
 
   it('serves the structured server description at GET /info', async () => {

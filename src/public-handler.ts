@@ -28,7 +28,7 @@ export async function handlePublicRequest(
       headers: { 'Content-Type': 'text/plain; charset=UTF-8' },
     });
   }
-  if (request.method === 'GET') {
+  if (request.method === 'GET' || request.method === 'HEAD') {
     return withByteRange(request, await env.ASSETS.fetch(request));
   }
   return new Response('Not Found', { status: 404 });
