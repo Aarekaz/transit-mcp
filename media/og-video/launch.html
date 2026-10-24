@@ -40,6 +40,7 @@
   .statement .dim { color: var(--muted); }
 
   .vignette { position: absolute; left: 168px; top: 0; bottom: 0; width: 900px; display: flex; flex-direction: column; justify-content: center; }
+  .place { margin-bottom: 26px; font: 600 40px/1 var(--display); letter-spacing: .04em; color: var(--soft); }
   .ask { font: 500 48px/1.2 var(--ui); letter-spacing: -.022em; min-height: 58px; }
   .caret { display: inline-block; width: 3px; height: 48px; margin-left: 5px; vertical-align: -7px; background: var(--accent); }
   .answer { margin-top: 56px; display: flex; align-items: flex-end; gap: 34px; }
@@ -64,6 +65,7 @@
   .end-inner { display: flex; flex-direction: column; align-items: center; }
   .mark { width: 136px; height: 136px; }
   .title { margin-top: 40px; font: 600 108px/1 var(--display); letter-spacing: -.048em; }
+  .regions { margin-top: 34px; font: 500 16px/1 var(--mono); letter-spacing: .32em; color: var(--muted); }
   .url { margin-top: 30px; font: 400 30px/1 var(--mono); color: var(--soft); letter-spacing: -.01em; }
 </style>
 </head>
@@ -87,6 +89,7 @@
     </svg>
     <div class="title" id="e1">Transit MCP</div>
     <div class="url" id="e2">transitmcp.com/mcp</div>
+    <div class="regions" id="e3">NY &nbsp;·&nbsp; DC &nbsp;·&nbsp; SF</div>
   </div></div>
   <div class="grain"></div>
   <div id="fade" style="position:absolute;inset:0;background:var(--ground);pointer-events:none"></div>
@@ -116,12 +119,12 @@ const CUTS = {
     end: 28.6,
   },
   og: {
-    duration: 10,
+    duration: 15.5,
     statements: [],
-    lineFrom: 0.1,
-    cities: [{ arrive: 1.0, ask: 1.5, leave: 5.6, pace: 0.62 }],
-    payoff: { from: 5.4, words: 6.0, to: 7.5 },
-    end: 7.5,
+    lineFrom: 0,
+    cities: [{ arrive: 1.0, ask: 1.2, leave: 4.6, pace: 0.55 }, { arrive: 5.2, ask: 5.5, leave: 8.2, pace: 0.5 }, { arrive: 8.8, ask: 9.1, leave: 11.8, pace: 0.5 }],
+    payoff: { from: 11.6, words: 12.0, to: 13.4 },
+    end: 13.4,
   },
 };
 const T = CUTS[CUT];
@@ -147,9 +150,9 @@ const LIVE = window.LIVE;
 // The line each answer rode; BART's are drawn once per colour, under their northbound name.
 const heroOf = (key, route) => key === 'sfbay' ? route.replace(/-[NS]$/, '') + '-N' : route;
 const CITIES = [
-  { key: 'nyc', x: -17, size: 12, focus: [-73.975, 40.74], radius: 16, pins: [[-73.9968, 40.7377]], place: 'New York' },
-  { key: 'dc', x: 0, size: 11, focus: [-77.03, 38.905], radius: 14, pins: [[-77.0074, 38.8977], [-77.0219, 38.8983]], place: 'Washington' },
-  { key: 'sfbay', x: 17, size: 13, focus: [-122.36, 37.69], radius: 17, pins: [[-122.3925, 37.6159], [-122.4079, 37.7844]], place: 'San Francisco' },
+  { key: 'nyc', x: -17, size: 12, focus: [-73.975, 40.74], radius: 16, pins: [[-73.9968, 40.7377]], place: 'NY' },
+  { key: 'dc', x: 0, size: 11, focus: [-77.03, 38.905], radius: 14, pins: [[-77.0074, 38.8977], [-77.0219, 38.8983]], place: 'DC' },
+  { key: 'sfbay', x: 17, size: 13, focus: [-122.36, 37.69], radius: 17, pins: [[-122.3925, 37.6159], [-122.4079, 37.7844]], place: 'SF' },
 ].map(city => ({ ...city, live: LIVE[city.key], hero: heroOf(city.key, LIVE[city.key].route) }));
 
 const lineVert = `attribute float aSide; attribute float aAlong; varying float vSide; varying float vAlong;
@@ -265,17 +268,17 @@ cities.forEach(city => {
   const l = city.live, hex = city.heroLine.color.getHexString();
   const mark = city.key === 'nyc' ? `<span class="bullet" style="background:#${hex}">${l.route}</span>` : `<span class="bar" style="background:#${hex}"></span>`;
   const el = document.createElement('div'); el.className = 'vignette';
-  el.innerHTML = `<div class="ask"><span class="typed"></span><span class="caret"></span></div>
+  el.innerHTML = `<div class="place">${city.place}</div><div class="ask"><span class="typed"></span><span class="caret"></span></div>
     <div class="answer"><div class="big">${l.big}<small>${l.unit}</small></div>
       <div class="facts"><div class="route">${mark}${l.routeLabel}</div><div class="then">${l.then}</div></div></div>
     <div class="tool">↳ <b>${l.tool}</b></div>`;
   vigEl.appendChild(el);
   const cap = document.createElement('div'); cap.className = 'caption';
   const live = l.status === 'realtime';
-  cap.innerHTML = `<span class="${live ? '' : 'sched'}"><i></i>${city.place} · ${live ? 'Live' : 'Timetable'} · ${l.day}, ${l.asOf} ${l.zone}</span>`;
+  cap.innerHTML = `<span class="${live ? '' : 'sched'}"><i></i>${live ? 'Live' : 'Timetable'} · ${l.day}, ${l.asOf} ${l.zone}</span>`;
   capEl.appendChild(cap);
   const q = s => el.querySelector(s);
-  Object.assign(city, { el, cap, typed: q('.typed'), caret: q('.caret'), big: q('.big'), facts: q('.facts'), tool: q('.tool') });
+  Object.assign(city, { el, cap, placeEl: q('.place'), typed: q('.typed'), caret: q('.caret'), big: q('.big'), facts: q('.facts'), tool: q('.tool') });
 });
 
 const payoffEl = document.getElementById('payoff');
@@ -324,6 +327,7 @@ function citiesAt(t) {
     const typing = span(t, b.ask, b.ask + 1.2 * b.pace);
     city.typed.textContent = city.live.ask.slice(0, Math.round(city.live.ask.length * typing));
     city.caret.style.opacity = typing < 1 ? 1 : (Math.floor((t - b.ask) * 2.2) % 2 ? 0 : 1) * (1 - span(t, b.ask + 2.0 * b.pace, b.ask + 2.1 * b.pace));
+    show(city.placeEl, easeOut(span(t, b.ask - 0.2, b.ask + 0.4)), 12, 6);
     show(city.big, expoOut(span(t, b.ask + 1.9 * b.pace, b.ask + 2.6 * b.pace)), 34, 18);
     show(city.facts, easeOut(span(t, b.ask + 2.15 * b.pace, b.ask + 2.75 * b.pace)), 16, 8);
     show(city.tool, easeOut(span(t, b.ask + 2.5 * b.pace, b.ask + 3.0 * b.pace)), 6, 4);
@@ -363,7 +367,7 @@ function payoffAt(t) {
 }
 
 const legs = [...document.querySelectorAll('.leg')], ring = document.getElementById('ring'), hub = document.getElementById('hub');
-const endParts = ['e1', 'e2'].map(id => document.getElementById(id));
+const endParts = ['e1', 'e2', 'e3'].map(id => document.getElementById(id));
 const sceneEl = document.getElementById('scene'), bloomEl = document.getElementById('bloom');
 function endAt(t) {
   const e = T.end, scrim = easeInOut(span(t, e - 0.3, e + 0.9));
