@@ -7,7 +7,7 @@ import { formatEntityRef, parseTransitRef } from '../../../transit/core/refs';
 import { getCoverage } from '../../../transit/core/coverage';
 import type { NormalizedVehicle } from '../../../transit/gtfs/realtime/decode';
 import { sanitizeTransitText } from '../../../transit/gtfs/realtime/freshness';
-import { complete, MAX_DISCOVERY_CANDIDATES, closestStops, judgedAt, localTime, coverageTimezone, TransitToolError, boundedText, checkState, complexStations, coordinatesSchema, coverageSchema, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, routeName, stopPlaces, ambiguousPlaces, unavailable, validRef, type TransitData } from './shared';
+import { complete, MAX_DISCOVERY_CANDIDATES, closestStops, judgedAt, localTime, coverageTimezone, TransitToolError, boundedText, checkState, complexStations, coordinatesSchema, coverageSchema, guarded, instantSchema, knownEntity, loadTripIdsFor, loadData, metadata, readFeed, realtimeSource, resultShape, routeName, stopPlaces, ambiguousPlaces, unavailable, validRef, type TransitData } from './shared';
 
 const STOP_STATUS = { STOPPED_AT: 'stopped_at', INCOMING_AT: 'incoming_at', IN_TRANSIT_TO: 'in_transit_to' } as const;
 
@@ -49,6 +49,7 @@ export function registerVehicleStatusTool(server: McpServer, context: MetroMcpCo
     const parsed = validRef(ref!, ['route', 'trip', 'stop'], true);
     data ??= await loadData(context, parsed.coverage, handler.mcpReq.signal);
     if (!data) return complete({ ...unavailable(parsed.coverage), vehicles: [] });
+    await loadTripIdsFor(data, ref!);
     knownEntity(data, ref!);
     const stopIndex = data.indexes.flatMap(index => index.stops), byRef = new Map(stopIndex.map(stop => [stop.ref as string, stop]));
     // A station covers its complex, and a named place its other stations in this network.

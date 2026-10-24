@@ -95,6 +95,12 @@ export interface DiscoveryIndex {
    * published as several stations), as sorted [a, b] pairs. Absent in older artifacts. */
   stationLinks?: [TransitRef, TransitRef][];
 }
+/** A feed's discovery index without its trip IDs: what resolving names and building boards
+ * reads. Derived from the full index named by `discoverySha256`, and published beside it. */
+export type PlacesIndex = Omit<DiscoveryIndex, 'tripProviderIds'> & { discoverySha256: string };
+/** What the tools hold per feed: a full discovery index, or a places index whose trip IDs
+ * load only when a trip is looked up by its ID. */
+export type FeedIndex = Omit<DiscoveryIndex, 'tripProviderIds'> & { tripProviderIds?: string[] };
 export interface ArtifactObject { key: string; sha256: string; byteLength: number }
 export interface ValidatorEvidence {
   name: 'MobilityData GTFS Validator'; version: string; reportSha256: string; validatedAt: string;
@@ -106,6 +112,9 @@ export interface ArtifactManifestV2 {
   schemaVersion: 2; coverageId: string; sources: SourceMetadata[];
   agencyTimezones: Record<TransitRef, string>;
   discoveries: (ArtifactObject & { feedId: string })[];
+  /** Places indexes, one per feed, each derived from that feed's discovery index. Absent in
+   * older artifacts, where the tools read the discovery index itself. */
+  places?: (ArtifactObject & { feedId: string; discoverySha256: string })[];
   shards: (ArtifactObject & { feedId: string; window: ServiceWindow; maxStopTimeSeconds: number; timeRange?: ShardTimeRange;
     /** Present when a band is split by agency: the only agencies whose trips it holds. */
     agencyRefs?: TransitRef[] })[];
@@ -127,5 +136,5 @@ export interface CompileScheduleInput {
 export type IgnorableField = 'trips.txt:block_id';
 export interface CompiledSchedule {
   manifest: ArtifactManifestV2; discovery: DiscoveryIndex; shard: ScheduleShard;
-  discoveryBytes: Uint8Array; shardBytes: Uint8Array;
+  discoveryBytes: Uint8Array; shardBytes: Uint8Array; placesBytes: Uint8Array;
 }

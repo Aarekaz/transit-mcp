@@ -232,6 +232,7 @@ describe('usage by region and feed', () => {
   it('records the regions and feeds an answer drew on, from its refs and never from what was asked', async () => {
     const compiled = await compileSchedule(plannerInput()), db = memoryStorage();
     db.objects.set(compiled.manifest.discoveries[0]!.key, compiled.discoveryBytes);
+    db.objects.set(compiled.manifest.places![0]!.key, compiled.placesBytes);
     db.objects.set(compiled.manifest.shards[0]!.key, compiled.shardBytes);
     await new StaticArtifactStore(db.bucket).publish(compiled.manifest);
     const points: { blobs: string[] }[] = [], pending: Promise<unknown>[] = [];

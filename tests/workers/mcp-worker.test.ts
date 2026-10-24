@@ -178,6 +178,7 @@ describe('assembled MCP Worker', () => {
         'calendar.txt': 'service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nD,1,1,1,1,1,1,1,20260101,20261231\n',
       } });
     await env.TRANSIT_ARTIFACTS!.put(artifact.manifest.discoveries[0]!.key, artifact.discoveryBytes);
+    await env.TRANSIT_ARTIFACTS!.put(artifact.manifest.places![0]!.key, artifact.placesBytes);
     await env.TRANSIT_ARTIFACTS!.put(artifact.manifest.shards[0]!.key, artifact.shardBytes);
     await new StaticArtifactStore(env.TRANSIT_ARTIFACTS!).publish(artifact.manifest);
     const sfEnv = { ...env, SFBAY_MODE: 'on' as const };

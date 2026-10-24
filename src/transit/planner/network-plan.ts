@@ -1,6 +1,6 @@
 import { parseTransitRef, type TransitRef } from '../core/refs';
 import { count, phase } from '../trace';
-import type { ArtifactManifestV2, DiscoveryIndex } from '../gtfs/static/schema';
+import type { ArtifactManifestV2, FeedIndex } from '../gtfs/static/schema';
 import { parseCompactBand, type CompactBand } from './compact';
 import { networkStops, searchNetwork, type NetworkBand, type NetworkJourney } from './network';
 import { planJourney } from './plan';
@@ -25,7 +25,7 @@ function cache(key: string, band: CompactBand, bytes: number): void {
 }
 
 export interface NetworkPlanQuery extends JourneyQuery {
-  manifest: ArtifactManifestV2; indexes: readonly DiscoveryIndex[];
+  manifest: ArtifactManifestV2; indexes: readonly FeedIndex[];
   /** Every feed the open search may ride, buses included. */
   networkFeedIds: readonly string[];
   /** Reads a compact band, or null when it has not been built yet. */

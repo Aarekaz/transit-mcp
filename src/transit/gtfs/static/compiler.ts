@@ -4,7 +4,7 @@ import { routeTypeToMode } from './modes';
 import { parseGtfsTime, parseServiceDate } from './time';
 import type { ServiceCalendar } from './artifact';
 import { formatEntityRef, type TransitEntityKind, type TransitRef } from '../../core/refs';
-import { canonicalJson, encodeScheduleShard, sha256 } from './shards';
+import { canonicalJson, encodeScheduleShard, placesArtifact, sha256 } from './shards';
 import type { CompileScheduleInput, CompiledSchedule, GtfsScheduleFiles, IgnorableField, SchedulePattern, ScheduleShard, ScheduleStop, ScheduleTransfer, ScheduleTrip, ServiceWindow } from './schema';
 
 export type GtfsStaticFiles = Record<'stops.txt' | 'routes.txt' | 'trips.txt' | 'stop_times.txt', string> & Partial<Record<'calendar.txt' | 'calendar_dates.txt', string>>;
@@ -245,10 +245,12 @@ export async function compileSchedule(input: CompileScheduleInput): Promise<Comp
   const shardBytes = encodeScheduleShard(shard);
   const discoveryBytes = new TextEncoder().encode(canonicalJson(discovery));
   const shardHash = await sha256(shardBytes), discoveryHash = await sha256(discoveryBytes);
+  const places = await placesArtifact(discovery, discoveryHash);
   const prefix = `artifacts/${coverage.id}/v2/${feedId}`;
-  return { shard, discovery, shardBytes, discoveryBytes, manifest: {
+  return { shard, discovery, shardBytes, discoveryBytes, placesBytes: places.bytes, manifest: {
     schemaVersion: 2, coverageId: coverage.id, sources: [source], agencyTimezones,
     discoveries: [{ feedId, key: `${prefix}/discovery/${discoveryHash}.json`, sha256: discoveryHash, byteLength: discoveryBytes.length }],
+    places: [places.descriptor],
     shards: [{ feedId, window: { ...window }, maxStopTimeSeconds, key: `${prefix}/${window.startDate}-${window.endDate}/${shardHash}.bin`, sha256: shardHash, byteLength: shardBytes.length }],
   } };
 }

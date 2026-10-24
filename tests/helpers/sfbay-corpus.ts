@@ -23,6 +23,7 @@ export async function sfBayCorpusFixture(scenario: CorpusScenario = 'scheduled',
     source: { url: corpus.provenance.sourceUrl, retrievedAt: '2026-10-18T00:00:00Z' } })));
   const compiled = { ...parts[0]!, manifest: { ...parts[0]!.manifest, shards: parts.flatMap(part => part.manifest.shards) } };
   await bucket.put(compiled.manifest.discoveries[0]!.key, compiled.discoveryBytes);
+  await bucket.put(compiled.manifest.places![0]!.key, compiled.placesBytes);
   for (const part of parts) await bucket.put(part.manifest.shards[0]!.key, part.shardBytes);
   const version = await new StaticArtifactStore(bucket).publish(compiled.manifest);
   const nowSeconds = Date.parse(corpus.now) / 1000, event = corpus.realtime[scenario];

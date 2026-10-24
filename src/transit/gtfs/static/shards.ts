@@ -1,4 +1,4 @@
-import type { DiscoveryIndex, ScheduleShard } from './schema';
+import type { DiscoveryIndex, PlacesIndex, ScheduleShard } from './schema';
 import { z } from 'zod';
 import { parseTransitRef, type TransitRef } from '../../core/refs';
 import { parseServiceDate } from './time';
@@ -81,6 +81,28 @@ export function decodeDiscoveryIndex(bytes: Uint8Array): DiscoveryIndex {
     }
     return discovery;
   } catch { throw new Error('Invalid discovery index'); }
+}
+
+const placesSchema = discoverySchema.omit({ tripProviderIds: true }).extend({ discoverySha256: hash });
+
+/** The caller verifies descriptor hash/length and that `discoverySha256` names the feed's
+ * current discovery index. Refs are checked against the feed exactly as for a discovery index. */
+export function decodePlacesIndex(bytes: Uint8Array): PlacesIndex {
+  try {
+    const places = placesSchema.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)));
+    for (const record of [...places.stops, ...places.routes]) {
+      const ref = parseTransitRef(record.ref)!;
+      if (ref.coverage !== places.coverageId || ref.feed !== places.feedId || ref.id !== record.providerId) throw new Error();
+    }
+    return places;
+  } catch { throw new Error('Invalid places index'); }
+}
+
+/** The places index of a discovery index, as published beside it. */
+export async function placesArtifact(discovery: DiscoveryIndex, discoverySha256: string): Promise<{ bytes: Uint8Array; descriptor: { feedId: string; key: string; sha256: string; byteLength: number; discoverySha256: string } }> {
+  const { tripProviderIds: _trips, ...rest } = discovery;
+  const bytes = new TextEncoder().encode(canonicalJson({ ...rest, discoverySha256 } satisfies PlacesIndex)), hash = await sha256(bytes);
+  return { bytes, descriptor: { feedId: discovery.feedId, key: `artifacts/${discovery.coverageId}/v2/${discovery.feedId}/places/${hash}.json`, sha256: hash, byteLength: bytes.length, discoverySha256 } };
 }
 
 /** Locale-independent canonical JSON is used only for the metadata section. */

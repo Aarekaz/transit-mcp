@@ -1,5 +1,5 @@
 import type { TransitRef } from '../core/refs';
-import type { DiscoveryIndex } from '../gtfs/static/schema';
+import type { FeedIndex } from '../gtfs/static/schema';
 import { NO_DROP_OFF, NO_PICKUP, type CompactBand } from './compact';
 import type { JourneyEndpoint } from './types';
 
@@ -43,8 +43,8 @@ function metres(lat1: number, lon1: number, lat2: number, lon2: number): number 
   return Math.ceil(6371000 * 2 * Math.asin(Math.sqrt(Math.min(1, h))));
 }
 
-const stopCache = new WeakMap<readonly DiscoveryIndex[], NetworkStops>();
-export function networkStops(indexes: readonly DiscoveryIndex[]): NetworkStops {
+const stopCache = new WeakMap<readonly FeedIndex[], NetworkStops>();
+export function networkStops(indexes: readonly FeedIndex[]): NetworkStops {
   const cached = stopCache.get(indexes); if (cached) return cached;
   const total = indexes.reduce((sum, index) => sum + index.stops.length, 0);
   const refs: TransitRef[] = new Array(total), latitude = new Float64Array(total).fill(NaN), longitude = new Float64Array(total).fill(NaN);
