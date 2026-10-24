@@ -737,8 +737,12 @@ export async function detail(data: TransitData, ref: string) {
         if (!patterns.some(value => value.id === pattern.id)) patterns.push({ id: pattern.id, directionId: pattern.directionId, stopRefs: pattern.stopRefs });
       }
       const trip = shard.trips.find(trip => trip.providerId === entity.providerId && entity.kind === 'trip');
+      // A dated frequency instance runs its template shifted to its own start.
+      const first = trip?.stopTimes[0]?.departureSeconds;
+      const shift = trip && start !== undefined && first != null && shard.frequencies.some(row => row.tripRef === trip.ref) ? start - first : 0;
+      const at = (seconds: number | null) => seconds === null ? null : seconds + shift;
       if (trip && !calls.length) calls.push(...trip.stopTimes.map(call => ({ stopRef: call.stopRef, sequence: call.sequence,
-        arrivalSeconds: call.arrivalSeconds, departureSeconds: call.departureSeconds, pickupType: call.pickupType, dropOffType: call.dropOffType })));
+        arrivalSeconds: at(call.arrivalSeconds), departureSeconds: at(call.departureSeconds), pickupType: call.pickupType, dropOffType: call.dropOffType })));
     }
   }
   return { ...entity, scheduleVersion: data.version.artifactVersion, resourceUri: `transit://entity/${ref}?version=${data.version.artifactVersion}`,
