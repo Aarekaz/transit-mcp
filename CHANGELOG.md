@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Usage records count which regions and data feeds each answer drew on (`nyc`, `mta_subway`, `sf511`…). These are read from the transit references in the answer and kept only if they're on a fixed list, so what a rider asked is never recorded. A tool call is now recorded when its streamed response ends; before, it was recorded before the tool ran. The privacy page lists the new fields.
+
 - An uptime probe (`.github/workflows/uptime.yml`) calls production every five minutes the way a client does: `tools/list`, a `find_transit` lookup, the homepage and a byte range of the link-preview video. A failure that survives a retry opens an `outage` issue, with at most one comment an hour while it lasts, and the next passing run closes it.
 - After a failing self-check, `/health/deep` re-runs the check at the top of every hour until it passes. Before, a failure stayed on the page for two days, until the next scheduled run.
 - A launch teaser and a link-preview video (`og:video`, `public/og-video.mp4`, 16 s). Each region's real rail network draws itself in grey ink, and a rider's question is answered with what the live server returned when the film was rendered (`capture.mjs` records it). Only the answer's line is in colour, and it carries over from city to city. Every line comes into colour together at the end, before the logo, the URL and the three regions (NY · DC · SF). Dark and light themes; source and renderer in `media/og-video/`.

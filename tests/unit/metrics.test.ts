@@ -5,6 +5,13 @@ import type { Env } from '../../src/types';
 import { createMockEnv } from '../setup';
 import { handleMcpRequest } from '../../src/mcp/http-handler';
 import type { TelemetryInput } from '../../src/telemetry';
+import worker from '../../src/index';
+
+vi.mock('../../src/mcp-agent', () => ({ MetroMcpAgent: class {} }));
+import { compileSchedule } from '../../src/transit/gtfs/static/compiler';
+import { StaticArtifactStore } from '../../src/transit/gtfs/realtime/snapshot-store';
+import { memoryStorage } from '../helpers/realtime-fixture';
+import { plannerInput } from '../helpers/planner-fixture';
 
 function envWithDataset(writeDataPoint: (point: unknown) => void): Env {
   return {
@@ -48,7 +55,7 @@ describe('recordMcpUsage', () => {
     expect(response.status).toBe(200);
     expect(telemetry.era).toBe('legacy');
     recordMcpUsage(env, { ...telemetry, status: response.status });
-    expect(points).toEqual([{ indexes: [''], blobs: ['initialize', '', 'ChatGPT', 'production', '2xx'], doubles: [0] }]);
+    expect(points).toEqual([{ indexes: [''], blobs: ['initialize', '', 'ChatGPT', 'production', '2xx', '', ''], doubles: [0] }]);
   });
 
   it.each([undefined, null, 'invalid', 'modern'])('rejects initialize without affirmative legacy era (%s)', era => {
@@ -84,7 +91,7 @@ describe('recordMcpUsage', () => {
     expect(writeDataPoint).toHaveBeenCalledTimes(1);
     expect(writeDataPoint).toHaveBeenCalledWith({
       indexes: [''],
-      blobs: ['tools/call', 'get_station_predictions', 'unclassified', 'production', '2xx'],
+      blobs: ['tools/call', 'get_station_predictions', 'unclassified', 'production', '2xx', '', ''],
       doubles: [42],
     });
   });
@@ -99,7 +106,7 @@ describe('recordMcpUsage', () => {
     });
     expect(writeDataPoint).toHaveBeenCalledWith({
       indexes: [''],
-      blobs: ['initialize', '', 'ChatGPT', 'production', '2xx'],
+      blobs: ['initialize', '', 'ChatGPT', 'production', '2xx', '', ''],
       doubles: [0],
     });
   });
@@ -139,7 +146,7 @@ describe('recordMcpUsage', () => {
         { mcpMethod: 'tools/call', mcpName: 'plan_trip', status: 200, arguments: { latitude: 37, longitude: -122 } });
     }
     expect(points).toEqual(['production', 'preview', 'unclassified'].map(environment => ({
-      indexes: [''], blobs: ['tools/call', 'plan_trip', 'unclassified', environment, '2xx'], doubles: [0],
+      indexes: [''], blobs: ['tools/call', 'plan_trip', 'unclassified', environment, '2xx', '', ''], doubles: [0],
     })));
   });
 
@@ -218,5 +225,35 @@ describe('anonymous usage reporting', () => {
     expect(report.limitations.join(' ')).toMatch(/HTTP 2xx.*tool errors/);
     expect(report.limitations.join(' ')).toMatch(/unclassified/);
     expect(() => usage!.summarizeUsage([{ day: '2026-10-01', method: 'tools/call', count: -1 }])).toThrow();
+  });
+});
+
+describe('usage by region and feed', () => {
+  it('records the regions and feeds an answer drew on, from its refs and never from what was asked', async () => {
+    const compiled = await compileSchedule(plannerInput()), db = memoryStorage();
+    db.objects.set(compiled.manifest.discoveries[0]!.key, compiled.discoveryBytes);
+    db.objects.set(compiled.manifest.shards[0]!.key, compiled.shardBytes);
+    await new StaticArtifactStore(db.bucket).publish(compiled.manifest);
+    const points: { blobs: string[] }[] = [], pending: Promise<unknown>[] = [];
+    const env = createMockEnv({ SFBAY_MODE: 'on', TRANSIT_ARTIFACTS: db.bucket, ENVIRONMENT: 'production',
+      ANALYTICS: { writeDataPoint: point => points.push(point as { blobs: string[] }) } as AnalyticsEngineDataset });
+    const ask = (query: string) => worker.fetch(new Request('https://metro-mcp.anuragd.me/mcp', { method: 'POST',
+      headers: { Host: 'metro-mcp.anuragd.me', 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'find_transit', arguments: { coverage: 'sfbay', query } } }) }),
+      env, { waitUntil: (promise: Promise<unknown>) => { pending.push(promise); }, passThroughOnException: vi.fn() } as unknown as ExecutionContext)
+      .then(async response => { const text = await response.text(); await Promise.all(pending); return text; });
+    expect(await ask('Origin')).toContain('tr:sfbay:sf511:');
+    expect(points.at(-1)!.blobs).toEqual(['tools/call', 'find_transit', 'unclassified', 'production', '2xx', 'sfbay', 'sf511']);
+    // Nothing found: no region is claimed, and the words asked are never recorded.
+    await ask('Zzyzx Road');
+    expect(points.at(-1)!.blobs.slice(5)).toEqual(['', '']);
+    expect(JSON.stringify(points)).not.toMatch(/Origin|Zzyzx/);
+  });
+
+  it('keeps only known regions and feeds', () => {
+    const points: { blobs: string[] }[] = [];
+    recordMcpUsage(envWithDataset(point => points.push(point as { blobs: string[] })), { mcpMethod: 'tools/call', mcpName: 'get_departures', status: 200,
+      coverage: ['nyc', 'Times Square', 'dc'], feeds: ['mta_subway', 'wmata', 'tr:nyc', '42 St', 'mta_subway'] });
+    expect(points[0]!.blobs.slice(5)).toEqual(['dc+nyc', 'mta_subway+wmata']);
   });
 });

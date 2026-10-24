@@ -1,3 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { getStaticSources } from './transit/gtfs/refresh/policy';
+
 export interface TelemetryInput extends Record<string, unknown> {
   correlationId?: unknown;
   era?: unknown;
@@ -10,6 +13,9 @@ export interface TelemetryInput extends Record<string, unknown> {
   upstream?: unknown;
   durationMs?: unknown;
   status?: unknown;
+  /** Regions and static feeds the answer drew on, read from its transit refs. */
+  coverage?: unknown;
+  feeds?: unknown;
 }
 
 export interface SafeTelemetry {
@@ -22,6 +28,18 @@ export interface SafeTelemetry {
   upstream?: string;
   durationMs?: number;
   statusClass?: `${1 | 2 | 3 | 4 | 5}xx`;
+  coverage?: string;
+  feeds?: string;
+}
+
+/** The telemetry of the request being served, so a tool can note what its answer used. */
+export const requestTelemetry = new AsyncLocalStorage<TelemetryInput>();
+
+/** Known values only, sorted and joined: never a place, stop or route. */
+function knownSet(value: unknown, allowed: readonly string[]): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const kept = [...new Set(value.filter((item): item is string => typeof item === 'string' && allowed.includes(item)))].sort();
+  return kept.length ? kept.join('+') : undefined;
 }
 
 // Finite, server-owned categories: regex validation alone permits identifiers,
@@ -87,6 +105,9 @@ export function sanitizeTelemetry(input: TelemetryInput): SafeTelemetry {
       : undefined,
   );
   if (input.clientName !== undefined) safe.clientName = telemetryCategory(input.clientName, TELEMETRY_CLIENTS);
+  const sources = getStaticSources();
+  addIfDefined(safe, 'coverage', knownSet(input.coverage, [...new Set(sources.map(source => source.coverageId))]));
+  addIfDefined(safe, 'feeds', knownSet(input.feeds, sources.map(source => source.feedId)));
   if (typeof input.status === 'number'
     && Number.isInteger(input.status)
     && input.status >= 100
