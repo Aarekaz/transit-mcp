@@ -40,6 +40,7 @@ export const SFBAY_COVERAGE = {
   displayName: SFBAY_REGION.displayName,
   aliases: reviewedAliases.coverageAliases.map(alias => alias.name),
   placeAliases: reviewedAliases.places,
+  localities: ['San Francisco', 'SF', 'Oakland', 'Berkeley', 'San Jose', 'East Bay', 'Peninsula', 'South Bay', 'Bay Area', 'California', 'CA'],
   // 511 SF Bay operator IDs (https://511.org/open-data/transit, operators endpoint).
   operators: [
     { names: ['BART'], agencies: ['BA'] }, { names: ['Caltrain'], agencies: ['CT'] }, { names: ['Muni', 'SFMTA'], agencies: ['SF'] },
