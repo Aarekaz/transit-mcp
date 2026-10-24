@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Decoding a feed index checks the same rules with less work: trip IDs in one sorted-strings pass instead of a schema check per ID, and each distinct route ref parsed once rather than at every stop. A cold New York call spent 177 ms decoding its nine indexes on a laptop and now spends 122 ms.
+
 - A coverage's feed indexes are read from storage together instead of one after another. New York has nine, so a server's first New York question waited on nine round trips in a row before it could resolve a name.
 
 - A new NYC subway timetable that changes only days ahead now waits up to six hours before it's built. Changes to yesterday, today or tomorrow are still built on the next check, because live predictions match today's trips. MTA republishes the timetable about hourly, mostly with planned work for the coming week, and every rebuild costs about 140 s of CPU. Which days a change touches is read from trips.txt and the calendars, once per archive, in about 100 ms. Anything that can't be placed that way (stops, calendars, a stop_times edit without a trips.txt change) is built at once.

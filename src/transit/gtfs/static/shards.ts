@@ -51,10 +51,23 @@ const metadataSchema = z.object({
   headsigns: z.array(z.string()),
 });
 
+const isRef = (value: unknown, kind: 'stop' | 'route') => typeof value === 'string' && parseTransitRef(value)?.kind === kind && value.split(':').length === 5;
+/** Every trip ID in the feed: non-empty strings, strictly sorted. One loop, because a bus
+ * network lists hundreds of thousands and a schema check per element dominated decoding. */
+const sortedIds = z.custom<string[]>(value => Array.isArray(value) && value.every((item, index) =>
+  typeof item === 'string' && item.length > 0 && (index === 0 || value[index - 1] < item)));
+/** Stop to route lists, the same rules as a record of refs. Route refs repeat at every stop
+ * (29 subway routes over 1,500 stops), so each distinct one is parsed once per index. */
+const stopRouteLists = z.custom<Record<TransitRef, TransitRef[]>>(value => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const routes = new Map<unknown, boolean>();
+  const route = (item: unknown) => { let ok = routes.get(item); if (ok === undefined) { ok = isRef(item, 'route'); routes.set(item, ok); } return ok; };
+  return Object.entries(value).every(([stop, list]) => isRef(stop, 'stop') && Array.isArray(list) && list.every(route));
+});
 const discoverySchema = metadataSchema.pick({ schemaVersion: true, coverageId: true, feedId: true, stops: true, routes: true }).extend({
   sourceSha256: hash,
-  tripProviderIds: z.array(id).refine(ids => ids.every((value, index) => index === 0 || ids[index - 1]! < value)),
-  stopRoutes: z.record(stopRef, z.array(routeRef)),
+  tripProviderIds: sortedIds,
+  stopRoutes: stopRouteLists,
   stationLinks: z.array(z.tuple([stopRef, stopRef])).optional(),
 });
 
