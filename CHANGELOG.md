@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A departure board no longer reads its stop's feed index a second time. The tools had already read, verified and decoded it, and the board downloaded, hashed and parsed it again to confirm the stop exists: another 3.4 MB for the NYC subway on every call. The same identity and stop checks now run on the index already in hand.
+
 - Decoding a feed index checks the same rules with less work: trip IDs in one sorted-strings pass instead of a schema check per ID, and each distinct route ref parsed once rather than at every stop. A cold New York call spent 177 ms decoding its nine indexes on a laptop and now spends 122 ms.
 
 - A coverage's feed indexes are read from storage together instead of one after another. New York has nine, so a server's first New York question waited on nine round trips in a row before it could resolve a name.

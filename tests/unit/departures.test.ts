@@ -4,6 +4,7 @@ import { decodeScheduleShard, encodeScheduleShard, sha256 } from '../../src/tran
 import type { ArtifactManifestV2, CompileScheduleInput } from '../../src/transit/gtfs/static/schema';
 import { SFBAY_COVERAGE } from '../../src/regions/sfbay';
 import { getScheduledDepartures } from '../../src/transit/planner/departures';
+import type { TransitRef } from '../../src/transit/core/refs';
 import { loadScheduleWindow } from '../../src/transit/planner/schedule-index';
 
 const STOP = 'tr:sfbay:sf511:stop:Uw' as const;
@@ -78,6 +79,18 @@ describe('schedule-window metadata', () => {
 });
 
 describe('scheduled departures', () => {
+  it('checks the stop against an index the caller already verified, without reading it again', async () => {
+    const f = await fixture();
+    const discovery = f.compiled[0]!.discovery;
+    const readDiscovery = vi.fn(f.readDiscovery);
+    const query = { ...f, readDiscovery, discovery, instant: '2026-10-19T09:00:00-07:00', windowSeconds: 3600 };
+    expect((await getScheduledDepartures({ ...query, stopRef: STOP })).departures).toHaveLength(1);
+    await expect(getScheduledDepartures({ ...query, stopRef: 'tr:sfbay:sf511:stop:Tm9uZQ' as TransitRef })).rejects.toThrow('ENTITY_NOT_FOUND');
+    // An index from another source version is refused, not trusted.
+    await expect(getScheduledDepartures({ ...query, stopRef: STOP, discovery: { ...discovery, sourceSha256: 'f'.repeat(64) } })).rejects.toThrow('Discovery identity mismatch');
+    expect(readDiscovery).not.toHaveBeenCalled();
+  });
+
   it('pages exact same-time ties without repeats or lost candidates', async () => {
     const data = input();
     for (const id of ['A', 'B']) {
