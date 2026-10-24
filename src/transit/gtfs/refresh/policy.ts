@@ -30,6 +30,9 @@ export interface StaticSourcePolicy {
   /** Dense feeds (a bus day is ~600,000 stop times scattered through a 177 MB table) split
    * the stored stop_times by band in their own steps, so no step holds a day at once. */
   splitByBand?: true;
+  /** A change that leaves yesterday, today and tomorrow alone is built at most this often.
+   * Live predictions match today's trips, so a change near now is always built at once. */
+  deferFarChangesSeconds?: number;
   /** Optional publisher tables left out of every build (never edited), with the reason. */
   exclude?: { files: string[]; reason: string };
 }
@@ -46,8 +49,9 @@ const policies: readonly StaticSourcePolicy[] = [
     conditional: true, checkIntervalSeconds: 6 * 3600, windowDays: 7, maxArchiveBytes: 64_000_000, bandSeconds: 3600, splitByBand: true },
   { coverageId: 'nyc', feedId: 'mta_subway', url: 'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip',
     auth: { kind: 'none' },
-    // MTA republishes planned service changes several times a day.
-    conditional: true, checkIntervalSeconds: 5 * 60, windowDays: 7, maxArchiveBytes: 64_000_000 },
+    // MTA republishes planned service changes about hourly, mostly for days ahead; a rebuild
+    // is about 140 s of CPU, so those wait up to six hours (changes near now never wait).
+    conditional: true, checkIntervalSeconds: 5 * 60, windowDays: 7, maxArchiveBytes: 64_000_000, deferFarChangesSeconds: 6 * 3600 },
   // 511's consolidated regional feed (operator RG). The token's 60 requests an hour are
   // shared with realtime polling; one archive request per check comes from the reserve.
   { coverageId: 'sfbay', feedId: 'sf511', url: 'https://api.511.org/transit/datafeeds?operator_id=RG',

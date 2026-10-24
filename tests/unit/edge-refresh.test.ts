@@ -330,6 +330,40 @@ describe('edge refresh workflow', () => {
     expect(created[1]).toBe(`refresh-nyc-${(await sha256(changed)).slice(0, 32)}`);
   });
 
+  it('builds a change near now at once and lets a change days ahead wait six hours', async () => {
+    // "Later" runs only a week ahead, so trips added on it leave yesterday, today and tomorrow alone.
+    const files = { ...NYC_FILES, 'calendar_dates.txt': 'service_id,date,exception_type\nLater,20261027,1\n' } as Record<string, string>;
+    const add = (id: string, service: string) => ({ ...files, 'trips.txt': `${files['trips.txt']}F,${id},${service},Coney Island-Stillwell Av,1\n`,
+      'stop_times.txt': `${files['stop_times.txt']}${id},11:00:00,11:00:00,D19S,1\n${id},11:30:00,11:30:00,132S,2\n` });
+    const f = await setup(files);
+    // Published from an archive fetched an hour ago.
+    expect((await runRefresh(f.env, { ...f.params, retrievedAt: new Date(Date.now() - 3600_000).toISOString() }, steps())).outcome).toBe('published');
+    const created: string[] = [];
+    let served = await zip(add('LATER-F-1', 'Later'));
+    const env = { ...f.env, TRANSIT_REFRESH: { create: async (options: { id: string }) => {
+      if (created.includes(options.id)) throw new Error('instance already exists');
+      created.push(options.id);
+    }, get: async () => ({ status: async () => ({ status: 'running' }), restart: async () => {} }) } } as unknown as Env;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => String(input instanceof Request ? input.url : input).includes('gtfs_supplemented')
+      ? new Response(served) : new Response(null, { status: 503 }));
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {}); vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const id = async () => `refresh-nyc-${(await sha256(served)).slice(0, 32)}`;
+    await checkStaticSources(env, Date.now());
+    await checkStaticSources(env, Date.now() + 10 * 60_000);
+    expect(created).toEqual([]);
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('schedule_refresh_deferred'));
+    // Still within the hour: a trip added for today is built on the next check.
+    served = await zip(add('TODAY-F-1', 'Weekday'));
+    await checkStaticSources(env, Date.now() + 20 * 60_000);
+    expect(created).toEqual([await id()]);
+    // A change days ahead waits only until the published archive is six hours old.
+    served = await zip(add('LATER-F-2', 'Later'));
+    await checkStaticSources(env, Date.now() + 30 * 60_000);
+    expect(created).toHaveLength(1);
+    await checkStaticSources(env, Date.now() + 5 * 3600_000 + 60_000);
+    expect(created).toEqual([created[0], await id()]);
+  });
+
   it('restarts a failed refresh for the current archive a bounded number of times', async () => {
     vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(NOW));
     const db = memoryStorage(), archive = await zip(NYC_FILES as Record<string, string>);
