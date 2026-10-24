@@ -285,6 +285,14 @@ describe('global transit MCP boundary', () => {
     const result = (await call(f.env, 'get_service_status', { ref: entityRef })).result.structuredContent;
     expect(result.alerts.map((alert: any) => alert.id)).toEqual(['direction', 'trip']);
   });
+  it('times a dated frequency instance from its own start, not the template\'s', async () => {
+    const input = plannerInput(); input.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\nT,09:00:00,09:30:00,600,1\n';
+    const f = await fixture(false, input);
+    const calls = async (start: string) => (await call(f.env, 'find_transit', { ref: `${ref('trip', 'T')}:20261019:${Buffer.from(start).toString('base64url')}` }))
+      .result.structuredContent.entities[0].calls.map((row: any) => [row.arrivalSeconds, row.departureSeconds]);
+    expect(await calls('09:10:00')).toEqual([[33000, 33000], [33600, 33600], [34200, 34200]]);
+    expect(await calls('09:00:00')).toEqual([[32400, 32400], [33000, 33000], [33600, 33600]]);
+  });
   it('fails closed explicitly when aggregate alert subentity expansion exceeds its bound', async () => {
     const input = plannerInput(); input.files['frequencies.txt'] = 'trip_id,start_time,end_time,headway_secs,exact_times\nT,09:00:00,12:00:00,1,1\n';
     const f = await fixture(false, input); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(at('08:59:00')));
