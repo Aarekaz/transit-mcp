@@ -141,11 +141,17 @@ async function loadDataUntraced(context: MetroMcpContext, coverageId: string, si
   for (const descriptor of current.manifest.discoveries) {
     total += descriptor.byteLength;
     if (total > 64 * 1024 * 1024) throw new Error('Discovery budget');
-    let discoveryCache = discoveryCaches.get(bucket);
-    if (!discoveryCache) { discoveryCache = new Map(); discoveryCaches.set(bucket, discoveryCache); }
+  }
+  let discoveryCache = discoveryCaches.get(bucket);
+  if (!discoveryCache) { discoveryCache = new Map(); discoveryCaches.set(bucket, discoveryCache); }
+  // A coverage holds one index per feed (NYC has nine): read the missing ones together, not
+  // one round trip after another. Each is still verified and decoded in manifest order.
+  const reads = new Map(current.manifest.discoveries.filter(descriptor => !discoveryCache.has(descriptor.sha256))
+    .map(descriptor => { const read = readObject(descriptor.key); read.catch(() => {}); return [descriptor.sha256, read] as const; }));
+  for (const descriptor of current.manifest.discoveries) {
     let index = discoveryCache.get(descriptor.sha256);
     if (!index) {
-      const bytes = await readObject(descriptor.key);
+      const bytes = await (reads.get(descriptor.sha256) ?? readObject(descriptor.key));
       if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Discovery integrity');
       index = decodeDiscoveryIndex(bytes);
       count('discoveryDecoded'); count('discoveryBytes', bytes.byteLength);
