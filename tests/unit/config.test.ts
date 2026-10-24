@@ -310,6 +310,8 @@ describe('anonymous deployment configuration', () => {
     expect(wrangler.assets).toEqual({
       directory: './public',
       binding: 'ASSETS',
+      // Only the link-preview video goes through the Worker, for its byte ranges.
+      run_worker_first: ['/og-video.mp4'],
     });
     expect(wrangler.observability.enabled).toBe(true);
   });
