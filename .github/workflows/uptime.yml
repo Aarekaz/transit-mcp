@@ -1,0 +1,70 @@
+name: uptime
+
+# Calls production the way a client does, every five minutes. A failure that holds after a
+# retry opens one "outage" issue (GitHub notifies the owner); the next pass closes it.
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ORIGIN: https://transitmcp.com
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Probe production
+        id: probe
+        run: |
+          probe() {
+            local failed=()
+            mcp() {
+              curl -sS --max-time "$2" -A 'transit-mcp-uptime' "$ORIGIN/mcp" \
+                -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
+                -H 'mcp-protocol-version: 2025-06-18' -d "$1"
+            }
+            mcp '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 15 | grep -q '"find_transit"' || failed+=("tools/list")
+            mcp '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find_transit","arguments":{"query":"Times Sq-42 St"}}}' 30 \
+              | grep -q '"structuredContent"' || failed+=("find_transit")
+            [ "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$ORIGIN/")" = 200 ] || failed+=("homepage")
+            [ "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -r 0-1 "$ORIGIN/og-video.mp4")" = 206 ] || failed+=("og-video range")
+            echo "${failed[*]}"
+          }
+          failed=$(probe)
+          if [ -n "$failed" ]; then
+            echo "First pass failed: $failed; retrying in 60 s"
+            sleep 60
+            failed=$(probe)
+          fi
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          [ -z "$failed" ] && echo "All checks passed" || echo "Still failing: $failed"
+
+      - name: Open or update the outage issue
+        if: steps.probe.outputs.failed != ''
+        run: |
+          gh label create outage --color B60205 --description 'Production probe failing' 2>/dev/null || true
+          open=$(gh issue list --label outage --state open --json number,updatedAt --jq '.[0] // empty | "\(.number) \(.updatedAt)"')
+          body="Failing: \`${{ steps.probe.outputs.failed }}\` at $(date -u +%FT%TZ) ([run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}))."
+          if [ -z "$open" ]; then
+            gh issue create --label outage --title "Production probe failing: ${{ steps.probe.outputs.failed }}" --body "$body"
+          elif [ $(( $(date -u +%s) - $(date -u -d "${open#* }" +%s) )) -ge 3600 ]; then
+            # Still down: at most one comment an hour.
+            gh issue comment "${open%% *}" --body "$body"
+          fi
+
+      - name: Close a recovered outage
+        if: steps.probe.outputs.failed == ''
+        run: |
+          for n in $(gh issue list --label outage --state open --json number --jq '.[].number'); do
+            gh issue close "$n" --comment "Recovered: all checks pass at $(date -u +%FT%TZ)."
+          done

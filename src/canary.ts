@@ -19,6 +19,13 @@ export function canaryDue(scheduledTime: number): boolean {
   const at = new Date(scheduledTime);
   return Math.floor(scheduledTime / 86_400_000) % 2 === 0 && at.getUTCHours() === 14 && at.getUTCMinutes() < 5;
 }
+/** After a failing report, the check runs again at the top of every hour until it passes,
+ * so a recovered service reads as healthy within the hour rather than in two days. */
+export async function canaryRecheckDue(env: Env, scheduledTime: number): Promise<boolean> {
+  if (new Date(scheduledTime).getUTCMinutes() >= 5 || canaryDue(scheduledTime)) return false;
+  const state = await env.TRANSIT_ARTIFACTS?.get(CANARY_KEY).then(object => object?.json<CanaryState>()).catch(() => undefined);
+  return state?.latest.ok === false;
+}
 /** A report older than this means the check itself stopped running (two days and a margin). */
 export const CANARY_STALE_SECONDS = 50 * 3600;
 const HISTORY = 96;

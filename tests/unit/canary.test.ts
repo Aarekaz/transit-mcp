@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CANARY_KEY, CANARY_STALE_SECONDS, canaryDue, canaryHealthResponse, recordCanary } from '../../src/canary';
+import { CANARY_KEY, CANARY_STALE_SECONDS, canaryDue, canaryHealthResponse, canaryRecheckDue, recordCanary } from '../../src/canary';
 import { NOW, bandedArtifact, liveEnv, nowSeconds, upstream, wireHub, feedBytes } from '../helpers/dc-nyc-realtime';
 import { NYC_TRIP_FEEDS } from '../../src/regions/nyc';
 import { memoryStorage } from '../helpers/realtime-fixture';
@@ -12,6 +12,20 @@ describe('production canary', () => {
   it('runs once every other day, on one five-minute tick', () => {
     const ticks = Array.from({ length: 4 * 24 * 12 }, (_, i) => Date.UTC(2026, 9, 20) + i * 5 * 60_000).filter(canaryDue);
     expect(ticks.map(tick => new Date(tick).toISOString())).toEqual(['2026-10-20T14:00:00.000Z', '2026-10-22T14:00:00.000Z']);
+  });
+
+  it('checks again every hour after a failure, and not at all while it passes', async () => {
+    const db = memoryStorage(), env = { TRANSIT_ARTIFACTS: db.bucket } as unknown as Env;
+    const ticks = Array.from({ length: 24 * 12 }, (_, i) => Date.UTC(2026, 9, 21) + i * 5 * 60_000);
+    const due = async () => (await Promise.all(ticks.map(async tick => await canaryRecheckDue(env, tick) ? tick : 0))).filter(Boolean);
+    expect(await due()).toEqual([]);
+    const save = (ok: boolean) => db.bucket.put(CANARY_KEY, JSON.stringify({ latest: { at: new Date(NOW).toISOString(), ok, checks: [] }, history: [] }));
+    await save(true);
+    expect(await due()).toEqual([]);
+    await save(false);
+    expect((await due()).map(tick => new Date(tick).toISOString().slice(11, 16))).toEqual(Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, '0')}:00`));
+    // The scheduled run is not doubled.
+    expect(await canaryRecheckDue(env, Date.UTC(2026, 9, 22, 14))).toBe(false);
   });
 
   it('answers 200 only for a recent passing report, with the failures otherwise', async () => {

@@ -15,7 +15,7 @@ import type { Env } from './types';
 import { bootstrapRegionalFeedHub } from './transit/gtfs/realtime/bootstrap';
 import { checkStaticSources, rollForwardSchedules } from './transit/gtfs/refresh/refresh';
 import { compactSchedules } from './transit/planner/compactor';
-import { canaryDue, recordCanary } from './canary';
+import { canaryDue, canaryRecheckDue, recordCanary } from './canary';
 
 // Export MetroMcpAgent so the wrangler.jsonc DO binding can resolve the class.
 // Cloudflare's bundler discovers DO classes by name at deploy time.
@@ -122,5 +122,6 @@ export default {
     ctx.waitUntil(compactSchedules(env, Date.now()));
     // Every other day: check production the way an agent uses it.
     if (canaryDue(controller.scheduledTime)) ctx.waitUntil(recordCanary(env, controller.scheduledTime));
+    else ctx.waitUntil(canaryRecheckDue(env, controller.scheduledTime).then(due => due ? recordCanary(env, controller.scheduledTime) : undefined));
   },
 };

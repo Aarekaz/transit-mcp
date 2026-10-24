@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+- An uptime probe (`.github/workflows/uptime.yml`) calls production every five minutes the way a client does: `tools/list`, a `find_transit` lookup, the homepage and a byte range of the link-preview video. A failure that survives a retry opens an `outage` issue, with at most one comment an hour while it lasts, and the next passing run closes it.
+- After a failing self-check, `/health/deep` re-runs the check at the top of every hour until it passes. Before, a failure stayed on the page for two days, until the next scheduled run.
 - A launch teaser and a link-preview video (`og:video`, `public/og-video.mp4`, 16 s). Each region's real rail network draws itself in grey ink, and a rider's question is answered with what the live server returned when the film was rendered (`capture.mjs` records it). Only the answer's line is in colour, and it carries over from city to city. Every line comes into colour together at the end, before the logo, the URL and the three regions (NY · DC · SF). Dark and light themes; source and renderer in `media/og-video/`.
 - `skills/transit-mcp/SKILL.md`, an agent skill: which tool answers which question, names meaning several places, presenting results, and rechecking a planned trip before the rider leaves.
 - `find_transit` searches every region when no coverage is given, and lists regions and their capabilities when called with no arguments (or only `coverage`). Names fold common spellings (Street/St, Avenue/Av, Square/Sq, 42nd/42, punctuation), match words in any order and ignoring filler (station, stop, metro), and tolerate small misspellings. When nothing matches, `suggestions` (and a not-found error's candidates) carry the closest names, never resolved on their own.
@@ -34,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agency errors in the original tools say what the caller can do; `get_bus_predictions` validates the 7-digit stop ID.
 
 ### Fixed
+
+- The registry entry (`server.json`), `package.json`, `/info`, `llms.txt` and the site's links point at the current repository, `Aarekaz/transit-mcp`.
 
 - Site files answer byte-range requests with `206 Partial Content`. The asset binding returned the whole file, and Apple's players (iMessage link previews, Safari) won't play an MP4 served that way, so the link-preview video never showed.
 

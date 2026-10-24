@@ -100,7 +100,7 @@ describe('getServerInfo', () => {
 
     expect(body.name).toBe('Transit MCP');
     expect(body.links).toMatchObject({
-      github: 'https://github.com/Aarekaz/metro-mcp',
+      github: 'https://github.com/Aarekaz/transit-mcp',
       mcpServer: 'https://transitmcp.com/mcp',
       mcpServerLegacy: 'https://transitmcp.com/sse',
       documentation: 'https://transitmcp.com/docs/',
