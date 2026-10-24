@@ -657,7 +657,7 @@
         <div class="status-row"><span>Regions</span><strong>NY · DC · SF</strong></div>
         <div class="status-row"><span>Transport</span><strong>Streamable HTTP</strong></div>
         <div class="status-row"><span>Tools</span><strong>5 main, 13 older DC/NYC</strong></div>
-        <div class="status-row"><span>Health</span><strong><a href="/health/deep">/health/deep</a></strong></div>
+        <div class="status-row"><span>Health</span><strong><code>/health/deep</code></strong></div>
       </aside>
     </header>
 
@@ -1086,7 +1086,7 @@ if (still.matches) { touring = false; }
             <ul>
               <li>Every itinerary goes through a separate validator before it's returned: real trips, real stops, transfers you can actually make.</li>
               <li>A new timetable is checked before it goes live. One that would remove most of a day's service is refused. If live trains match it worse than the one it replaced, it's rolled back.</li>
-              <li>Every other day the server calls its own tools the way an agent would. If anything fails, it checks again every hour until it passes. The latest result is at <a href="/health/deep"><code>/health/deep</code></a>.</li>
+              <li>Every other day the server calls its own tools the way an agent would. If anything fails, it checks again every hour until it passes. The latest result is at <code>GET /health/deep</code>.</li>
               <li>From outside Cloudflare, a GitHub Action calls the endpoint every five minutes and opens an issue if it stays down.</li>
             </ul>
 
