@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Site files answer byte-range requests with `206 Partial Content`. The asset binding returned the whole file, and Apple's players (iMessage link previews, Safari) won't play an MP4 served that way, so the link-preview video never showed.
+
 - `find_transit` on a dated frequency trip (`…:serviceDate:startTime`) gives that departure's own stop times. It used to return the template's, so a 09:10 instance of a 09:00 template read ten minutes early at every stop.
 - Rechecking a planned trip (`get_service_status` with `itinerary`) judges it on current times: a train running a few seconds or minutes off keeps the journey valid as long as every change is still made. A missed change is `MISSED_CONNECTION` on that transfer. Before, any change in a predicted time failed the whole journey with `ADJUSTED_TIME`.
 - A recheck reads live data only for the feeds the trip rides, and checks each leg against its own feed's observation time. Before, a Metrorail trip failed with `REALTIME_PROVENANCE` whenever the Metrobus feed was a few seconds older.

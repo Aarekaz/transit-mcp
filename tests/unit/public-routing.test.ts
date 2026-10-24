@@ -35,6 +35,27 @@ describe('public route characterization', () => {
     expect(response.headers.get('content-security-policy')).toContain("default-src 'none'");
   });
 
+  it('answers a byte range of the link-preview video with 206, as Apple players require', async () => {
+    const video = () => new Response(new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]), { headers: { 'Content-Type': 'video/mp4' } });
+    const env = createMockEnv({ ASSETS: { fetch: vi.fn(async () => video()) } as unknown as Fetcher });
+    const get = (range?: string) => worker.fetch(new Request('https://transitmcp.com/og-video.mp4', range ? { headers: { Range: range } } : {}), env, executionContext());
+
+    const probe = await get('bytes=0-1');
+    expect(probe.status).toBe(206);
+    expect(probe.headers.get('content-range')).toBe('bytes 0-1/10');
+    expect([...new Uint8Array(await probe.arrayBuffer())]).toEqual([0, 1]);
+    const rest = await get('bytes=7-');
+    expect(rest.headers.get('content-range')).toBe('bytes 7-9/10');
+    expect([...new Uint8Array(await rest.arrayBuffer())]).toEqual([7, 8, 9]);
+    const tail = await get('bytes=-3');
+    expect([...new Uint8Array(await tail.arrayBuffer())]).toEqual([7, 8, 9]);
+    expect((await get('bytes=20-')).status).toBe(416);
+    const whole = await get();
+    expect(whole.status).toBe(200);
+    expect(whole.headers.get('accept-ranges')).toBe('bytes');
+    expect((await whole.arrayBuffer()).byteLength).toBe(10);
+  });
+
   it('serves the structured server description at GET /info', async () => {
     const env = createMockEnv();
 
