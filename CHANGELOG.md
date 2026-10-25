@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The NYC subway timetable is rebuilt at most every three hours. MTA republishes it about hourly, nearly always touching the next day or two, so it was rebuilt about hourly, at about 140 s of CPU each: some 70% of the Workers CPU, and most of the reason it ran past the plan's included 30 million CPU-ms a month. A change near now now waits until the published timetable is three hours old (changes further out still wait up to six). Trains added in the meantime still appear from the live feed, as trains the timetable doesn't have. While it waits, the check doesn't diff the archives either.
+
 - Each feed now publishes a places index beside its discovery index: the same stops, routes and links without the trip IDs, which are 71% of New York's index bytes. The tools read places indexes and load a feed's trip IDs only to look up a trip by ref, or for a one-word query with a digit in it, which may be a trip ID. A cold New York departure board reads 8.5 MB instead of 20.2 MB. A places index that is missing or fails its checks falls back to the discovery index. Artifacts built before this have no places indexes and load as before; each feed gets one at its next rebuild.
 
 - A departure board no longer reads its stop's feed index a second time. The tools had already read, verified and decoded it, and the board downloaded, hashed and parsed it again to confirm the stop exists: another 3.4 MB for the NYC subway on every call. The same identity and stop checks now run on the index already in hand.

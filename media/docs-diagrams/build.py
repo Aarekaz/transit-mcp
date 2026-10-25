@@ -207,9 +207,9 @@ def pipeline():
     # After publishing: rolled back if live matching gets worse.
     body.append(box(654, 150, 140, 46, "Roll back", "if live matching drops"))
     body.append(arrow([(724, row + h), (724, 147)], "watch", (732, 124), "start"))
-    body.append(text(6, 232, "Checked every 5 minutes. A change that touches yesterday, today or tomorrow never waits.", "dg-edge"))
+    body.append(text(6, 232, "Checked every 5 minutes. A change that touches yesterday, today or tomorrow waits only for the 3-hour minimum.", "dg-edge"))
     return figure("dg-pipeline", W, H,
-                  "How a new MTA subway timetable goes live: an upload whose tables are unchanged is skipped; a change touching yesterday, today or tomorrow is built at once; a change only to later days waits up to six hours; each build is validated and published, then rolled back if live matching drops.",
+                  "How a new MTA subway timetable goes live: an upload whose tables are unchanged is skipped; a change touching yesterday, today or tomorrow is built once the published timetable is three hours old; a change only to later days waits up to six hours; each build is validated and published, then rolled back if live matching drops.",
                   body,
                   "How a new NYC subway timetable goes live. The two dashed boxes are the cheap checks that save the expensive build: in the last day sampled, one upload in three was the same tables in a new zip, and every change was to planned work two or more days out.")
 

@@ -372,7 +372,13 @@ async function deferFarChange(bucket: R2Bucket, policy: StaticSourcePolicy, publ
   publishedArchive: string | undefined, next: SourceState, now: number): Promise<boolean> {
   const source = published?.manifest.sources.find(item => item.feedId === policy.feedId);
   if (!policy.deferFarChangesSeconds || !published || !source || !publishedArchive || publishedArchive === next.sha256 || !next.sha256) return false;
-  if (now - Date.parse(source.retrievedAt) >= policy.deferFarChangesSeconds * 1000) return false;
+  const age = now - Date.parse(source.retrievedAt);
+  if (age >= policy.deferFarChangesSeconds * 1000) return false;
+  // Too soon for any rebuild: no need to look at what changed yet.
+  if (policy.minRebuildSeconds && age < policy.minRebuildSeconds * 1000) {
+    console.info(JSON.stringify({ event: 'schedule_refresh_deferred', coverage: policy.coverageId, feed: policy.feedId, archive: next.sha256.slice(0, 12), reason: 'min_interval' }));
+    return true;
+  }
   const keys = sourceKeys(policy.coverageId, policy.feedId);
   let changes = next.nearTerm?.sha256 === next.sha256 ? next.nearTerm.changes : undefined;
   if (changes === undefined) {

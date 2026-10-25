@@ -330,7 +330,7 @@ describe('edge refresh workflow', () => {
     expect(created[1]).toBe(`refresh-nyc-${(await sha256(changed)).slice(0, 32)}`);
   });
 
-  it('builds a change near now at once and lets a change days ahead wait six hours', async () => {
+  it('builds a change near now three hours after the last archive and lets a change days ahead wait six', async () => {
     // "Later" runs only a week ahead, so trips added on it leave yesterday, today and tomorrow alone.
     const files = { ...NYC_FILES, 'calendar_dates.txt': 'service_id,date,exception_type\nLater,20261027,1\n' } as Record<string, string>;
     const add = (id: string, service: string) => ({ ...files, 'trips.txt': `${files['trips.txt']}F,${id},${service},Coney Island-Stillwell Av,1\n`,
@@ -352,13 +352,16 @@ describe('edge refresh workflow', () => {
     await checkStaticSources(env, Date.now() + 10 * 60_000);
     expect(created).toEqual([]);
     expect(info).toHaveBeenCalledWith(expect.stringContaining('schedule_refresh_deferred'));
-    // Still within the hour: a trip added for today is built on the next check.
+    // A trip added for today waits too, until the published archive is three hours old.
     served = await zip(add('TODAY-F-1', 'Weekday'));
     await checkStaticSources(env, Date.now() + 20 * 60_000);
+    expect(created).toEqual([]);
+    expect(info).toHaveBeenCalledWith(expect.stringContaining('min_interval'));
+    await checkStaticSources(env, Date.now() + 2 * 3600_000 + 60_000);
     expect(created).toEqual([await id()]);
     // A change days ahead waits only until the published archive is six hours old.
     served = await zip(add('LATER-F-2', 'Later'));
-    await checkStaticSources(env, Date.now() + 30 * 60_000);
+    await checkStaticSources(env, Date.now() + 2 * 3600_000 + 10 * 60_000);
     expect(created).toHaveLength(1);
     await checkStaticSources(env, Date.now() + 5 * 3600_000 + 60_000);
     expect(created).toEqual([created[0], await id()]);
