@@ -24,6 +24,9 @@ export interface ScheduleWindowQuery {
   readConcurrency?: number;
   /** Decode only these routes' trips (see decodeScheduleShard): for a search along them. */
   decodeRoutes?: ReadonlySet<TransitRef>;
+  /** A whole decode already resident may serve `decodeRoutes`, for a caller that picks its
+   * trips itself (a departure board): an extra route costs nothing there, a read and decode do. */
+  wholeServesRoutes?: boolean;
 }
 export interface ScheduleDay {
   agencyRef: TransitRef; timezone: string; serviceDate: string; startTime: string;
@@ -164,9 +167,9 @@ async function loadScheduleWindowUntraced(query: ScheduleWindowQuery): Promise<S
   // With readConcurrency, up to that many reads are in flight ahead of the decoder.
   const concurrency = Math.max(1, Math.min(16, query.readConcurrency ?? 1));
   const pending = new Map<number, Promise<Uint8Array>>();
-  const prefetch = (from: number) => { for (let at = from; at < Math.min(entries.length, from + concurrency); at++) if (!pending.has(at) && !query.decoded?.get(entries[at]!.descriptor, variant) && !(!variant && query.resident?.get(entries[at]!.descriptor))) { const read = query.readShard(entries[at]!.descriptor.key); read.catch(() => {}); pending.set(at, read); } };
+  const prefetch = (from: number) => { for (let at = from; at < Math.min(entries.length, from + concurrency); at++) if (!pending.has(at) && !query.decoded?.get(entries[at]!.descriptor, variant) && !((!variant || query.wholeServesRoutes) && query.resident?.get(entries[at]!.descriptor))) { const read = query.readShard(entries[at]!.descriptor.key); read.catch(() => {}); pending.set(at, read); } };
   for (const [position, { descriptor, days, source }] of entries.entries()) {
-    let shard = query.decoded?.get(descriptor, variant) ?? (variant ? undefined : query.resident?.get(descriptor));
+    let shard = query.decoded?.get(descriptor, variant) ?? (variant && !query.wholeServesRoutes ? undefined : query.resident?.get(descriptor));
     if (shard) query.decoded?.set(descriptor, shard, variant);
     else {
       if (concurrency > 1) prefetch(position);

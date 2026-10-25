@@ -15,6 +15,14 @@ describe('global transit references', () => {
     expect(refs.parseTransitRef('tr:sfbay:sf511:trip:OTE')).toEqual({ coverage: 'sfbay', feed: 'sf511', kind: 'trip', id: '91' });
   });
 
+  it('answers a repeated reference the same way, with a result no caller can change', () => {
+    const first = refs.parseTransitRef('tr:sfbay:sf511:stop:OTE')!;
+    expect(refs.parseTransitRef('tr:sfbay:sf511:stop:OTE')).toBe(first);
+    expect(() => { (first as { id: string }).id = '92'; }).toThrow(TypeError);
+    expect(refs.parseTransitRef('tr:sfbay:sf511:stop:OTE')).toEqual({ coverage: 'sfbay', feed: 'sf511', kind: 'stop', id: '91' });
+    expect([refs.parseTransitRef('tr:sfbay:sf511:stop:OTF'), refs.parseTransitRef('tr:sfbay:sf511:stop:OTF')]).toEqual([null, null]);
+  });
+
   it('preserves a leading Unicode BOM in opaque provider IDs', () => {
     const ref = refs.formatEntityRef({ coverage: 'sfbay', feed: 'sf511', kind: 'stop', id: '\uFEFF91' });
     expect(refs.parseTransitRef(ref)?.id).toBe('\uFEFF91');

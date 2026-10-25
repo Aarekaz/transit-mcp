@@ -84,8 +84,12 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     const relevantStops = new Set(data.indexes.flatMap(index => index.stops).filter(stop => within.has(stop.ref) || stop.parentStationRef !== undefined && within.has(stop.parentStationRef)).map(stop => stop.ref));
     // One decode per shard: the scan fills this, and observed rows read trips from it.
     const decoded = new DecodedShardCache(Number.MAX_SAFE_INTEGER);
+    // Only trips calling here are on the board, and a stop's routes are those of every trip
+    // calling at it: decode just those. Embarcadero is 13 of the Bay Area's 671 routes.
+    const boardRoutes = new Set(data.indexes.flatMap(index => [...relevantStops].flatMap(ref => index.stopRoutes[asTransitRef(ref)] ?? [])));
     const pages = getScheduledDeparturePages({ manifest: data.manifest, readShard: data.readObject, decoded, resident: residentShards, readDiscovery: data.readObject, discovery: data.indexes.find(index => index.feedId === stop.feed), stopRef: asTransitRef(stopRef!), complexStationRefs: complex.map(asTransitRef),
-      instant: args.at ?? now, windowSeconds: args.windowSeconds, selection: args.selection, limit: 100, routeRefs: args.routeRefs?.map(asTransitRef), agencyRefs: stationAgencies(data, relevantStops, args.agencyRefs) });
+      instant: args.at ?? now, windowSeconds: args.windowSeconds, selection: args.selection, limit: 100, routeRefs: args.routeRefs?.map(asTransitRef), agencyRefs: stationAgencies(data, relevantStops, args.agencyRefs),
+      decodeRoutes: boardRoutes, wholeServesRoutes: true, readConcurrency: 4 });
     const scheduled: ScheduledDeparture[] = []; let schedule: ScheduledDepartures | undefined;
     // Predictions can reorder any scheduled page. Exhaust the bounded window before ranking.
     for await (const page of pages) { handler.mcpReq.signal.throwIfAborted(); schedule = page; scheduled.push(...page.departures); }

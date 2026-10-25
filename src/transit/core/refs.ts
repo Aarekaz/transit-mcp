@@ -45,8 +45,24 @@ function validServiceDate(value: string): boolean {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === iso;
 }
 
+/** Parsed refs by string. Decoding a timetable checks the same stop, route and trip refs
+ * in every band it loads, and each check is a base64 round trip; parsing is pure, so a
+ * repeat is a lookup. Results are frozen because they are shared. */
+const parsedRefs = new Map<string, Readonly<ParsedTransitRef> | null>();
+const PARSED_REF_LIMIT = 50_000;
+
 /** Invalid input never becomes an opaque reference or a provider-text error. */
-export function parseTransitRef(ref: string): ParsedTransitRef | null {
+export function parseTransitRef(ref: string): Readonly<ParsedTransitRef> | null {
+  let parsed = parsedRefs.get(ref);
+  if (parsed !== undefined) return parsed;
+  parsed = parseUncached(ref);
+  if (parsed) Object.freeze(parsed);
+  if (parsedRefs.size >= PARSED_REF_LIMIT) parsedRefs.clear();
+  parsedRefs.set(ref, parsed);
+  return parsed;
+}
+
+function parseUncached(ref: string): ParsedTransitRef | null {
   const parts = ref.split(':');
   if (parts.length !== 5 && parts.length !== 7) return null;
   const [prefix, coverage, feed, kind, encodedId, serviceDate, encodedStartTime] = parts;
