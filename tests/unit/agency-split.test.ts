@@ -5,7 +5,7 @@ import { compileSchedule } from '../../src/transit/gtfs/static/compiler';
 import { agencyGrouping, partitionSchedule } from '../../src/transit/gtfs/static/partition';
 import { decodeScheduleShard } from '../../src/transit/gtfs/static/shards';
 import type { GtfsScheduleFiles } from '../../src/transit/gtfs/static/schema';
-import { loadScheduleWindow } from '../../src/transit/planner/schedule-index';
+import { DecodedShardCache, loadScheduleWindow } from '../../src/transit/planner/schedule-index';
 import { applyTripUpdates, matchTripInstance, type AppliedTripUpdates } from '../../src/transit/gtfs/realtime/trip-match';
 import { staticVersion } from '../../src/transit/gtfs/realtime/snapshot-store';
 import { agencyGroups, combineApplied, vehiclesFromMatches } from '../../src/transit/gtfs/realtime/region-feed-hub';
@@ -100,6 +100,27 @@ describe('agency-split schedules', () => {
     expect(matchTripInstance(update, { ...context(at('2026-10-19T09:00:00-07:00'), at('2026-10-20T11:00:00-07:00')), version })).toBeNull();
     expect(matchTripInstance(update, { ...context(), version })).toBeNull();
     expect(matchTripInstance(update, { ...context(at('2026-10-20T12:00:00-07:00'), at('2026-10-20T14:00:00-07:00')), version })).toBeNull();
+  });
+
+  it('serves a board\'s routes from a whole resident decode only when the caller allows it', async () => {
+    const split = await partitionSchedule(await compile(), 3600, { agencyGroups: 3 });
+    const objects = new Map(split.objects.map(object => [object.key, object.bytes]));
+    const read: string[] = [];
+    const resident = new DecodedShardCache(Number.MAX_SAFE_INTEGER);
+    const load = (extra: Partial<Parameters<typeof loadScheduleWindow>[0]>) => loadScheduleWindow({ manifest: split.manifest, instant: '2026-10-20T09:00:00-07:00', windowSeconds: 3600,
+      readShard: async key => { read.push(key); return objects.get(key)!; }, resident, agencyRefs: [ref('agency', 'MU')], ...extra });
+    const trips = (window: Awaited<ReturnType<typeof load>>) => window.shards.flatMap(entry => entry.shard.trips.map(trip => trip.providerId)).sort();
+    // Decoding one route leaves the resident cache to whole decodes.
+    const only = new Set([ref('route', 'MU:1')]);
+    expect(trips(await load({ decodeRoutes: only, wholeServesRoutes: true }))).toEqual(['mu-0900']);
+    expect(read).toHaveLength(1);
+    await load({});
+    expect(read).toHaveLength(2);
+    // Now resident: a board takes the whole decode without reading; a route search still decodes its own.
+    expect(trips(await load({ decodeRoutes: new Set(), wholeServesRoutes: true }))).toEqual(['mu-0900']);
+    expect(read).toHaveLength(2);
+    expect(trips(await load({ decodeRoutes: new Set() }))).toEqual([]);
+    expect(read).toHaveLength(3);
   });
 
   it('loads the same window whether shard bytes are fetched one at a time or ahead', async () => {
