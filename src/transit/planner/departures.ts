@@ -1,3 +1,4 @@
+import type { DiscoveryIndex } from '../gtfs/static/schema';
 import { formatTripInstanceRef, parseTransitRef, type TransitRef, type TripInstanceRef } from '../core/refs';
 import { loadScheduleWindow, type ScheduleWindow, type ScheduleWindowQuery } from './schedule-index';
 import { formatInstant, isServiceActive, parseInstant } from './service-day';
@@ -10,6 +11,9 @@ export interface ScheduledDepartureQuery extends ScheduleWindowQuery {
   complexStationRefs?: TransitRef[];
   /** Reads the manifest-pinned discovery object independently of timetable filters. */
   readDiscovery: (key: string) => Promise<Uint8Array>;
+  /** The same discovery object, already read, verified against this manifest and decoded
+   * (the tools' loadData). Checked here instead of reading and parsing it again. */
+  discovery?: DiscoveryIndex;
   routeRefs?: TransitRef[];
   selection?: 'first' | 'last';
   /** Limits exact departures only. All overlapping frequency windows are returned, up to 100. */
@@ -46,7 +50,28 @@ const discoveryIdentitySchema = z.object({
   stops: z.array(z.object({ ref: z.string() })),
 });
 
+/** Each verified index's stop refs, built once: indexes are immutable and content-addressed. */
+const knownStops = new WeakMap<DiscoveryIndex, Set<string>>();
+function stopRefsOf(discovery: { coverageId: string; stops: readonly { ref: string }[] }, feedId: string): Set<string> {
+  const refs = new Set<string>();
+  for (const stop of discovery.stops) {
+    const ref = parseTransitRef(stop.ref);
+    if (!ref || ref.kind !== 'stop' || ref.feed !== feedId || ref.coverage !== discovery.coverageId || refs.has(stop.ref)) throw new Error('Discovery identity mismatch');
+    refs.add(stop.ref);
+  }
+  return refs;
+}
+
 async function assertKnownStop(query: ScheduledDepartureQuery, feedId: string): Promise<void> {
+  const known = query.discovery?.feedId === feedId ? query.discovery : undefined;
+  if (known) {
+    const sources = query.manifest.sources.filter(source => source.feedId === feedId);
+    if (known.coverageId !== query.manifest.coverageId || sources.length !== 1 || known.sourceSha256 !== sources[0]!.sha256) throw new Error('Discovery identity mismatch');
+    let refs = knownStops.get(known);
+    if (!refs) { refs = stopRefsOf(known, feedId); knownStops.set(known, refs); }
+    for (const ref of [query.stopRef, ...query.complexStationRefs ?? []]) if (!refs.has(ref)) throw new Error('ENTITY_NOT_FOUND: stop is absent from discovery');
+    return;
+  }
   if (!Array.isArray(query.manifest.discoveries)) throw new Error('Discovery identity invalid');
   const descriptors = query.manifest.discoveries.filter(descriptor => descriptor.feedId === feedId);
   if (descriptors.length !== 1) throw new Error('Discovery identity missing or ambiguous');
@@ -59,12 +84,7 @@ async function assertKnownStop(query: ScheduledDepartureQuery, feedId: string): 
   catch { throw new Error('Discovery identity invalid'); }
   const sources = query.manifest.sources.filter(source => source.feedId === feedId);
   if (discovery.coverageId !== query.manifest.coverageId || discovery.feedId !== feedId || sources.length !== 1 || discovery.sourceSha256 !== sources[0]!.sha256) throw new Error('Discovery identity mismatch');
-  const refs = new Set<string>();
-  for (const stop of discovery.stops) {
-    const ref = parseTransitRef(stop.ref);
-    if (!ref || ref.kind !== 'stop' || ref.feed !== feedId || ref.coverage !== discovery.coverageId || refs.has(stop.ref)) throw new Error('Discovery identity mismatch');
-    refs.add(stop.ref);
-  }
+  const refs = stopRefsOf(discovery, feedId);
   for (const ref of [query.stopRef, ...query.complexStationRefs ?? []]) if (!refs.has(ref)) throw new Error('ENTITY_NOT_FOUND: stop is absent from discovery');
 }
 

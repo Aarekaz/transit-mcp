@@ -84,7 +84,7 @@ export function registerDeparturesTool(server: McpServer, context: MetroMcpConte
     const relevantStops = new Set(data.indexes.flatMap(index => index.stops).filter(stop => within.has(stop.ref) || stop.parentStationRef !== undefined && within.has(stop.parentStationRef)).map(stop => stop.ref));
     // One decode per shard: the scan fills this, and observed rows read trips from it.
     const decoded = new DecodedShardCache(Number.MAX_SAFE_INTEGER);
-    const pages = getScheduledDeparturePages({ manifest: data.manifest, readShard: data.readObject, decoded, resident: residentShards, readDiscovery: data.readObject, stopRef: asTransitRef(stopRef!), complexStationRefs: complex.map(asTransitRef),
+    const pages = getScheduledDeparturePages({ manifest: data.manifest, readShard: data.readObject, decoded, resident: residentShards, readDiscovery: data.readObject, discovery: data.indexes.find(index => index.feedId === stop.feed), stopRef: asTransitRef(stopRef!), complexStationRefs: complex.map(asTransitRef),
       instant: args.at ?? now, windowSeconds: args.windowSeconds, selection: args.selection, limit: 100, routeRefs: args.routeRefs?.map(asTransitRef), agencyRefs: stationAgencies(data, relevantStops, args.agencyRefs) });
     const scheduled: ScheduledDeparture[] = []; let schedule: ScheduledDepartures | undefined;
     // Predictions can reorder any scheduled page. Exhaust the bounded window before ranking.
