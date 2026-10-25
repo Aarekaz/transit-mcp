@@ -1,4 +1,4 @@
-import type { DiscoveryIndex } from '../gtfs/static/schema';
+import type { FeedIndex } from '../gtfs/static/schema';
 import { formatTripInstanceRef, parseTransitRef, type TransitRef, type TripInstanceRef } from '../core/refs';
 import { loadScheduleWindow, type ScheduleWindow, type ScheduleWindowQuery } from './schedule-index';
 import { formatInstant, isServiceActive, parseInstant } from './service-day';
@@ -13,7 +13,7 @@ export interface ScheduledDepartureQuery extends ScheduleWindowQuery {
   readDiscovery: (key: string) => Promise<Uint8Array>;
   /** The same discovery object, already read, verified against this manifest and decoded
    * (the tools' loadData). Checked here instead of reading and parsing it again. */
-  discovery?: DiscoveryIndex;
+  discovery?: FeedIndex;
   routeRefs?: TransitRef[];
   selection?: 'first' | 'last';
   /** Limits exact departures only. All overlapping frequency windows are returned, up to 100. */
@@ -51,7 +51,7 @@ const discoveryIdentitySchema = z.object({
 });
 
 /** Each verified index's stop refs, built once: indexes are immutable and content-addressed. */
-const knownStops = new WeakMap<DiscoveryIndex, Set<string>>();
+const knownStops = new WeakMap<FeedIndex, Set<string>>();
 function stopRefsOf(discovery: { coverageId: string; stops: readonly { ref: string }[] }, feedId: string): Set<string> {
   const refs = new Set<string>();
   for (const stop of discovery.stops) {

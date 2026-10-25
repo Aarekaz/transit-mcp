@@ -5,7 +5,7 @@ import { buildServiceCalendars, compileSchedule } from './compiler';
 import { csvRecordSpans, csvRecords, parseCsvRecord, parseGtfsCsv } from './csv';
 import { partitionSchedule } from './partition';
 import type { ArtifactManifestV2, CompileScheduleInput, DiscoveryIndex, GtfsScheduleFiles } from './schema';
-import { canonicalJson, sha256 } from './shards';
+import { canonicalJson, placesArtifact, sha256 } from './shards';
 import { parseGtfsTime } from './time';
 import { readZipDirectory, zipEntryStream, zipEntryText, type ZipEntry } from './zip';
 
@@ -21,6 +21,7 @@ export interface ScanResult {
   identity: FeedIdentity; dates: string[];
   sources: ArtifactManifestV2['sources']; agencyTimezones: ArtifactManifestV2['agencyTimezones'];
   discovery: ArtifactManifestV2['discoveries'][number]; discoveryBytes: Uint8Array;
+  places: NonNullable<ArtifactManifestV2['places']>[number]; placesBytes: Uint8Array;
   stats: { trips: number; stops: number; routes: number };
   /** For ranged per-date reads of a stored uncompressed copy; never a step result. */
   stopTimes: { header: string; size: number; tripRanges: TripRanges; tripStarts: TripStarts };
@@ -165,9 +166,10 @@ export async function scanArchive(archive: Uint8Array, source: EdgeSource, windo
   const discovery: DiscoveryIndex = { ...skeleton.discovery, tripProviderIds: [...tripRoutes.keys()].sort(),
     stopRoutes: Object.fromEntries([...stopRoutes].map(([stop, routes]) => [stop, [...routes].sort()])) };
   const discoveryBytes = new TextEncoder().encode(canonicalJson(discovery)), discoveryHash = await sha256(discoveryBytes);
+  const places = await placesArtifact(discovery, discoveryHash);
   return { identity, dates, sources: skeleton.manifest.sources, agencyTimezones: skeleton.manifest.agencyTimezones,
     discovery: { feedId: source.feedId, key: `artifacts/${source.coverage.id}/v2/${source.feedId}/discovery/${discoveryHash}.json`, sha256: discoveryHash, byteLength: discoveryBytes.length },
-    discoveryBytes, stats: { trips: tripRoutes.size, stops: discovery.stops.length, routes: discovery.routes.length },
+    discoveryBytes, places: places.descriptor, placesBytes: places.bytes, stats: { trips: tripRoutes.size, stops: discovery.stops.length, routes: discovery.routes.length },
     stopTimes: { header: stopTimesHeader, size: stopTimes.size, tripRanges, tripStarts } };
 }
 
@@ -247,7 +249,8 @@ export async function buildServiceDate(archive: Uint8Array | null, source: EdgeS
   const parts = usable ? [...bands.keys()].sort((a, b) => a - b).map(band => bands.get(band)!) : [[]];
   for (const trips of parts) {
     const partitioned = await partitionSchedule(await compileFor(trips), bandSeconds);
-    result.objects.push(...partitioned.objects.filter(object => !object.key.includes('/discovery/')));
+    // The feed's discovery and places indexes come from the scan, not from one date's compile.
+    result.objects.push(...partitioned.objects.filter(object => !/\/(discovery|places)\//.test(object.key)));
     result.descriptors.push(...partitioned.manifest.shards);
   }
   return result;
@@ -279,7 +282,7 @@ async function buildBands(source: EdgeSource, identity: FeedIdentity, date: stri
       files: filesFor(text, [tripsHeader, ...trips.map(trip => tripRecords.get(trip)!)].join('\n') + '\n', [ranged.header, ...lines].join('\n') + '\n'),
       window: { startDate: date, endDate: date }, source: { url: source.url, retrievedAt: source.retrievedAt } });
     const partitioned = await partitionSchedule(compiled, bandSeconds);
-    result.objects.push(...partitioned.objects.filter(object => !object.key.includes('/discovery/')));
+    result.objects.push(...partitioned.objects.filter(object => !/\/(discovery|places)\//.test(object.key)));
     result.descriptors.push(...partitioned.manifest.shards);
   }
   return result;

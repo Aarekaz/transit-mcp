@@ -25,6 +25,7 @@ async function fixture(corpus: typeof dc | typeof nyc, db = memoryStorage()) {
     window: { startDate: '20261019', endDate: '20261025' },
     source: { url: corpus.provenance.sourceUrl, retrievedAt: '2026-10-18T00:00:00Z' } });
   await db.bucket.put(compiled.manifest.discoveries[0]!.key, compiled.discoveryBytes);
+  await db.bucket.put(compiled.manifest.places![0]!.key, compiled.placesBytes);
   await db.bucket.put(compiled.manifest.shards[0]!.key, compiled.shardBytes);
   const version = await new StaticArtifactStore(db.bucket, corpus.coverage).publish(compiled.manifest);
   const env = createMockEnv({ TRANSIT_ARTIFACTS: db.bucket, TRANSIT_COVERAGE_MODES: JSON.stringify({ dc: 'on', nyc: 'on' }) });
@@ -143,7 +144,10 @@ describe('DC and NYC synthetic acceptance corpus through the five global tools',
   it.each(['missing manifest', 'corrupt discovery', 'storage exception'])('preserves the queried NYC attribution after %s despite a DC search scope', async failure => {
     const f = await fixture(dc), n = await fixture(nyc, f.db);
     if (failure === 'missing manifest') await f.db.bucket.delete(`artifacts/nyc/v2/manifests/${n.version.artifactVersion}.json`);
-    else if (failure === 'corrupt discovery') await f.db.bucket.put(n.compiled.manifest.discoveries[0]!.key, 'corrupt discovery');
+    else if (failure === 'corrupt discovery') {
+      await f.db.bucket.put(n.compiled.manifest.discoveries[0]!.key, 'corrupt discovery');
+      await f.db.bucket.put(n.compiled.manifest.places![0]!.key, 'corrupt places');
+    }
     else vi.spyOn(f.db.bucket, 'get').mockRejectedValue(new Error('Private storage failure'));
     const result = await call(f.env, 'find_transit', { query: 'New York', coverage: 'DC' });
     expect(result.isError).not.toBe(true);

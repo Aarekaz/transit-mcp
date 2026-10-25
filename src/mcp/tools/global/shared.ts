@@ -13,8 +13,8 @@ import { VERIFICATION_REASONS, type SourceStatus, type VerificationReason } from
 import { CLOCK_TOLERANCE_SECONDS, StaticArtifactStore, judgedAt, readBoundedObject, sameStaticVersion, type StaticVersion } from '../../../transit/gtfs/realtime/snapshot-store';
 import { credential, getRealtimeSources, publishedKinds, sourceFeedIds, type RealtimeSource } from '../../../transit/gtfs/realtime/sources';
 import type { CoverageCapability } from '../../../transit/core/coverage';
-import { decodeDiscoveryIndex, decodeScheduleShard, sha256 } from '../../../transit/gtfs/static/shards';
-import type { ArtifactManifestV2, DiscoveryIndex, ScheduleStop } from '../../../transit/gtfs/static/schema';
+import { decodeDiscoveryIndex, decodePlacesIndex, decodeScheduleShard, sha256 } from '../../../transit/gtfs/static/shards';
+import type { ArtifactManifestV2, FeedIndex, ScheduleStop } from '../../../transit/gtfs/static/schema';
 import { stationAccess, stepFreeStops, type EquipmentOutage } from '../../../transit/accessibility/equipment';
 import { kindThresholds, type FeedRead } from '../../../transit/gtfs/realtime/hub-core';
 import type { NormalizedVehicle } from '../../../transit/gtfs/realtime/decode';
@@ -103,7 +103,7 @@ export async function guarded<T>(handler: ServerContext, operation: () => Promis
   }
 }
 export interface TransitData {
-  coverage: CoverageManifest; manifest: ArtifactManifestV2; version: StaticVersion; indexes: DiscoveryIndex[];
+  coverage: CoverageManifest; manifest: ArtifactManifestV2; version: StaticVersion; indexes: FeedIndex[];
   readObject: (key: string) => Promise<Uint8Array>;
 }
 /** One store per bucket and coverage keeps the resident manifest across requests; the
@@ -117,7 +117,7 @@ function artifactStore(bucket: R2Bucket, coverageId: string): StaticArtifactStor
   return store;
 }
 /** Verified, content-addressed discovery indexes per bound bucket (one store never vouches for another). */
-const discoveryCaches = new WeakMap<R2Bucket, Map<string, DiscoveryIndex>>();
+const discoveryCaches = new WeakMap<R2Bucket, Map<string, FeedIndex>>();
 /** Public mode checks belong at the data boundary; catalog registration never changes. */
 export async function loadData(context: MetroMcpContext, coverageId: string, signal: AbortSignal, version?: string): Promise<TransitData | null> {
   return phase('loadData', () => loadDataUntraced(context, coverageId, signal, version));
@@ -137,33 +137,53 @@ async function loadDataUntraced(context: MetroMcpContext, coverageId: string, si
   signal.throwIfAborted();
   if (!current) return null;
   const readObject = async (key: string) => { signal.throwIfAborted(); const bytes = await readBoundedObject(bucket, key, 64 * 1024 * 1024); signal.throwIfAborted(); return bytes; };
-  const indexes: DiscoveryIndex[] = []; let total = 0;
-  for (const descriptor of current.manifest.discoveries) {
-    total += descriptor.byteLength;
+  // Each feed's places index when the manifest has one derived from its current discovery
+  // index: everything but the trip IDs, about a third of the bytes in New York. Older
+  // artifacts read the discovery index itself.
+  const places = new Map((current.manifest.places ?? []).map(item => [`${item.feedId}\n${item.discoverySha256}`, item]));
+  const chosen = current.manifest.discoveries.map(descriptor => ({ descriptor, object: places.get(`${descriptor.feedId}\n${descriptor.sha256}`) ?? descriptor }));
+  const indexes: FeedIndex[] = []; let total = 0;
+  for (const { object } of chosen) {
+    total += object.byteLength;
     if (total > 64 * 1024 * 1024) throw new Error('Discovery budget');
   }
   let discoveryCache = discoveryCaches.get(bucket);
   if (!discoveryCache) { discoveryCache = new Map(); discoveryCaches.set(bucket, discoveryCache); }
   // A coverage holds one index per feed (NYC has nine): read the missing ones together, not
   // one round trip after another. Each is still verified and decoded in manifest order.
-  const reads = new Map(current.manifest.discoveries.filter(descriptor => !discoveryCache.has(descriptor.sha256))
-    .map(descriptor => { const read = readObject(descriptor.key); read.catch(() => {}); return [descriptor.sha256, read] as const; }));
-  for (const descriptor of current.manifest.discoveries) {
-    let index = discoveryCache.get(descriptor.sha256);
+  const reads = new Map(chosen.filter(({ object }) => !discoveryCache.has(object.sha256))
+    .map(({ object }) => { const read = readObject(object.key); read.catch(() => {}); return [object.sha256, read] as const; }));
+  // A verified, decoded index of one object: a places index or the feed's discovery index.
+  const decoded = async (object: { key: string; sha256: string; byteLength: number }, isPlaces: boolean): Promise<FeedIndex> => {
+    const bytes = await (reads.get(object.sha256) ?? readObject(object.key));
+    if (bytes.length !== object.byteLength || await sha256(bytes) !== object.sha256) throw new Error('Discovery integrity');
+    const index = isPlaces ? decodePlacesIndex(bytes) : decodeDiscoveryIndex(bytes);
+    count(isPlaces ? 'placesDecoded' : 'discoveryDecoded'); count('discoveryBytes', bytes.byteLength);
+    return index;
+  };
+  for (let { descriptor, object } of chosen) {
+    let isPlaces = object !== descriptor;
+    let index = discoveryCache.get(object.sha256);
     if (!index) {
-      const bytes = await (reads.get(descriptor.sha256) ?? readObject(descriptor.key));
-      if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Discovery integrity');
-      index = decodeDiscoveryIndex(bytes);
-      count('discoveryDecoded'); count('discoveryBytes', bytes.byteLength);
+      try { index = await decoded(object, isPlaces); }
+      catch (error) {
+        // A places index only saves work: when it can't be read or verified, the discovery
+        // index it was derived from answers instead, checked exactly as before.
+        if (!isPlaces || signal.aborted) throw error;
+        console.warn(JSON.stringify({ event: 'places_fallback', coverage: coverage.id, feed: descriptor.feedId }));
+        object = descriptor; isPlaces = false;
+        index = discoveryCache.get(object.sha256) ?? await decoded(object, false);
+      }
       // Content-addressed and verified: safe to reuse across requests in this isolate.
-      discoveryCache.set(descriptor.sha256, index);
+      discoveryCache.set(object.sha256, index);
       // Keep every index any coverage's current manifest uses (NYC has one per feed); drop
       // only older versions. Loading one city must not evict another's.
-      currentDiscoveries.set(`${coverage.id}`, current.manifest.discoveries.map(item => item.sha256));
+      currentDiscoveries.set(`${coverage.id}`, chosen.map(item => item.object.sha256));
       const inUse = new Set([...currentDiscoveries.values()].flat());
       for (const sha of [...discoveryCache.keys()]) if (discoveryCache.size > inUse.size + 4 && !inUse.has(sha)) discoveryCache.delete(sha);
     }
-    if (index.coverageId !== coverage.id || index.feedId !== descriptor.feedId || index.sourceSha256 !== current.version.sourceVersions[index.feedId]) throw new Error('Discovery identity');
+    if (index.coverageId !== coverage.id || index.feedId !== descriptor.feedId || index.sourceSha256 !== current.version.sourceVersions[index.feedId] ||
+      (isPlaces && (index as { discoverySha256?: string }).discoverySha256 !== descriptor.sha256)) throw new Error('Discovery identity');
     indexes.push(index);
   }
   return { ...current, coverage, indexes, readObject };
@@ -180,8 +200,8 @@ export function validRef(value: string, kinds: string[], dated = false): NonNull
 /** Entities of one verified discovery index, built once: the index is immutable and
  * content-addressed, so the list, reference map and normalized names never change. */
 interface EntityIndex { list: readonly Candidate[]; byRef: Map<string, Candidate>; names: Map<string, readonly string[]> }
-const entityIndexes = new WeakMap<DiscoveryIndex, Map<string, EntityIndex>>();
-function entityIndex(data: TransitData, index: DiscoveryIndex): EntityIndex {
+const entityIndexes = new WeakMap<FeedIndex, Map<string, EntityIndex>>();
+function entityIndex(data: TransitData, index: FeedIndex): EntityIndex {
   const agencies = Object.keys(data.manifest.agencyTimezones).filter(ref => parseTransitRef(ref)?.feed === index.feedId).sort();
   const key = agencies.join('\n');
   let byAgencies = entityIndexes.get(index);
@@ -202,10 +222,39 @@ function entityIndex(data: TransitData, index: DiscoveryIndex): EntityIndex {
   byAgencies.set(key, built);
   return built;
 }
+/** Trip IDs of places indexes, filled by loadTripIds from the feed's discovery index. */
+const tripIdLists = new WeakMap<FeedIndex, string[]>();
+const tripIdsOf = (index: FeedIndex) => index.tripProviderIds ?? tripIdLists.get(index);
+/** Loads the trip IDs of these feeds (all of the coverage's by default) where only a places
+ * index is held: the feed's discovery index is read, verified against the manifest and
+ * decoded, and only its trip IDs are kept. */
+export async function loadTripIds(data: TransitData, feedIds?: readonly string[]): Promise<void> {
+  const missing = data.indexes.filter(index => (!feedIds || feedIds.includes(index.feedId)) && !tripIdsOf(index));
+  await Promise.all(missing.map(async index => {
+    const descriptors = data.manifest.discoveries.filter(item => item.feedId === index.feedId);
+    if (descriptors.length !== 1) throw new Error('Discovery identity');
+    const descriptor = descriptors[0]!, bytes = await data.readObject(descriptor.key);
+    if (bytes.length !== descriptor.byteLength || await sha256(bytes) !== descriptor.sha256) throw new Error('Discovery integrity');
+    const full = decodeDiscoveryIndex(bytes);
+    count('tripIdsLoaded');
+    if (full.coverageId !== index.coverageId || full.feedId !== index.feedId || full.sourceSha256 !== index.sourceSha256) throw new Error('Discovery identity');
+    tripIdLists.set(index, full.tripProviderIds);
+  }));
+}
+/** Loads the trip IDs a ref needs, when it names a trip: only that trip's feed. */
+export async function loadTripIdsFor(data: TransitData, ref: string): Promise<void> {
+  const parsed = parseTransitRef(ref);
+  if (parsed?.kind === 'trip') await loadTripIds(data, [parsed.feed]);
+}
+/** A free-text query that could be a trip ID: one word with a digit in it. Station, line and
+ * place names are matched without loading trip IDs; IDs like "AFA25GEN-1092-Weekday-00_054800_1..S03R" load them. */
+export const mayBeTripId = (query: string) => /^\S+$/.test(query.trim()) && /\d/.test(query);
+
 /** Trips are looked up by exact ID, never listed: a bus network publishes hundreds of
  * thousands, and `tripProviderIds` is sorted, so a binary search finds one. */
-function tripCandidate(index: DiscoveryIndex, id: string): Candidate | undefined {
-  const ids = index.tripProviderIds;
+function tripCandidate(index: FeedIndex, id: string): Candidate | undefined {
+  const ids = tripIdsOf(index);
+  if (!ids) throw new Error('Trip IDs are not loaded for this feed');
   let low = 0, high = ids.length - 1;
   while (low <= high) {
     const middle = (low + high) >>> 1, value = ids[middle]!;
@@ -219,10 +268,10 @@ export function entities(data: TransitData): readonly Candidate[] {
 }
 const FIXED_GUIDEWAY = new Set(['subway', 'rail', 'tram', 'cable_tram', 'ferry', 'aerial', 'funicular', 'monorail']);
 type StopFacts = Required<Pick<Candidate, 'stopType' | 'modes' | 'routeNames' | 'routeCount'>> & Pick<Candidate, 'stationRef' | 'coordinates'>;
-const stopFactCache = new WeakMap<DiscoveryIndex, Map<string, StopFacts>>();
+const stopFactCache = new WeakMap<FeedIndex, Map<string, StopFacts>>();
 /** What each stop is and what serves it (a station counts its platforms' lines), built
  * once per immutable discovery index. */
-function stopFacts(index: DiscoveryIndex): Map<string, StopFacts> {
+function stopFacts(index: FeedIndex): Map<string, StopFacts> {
   let facts = stopFactCache.get(index);
   if (facts) return facts;
   const routes = new Map(index.routes.map(route => [route.ref as string, route]));
@@ -339,7 +388,7 @@ function servesLine(data: TransitData, entity: Candidate, lines: string[]): bool
   const own = names.get(entity.ref);
   return !!own && lines.some(line => own.has(line));
 }
-const stopLineCache = new WeakMap<DiscoveryIndex, Map<string, Set<string>>>();
+const stopLineCache = new WeakMap<FeedIndex, Map<string, Set<string>>>();
 /** Agency IDs whose lines serve a stop or its station's platforms. */
 function stopAgencies(data: TransitData, entity: Candidate): string[] {
   const index = data.indexes.find(index => index.feedId === entity.feed);
@@ -354,13 +403,13 @@ function stopAgencies(data: TransitData, entity: Candidate): string[] {
   }
   return agencies.get(entity.ref) ?? [];
 }
-const stopAgencyCache = new WeakMap<DiscoveryIndex, Map<string, string[]>>();
+const stopAgencyCache = new WeakMap<FeedIndex, Map<string, string[]>>();
 export const compareRanks = (a: number[], b: number[]) => { for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) - (b[i] ?? 0); return 0; };
 function rankedMatches(data: TransitData, query: string, kind: string | undefined, fuzzy: boolean): { entity: Candidate; rank: number[] }[] {
   const normalized = normalizeEntityName(query), aliasStops = aliasStopNames(data, normalized);
   const found: { entity: Candidate; rank: number[] }[] = [];
   for (const index of data.indexes) {
-    const trip = !kind || kind === 'trip' ? tripCandidate(index, query.trim()) : undefined;
+    const trip = (!kind || kind === 'trip') && tripIdsOf(index) ? tripCandidate(index, query.trim()) : undefined;
     if (trip) found.push({ entity: trip, rank: [0] });
     const { list, names } = entityIndex(data, index);
     for (const entity of list) {
@@ -458,7 +507,7 @@ function trigrams(value: string): Set<string> {
   for (let at = 0; at + 3 <= padded.length; at++) grams.add(padded.slice(at, at + 3));
   return grams;
 }
-const trigramCache = new WeakMap<DiscoveryIndex, Map<string, Set<string>>>();
+const trigramCache = new WeakMap<FeedIndex, Map<string, Set<string>>>();
 /** The closest stop names when nothing matches ("Gallery Pl-Chinatown" → Gallery Place):
  * trigram similarity survives word order, abbreviations and misspellings. Suggestions only;
  * no tool ever resolves a name to one of them on its own. */
@@ -714,6 +763,7 @@ export function knownEntity(data: TransitData, ref: string): Candidate {
   return { ...entity, ref };
 }
 export async function detail(data: TransitData, ref: string) {
+  await loadTripIdsFor(data, ref);
   const entity = knownEntity(data, ref), parsed = parseTransitRef(ref)!;
   const index = data.indexes.find(index => index.feedId === entity.feed)!;
   const stop = index.stops.find(stop => stop.ref === entity.ref);

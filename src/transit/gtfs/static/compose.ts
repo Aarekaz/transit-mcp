@@ -16,7 +16,8 @@ function evidence(manifest: ArtifactManifestV2): Record<string, ValidatorEvidenc
  * exactly as published. Without a base, the feed's manifest is the coverage's. */
 export function composeManifest(base: ArtifactManifestV2 | null, feed: ArtifactManifestV2): ArtifactManifestV2 {
   const feedIds = new Set(feed.sources.map(source => source.feedId));
-  if (feedIds.size !== 1 || feed.discoveries.some(item => !feedIds.has(item.feedId)) || feed.shards.some(item => !feedIds.has(item.feedId))) {
+  if (feedIds.size !== 1 || feed.discoveries.some(item => !feedIds.has(item.feedId)) || feed.shards.some(item => !feedIds.has(item.feedId)) ||
+    (feed.places ?? []).some(item => !feedIds.has(item.feedId))) {
     throw new Error('A feed manifest must describe exactly one feed');
   }
   if (!base) return feed;
@@ -31,9 +32,12 @@ export function composeManifest(base: ArtifactManifestV2 | null, feed: ArtifactM
   const sources = byFeed([...keep(base.sources), ...feed.sources]);
   const validators = { ...evidence(base), ...evidence(feed) };
   if (!evidence(feed)[feedId]) delete validators[feedId];
-  const { validator: _single, validators: _many, ...rest } = base;
+  const { validator: _single, validators: _many, places: _places, ...rest } = base;
   return { ...rest, sources, agencyTimezones,
     discoveries: byFeed([...keep(base.discoveries), ...feed.discoveries]),
+    // Each feed's places index goes with its discovery index: one rebuilt without places drops
+    // the old ones rather than pairing them with a discovery index they weren't derived from.
+    ...(() => { const places = byFeed([...keep(base.places ?? []), ...feed.places ?? []]); return places.length ? { places } : {}; })(),
     shards: byFeed([...keep(base.shards), ...feed.shards]),
     ...(sources.length === 1 ? (validators[sources[0]!.feedId] ? { validator: validators[sources[0]!.feedId] } : {}) : Object.keys(validators).length ? { validators } : {}) };
 }

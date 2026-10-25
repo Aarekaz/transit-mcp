@@ -56,7 +56,7 @@ describe('edge schedule build', () => {
     const archive = await zip(NYC_FILES as Record<string, string>), source = nyc();
     const scan = await scanArchive(archive, source, 2, Date.parse(NOW));
     expect(scan.dates).toEqual(['20261018', '20261019', '20261020', '20261021']);
-    const edge = new Map<string, Uint8Array>([[scan.discovery.key, scan.discoveryBytes]]);
+    const edge = new Map<string, Uint8Array>([[scan.discovery.key, scan.discoveryBytes], [scan.places.key, scan.placesBytes]]);
     const descriptors = [];
     for (const date of scan.dates) {
       const built = await buildServiceDate(archive, source, scan.identity, date, BAND_SECONDS);
@@ -71,7 +71,7 @@ describe('edge schedule build', () => {
     // Band by band from the stored stop_times copy (how a Workflow step builds): identical too.
     const copy = new TextEncoder().encode(NYC_FILES['stop_times.txt']);
     const read = async (offset: number, length: number) => copy.subarray(offset, offset + length);
-    const streamed = new Map<string, Uint8Array>([[scan.discovery.key, scan.discoveryBytes]]);
+    const streamed = new Map<string, Uint8Array>([[scan.discovery.key, scan.discoveryBytes], [scan.places.key, scan.placesBytes]]);
     for (const date of scan.dates) {
       const built = await buildServiceDate(archive, source, scan.identity, date, BAND_SECONDS,
         { header: scan.stopTimes.header, rows: trips => rangedStopTimes(read, scan.stopTimes.header, scan.stopTimes.tripRanges, trips), starts: scan.stopTimes.tripStarts });

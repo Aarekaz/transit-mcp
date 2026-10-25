@@ -115,10 +115,11 @@ export async function runRefresh(env: Env, params: RefreshParams, step: StepRunn
     return bytes;
   };
   const work = keys.work(params.archiveSha256);
-  const scan = await step.do('scan', async (): Promise<Omit<ScanResult, 'discoveryBytes' | 'stopTimes'> & { bands: number[] }> => {
+  const scan = await step.do('scan', async (): Promise<Omit<ScanResult, 'discoveryBytes' | 'placesBytes' | 'stopTimes'> & { bands: number[] }> => {
     const bytes = await archive();
-    const { discoveryBytes, stopTimes, ...result } = await scanArchive(bytes, source, policy.windowDays, Date.now());
+    const { discoveryBytes, placesBytes, stopTimes, ...result } = await scanArchive(bytes, source, policy.windowDays, Date.now());
     await putAbsent(bucket, result.discovery.key, discoveryBytes);
+    await putAbsent(bucket, result.places.key, placesBytes);
     // Day steps read only their trips' byte ranges from an uncompressed copy, instead of
     // inflating and parsing the whole table once per day.
     const entry = readZipDirectory(bytes).get('stop_times.txt')!, inflated = zipEntryStream(bytes, entry);
@@ -176,7 +177,7 @@ export async function runRefresh(env: Env, params: RefreshParams, step: StepRunn
   }
   // This feed alone; it replaces only its own part of the coverage's manifest.
   const feedManifest: ArtifactManifestV2 = { schemaVersion: 2, coverageId: policy.coverageId, sources: scan.sources, agencyTimezones: scan.agencyTimezones,
-    discoveries: [scan.discovery], shards: dates.flatMap(date => date.descriptors) };
+    discoveries: [scan.discovery], places: [scan.places], shards: dates.flatMap(date => date.descriptors) };
   const stats: PublishedStats = { ...scan.stats, dates: Object.fromEntries(dates.map(date => [date.date, date.trips])) };
   const store = new StaticArtifactStore(bucket, policy.coverageId);
   const compose = async () => composeManifest((await store.current())?.manifest ?? null, feedManifest);
@@ -268,7 +269,7 @@ export async function collectGarbage(bucket: R2Bucket, coverageId: string, runAr
   if (runFeed ?? feeds[0]) archive(runFeed ?? feeds[0]!, runArchive);
   for (const version of [pointer.current, pointer.previous].filter((value): value is string => !!value)) {
     const { manifest } = await store.read(version);
-    for (const object of [...manifest.shards, ...manifest.discoveries]) keep.add(object.key);
+    for (const object of [...manifest.shards, ...manifest.discoveries, ...manifest.places ?? []]) keep.add(object.key);
     keep.add(`artifacts/${coverageId}/v2/manifests/${version}.json`); keep.add(sourceKeys(coverageId).stats(version));
     for (const source of manifest.sources) archive(source.feedId, source.derivedFrom?.archiveSha256 ?? source.archiveSha256 ?? '');
   }

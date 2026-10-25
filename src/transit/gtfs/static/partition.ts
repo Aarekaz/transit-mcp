@@ -127,5 +127,6 @@ export async function partitionSchedule(compiled: CompiledSchedule, bandSeconds:
     }
   }
   objects.push({ key: compiled.manifest.discoveries[0]!.key, bytes: compiled.discoveryBytes });
+  if (compiled.manifest.places?.[0]) objects.push({ key: compiled.manifest.places[0].key, bytes: compiled.placesBytes });
   return { manifest: { ...compiled.manifest, shards: descriptors }, objects, shards };
 }

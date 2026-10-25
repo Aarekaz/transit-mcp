@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { NYC_STATION_ADA } from '../../regions/nyc-ada';
 import { formatEntityRef, parseTransitRef } from '../core/refs';
 import { sanitizeTransitText } from '../gtfs/realtime/freshness';
-import type { DiscoveryIndex, ScheduleStop } from '../gtfs/static/schema';
+import type { FeedIndex, ScheduleStop } from '../gtfs/static/schema';
 import { formatInstant } from '../planner/service-day';
 
 /** One elevator or escalator out of service, as the agency reports it. */
@@ -114,7 +114,7 @@ export function currentOutage(outage: EquipmentOutage, nowSeconds: number): bool
 }
 
 /** GTFS station refs (location_type 1) an outage names. */
-export function outageStations(outage: EquipmentOutage, index: DiscoveryIndex): string[] {
+export function outageStations(outage: EquipmentOutage, index: FeedIndex): string[] {
   const stations = index.stops.filter(stop => stop.locationType === 1);
   if (outage.stationKeyKind === 'gtfs_station') return stations.filter(stop => outage.stationKeys.includes(stop.providerId)).map(stop => stop.ref);
   // WMATA station IDs embed every code they cover: STN_A01_C01 is Metro Center (A01 and C01).
@@ -125,7 +125,7 @@ export type StopAccess = 'accessible' | 'not_accessible' | 'unknown';
 /** Step-free access to a stop from the street, from the authoritative source per coverage:
  * GTFS wheelchair_boarding (inherited from the station when 0), or for NYC MTA's station
  * ADA list by direction (platform suffix N/S), since its GTFS publishes none. */
-export function stopAccess(index: DiscoveryIndex, stop: ScheduleStop, stops: ReadonlyMap<string, ScheduleStop>): StopAccess {
+export function stopAccess(index: FeedIndex, stop: ScheduleStop, stops: ReadonlyMap<string, ScheduleStop>): StopAccess {
   if (index.coverageId === 'nyc') {
     const station = stop.locationType === 1 ? stop : stop.parentStationRef ? stops.get(stop.parentStationRef) : undefined;
     const ada = station ? NYC_STATION_ADA[station.providerId] : undefined;
@@ -141,7 +141,7 @@ export function stopAccess(index: DiscoveryIndex, stop: ScheduleStop, stops: Rea
 
 /** A stop's static step-free access; a station summarises its boardable platforms
  * (`partial` when only some are step-free, e.g. one direction). */
-export function stationAccess(index: DiscoveryIndex, stop: ScheduleStop, stops: ReadonlyMap<string, ScheduleStop>): StopAccess | 'partial' {
+export function stationAccess(index: FeedIndex, stop: ScheduleStop, stops: ReadonlyMap<string, ScheduleStop>): StopAccess | 'partial' {
   if (stop.locationType !== 1) return stopAccess(index, stop, stops);
   const platforms = index.stops.filter(child => child.parentStationRef === stop.ref && child.locationType === 0).map(child => stopAccess(index, child, stops));
   if (!platforms.length) return stopAccess(index, stop, stops);
@@ -153,7 +153,7 @@ export function stationAccess(index: DiscoveryIndex, stop: ScheduleStop, stops: 
 /** Stations an outage cuts off from a step-free path. NYCT: a non-redundant ADA
  * elevator, or two or more ADA elevators at the same stations (their backups cannot be
  * paired). WMATA: a station elevator; garage and parking elevators do not reach platforms. */
-export function blockedStations(outages: readonly EquipmentOutage[], index: DiscoveryIndex, nowSeconds: number): Set<string> {
+export function blockedStations(outages: readonly EquipmentOutage[], index: FeedIndex, nowSeconds: number): Set<string> {
   const blocked = new Set<string>(), adaDown = new Map<string, number>();
   for (const outage of outages) {
     if (!currentOutage(outage, nowSeconds) || outage.kind !== 'elevator' || !outage.accessiblePath) continue;
@@ -170,7 +170,7 @@ export function blockedStations(outages: readonly EquipmentOutage[], index: Disc
 
 /** Boardable stops a step-free journey may use now: step-free from the street by the
  * authoritative source, at a station with no blocking elevator outage. */
-export function stepFreeStops(index: DiscoveryIndex, outages: readonly EquipmentOutage[], nowSeconds: number): Set<string> {
+export function stepFreeStops(index: FeedIndex, outages: readonly EquipmentOutage[], nowSeconds: number): Set<string> {
   const stops = new Map(index.stops.map(stop => [stop.ref as string, stop]));
   const blocked = blockedStations(outages, index, nowSeconds), usable = new Set<string>();
   for (const stop of index.stops) {

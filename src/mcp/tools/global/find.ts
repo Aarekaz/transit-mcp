@@ -5,7 +5,7 @@ import type { MetroMcpContext } from '../../context';
 import { readOnlyLive } from '../../shared';
 import { getCoverage, getCoverages } from '../../../transit/core/coverage';
 import { getCoverageMode } from '../../../regions/manifest';
-import { complete, MAX_DISCOVERY_CANDIDATES, closestStops, compareRanks, rankedCandidates, ambiguityCandidate, describeCandidate, boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, effectiveCapabilities, entities, guarded, trainCandidates, inferCoverage, loadData, metadata, resultShape, unavailable, validRef, TransitToolError } from './shared';
+import { complete, MAX_DISCOVERY_CANDIDATES, closestStops, compareRanks, rankedCandidates, ambiguityCandidate, describeCandidate, boundedText, candidateSchema, candidates, checkState, coordinatesSchema, coverageSchema, detail, effectiveCapabilities, entities, guarded, trainCandidates, inferCoverage, loadData, metadata, resultShape, unavailable, validRef, TransitToolError, loadTripIds, mayBeTripId } from './shared';
 
 export const entitySchema = candidateSchema.extend({ scheduleVersion: z.string(), resourceUri: z.string(), coordinates: coordinatesSchema.nullable(), routeRefs: z.array(z.string()),
   agencyRef: z.string().nullable(), mode: z.string().nullable(), patterns: z.array(z.strictObject({ id: z.string(), directionId: z.number().int().nullable(), stopRefs: z.array(z.string()) })),
@@ -51,6 +51,7 @@ export function registerFindTool(server: McpServer, context: MetroMcpContext): v
       if (args.query && !args.coverage && !args.context?.coverage && !getCoverage(args.query)) {
         const loaded = (await Promise.all(getCoverages().filter(coverage => getCoverageMode(coverage.id, context.env) === 'on')
           .map(async coverage => ({ id: coverage.id, data: await loadData(context, coverage.id, handler.mcpReq.signal) })))).filter(item => item.data);
+        if (mayBeTripId(args.query)) await Promise.all(loaded.map(({ data }) => loadTripIds(data!)));
         const ranked = loaded.flatMap(({ data }) => rankedCandidates(data!, args.query!))
           .sort((a, b) => compareRanks(a.rank, b.rank) || a.entity.ref.localeCompare(b.entity.ref));
         const used = loaded.filter(({ id }) => ranked.some(item => item.entity.coverage === id));
@@ -73,6 +74,7 @@ export function registerFindTool(server: McpServer, context: MetroMcpContext): v
       const base = { ...(data ? { ...metadata(id, data), status: 'scheduled_only' as const, reasons: [] } : unavailable(id)),
         coverages: match ? [{ id: match.id, displayName: match.displayName, aliases: [...match.aliases], supportedModes: [...match.supportedModes], available: Boolean(data), capabilities: effectiveCapabilities(context, match) }] : [],
         entities: [], clientCoordinates: args.latitude === undefined ? null : { latitude: args.latitude, longitude: args.longitude! } };
+      if (data && !match && args.query && mayBeTripId(args.query)) await loadTripIds(data);
       let found = data && !match ? args.query ? candidates(data, args.query) : entities(data).filter(entity => entity.kind === 'stop').map(entity => describeCandidate(data, entity)) : [];
       const trains = data && !match && args.query ? await trainCandidates(context, data, args.query, handler.mcpReq.signal) : { candidates: [], sources: [] };
       if (trains.candidates.length) {

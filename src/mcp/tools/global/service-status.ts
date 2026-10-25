@@ -17,7 +17,7 @@ import type { ScheduleShard } from '../../../transit/gtfs/static/schema';
 import { AlertScopeLimitError, expandAlertScopes, matchesAlertSelector, resolveAlertSelector, type AlertScope } from '../../../transit/gtfs/realtime/alert-match';
 import { itinerarySchema } from './plan';
 import { blockedStations, currentOutage, outageStations, stationOf, type EquipmentOutage } from '../../../transit/accessibility/equipment';
-import { complete, candidates, exactCandidate, MAX_DISCOVERY_CANDIDATES, closestStops, localTime, coverageTimezone, residentShards, TransitToolError, stopPlaces, ambiguousPlaces, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
+import { complete, candidates, exactCandidate, MAX_DISCOVERY_CANDIDATES, closestStops, localTime, coverageTimezone, residentShards, TransitToolError, stopPlaces, ambiguousPlaces, asTransitRef, boundedText, checkState, complexStations, coverageSchema, effectiveCapabilities, guarded, instantSchema, knownEntity, loadTripIdsFor, loadData, metadata, readFeed, realtimeSource, resultShape, scheduledRealtimeRows, unavailable, validRef, type TransitData } from './shared';
 
 /** Per-alert detail bound: a city-wide status call stays readable for a model. */
 export const ALERT_DETAIL_LIMIT = 20;
@@ -121,7 +121,7 @@ export function registerServiceStatusTool(server: McpServer, context: MetroMcpCo
     const id = parsed?.coverage ?? inputItinerary?.coverageId ?? getCoverage(args.coverage ?? '')?.id ?? args.coverage!;
     const data = await loadData(context, id, handler.mcpReq.signal);
     if (!data) return complete({ ...unavailable(id), alerts: [], journeyValid: null, journeyReasons: [], legChecks: [], transferChecks: [] });
-    if (args.ref) knownEntity(data, args.ref);
+    if (args.ref) { await loadTripIdsFor(data, args.ref); knownEntity(data, args.ref); }
     const now = new Date().toISOString(), nowSeconds = Date.parse(now) / 1000;
     // Alert selectors name provider IDs that are meaningful only inside their own feed.
     const feed = await readFeed<NormalizedAlert>(context, data, 'service_alerts', nowSeconds, handler.mcpReq.signal);
